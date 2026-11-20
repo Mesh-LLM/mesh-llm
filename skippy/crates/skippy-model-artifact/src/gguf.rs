@@ -437,7 +437,10 @@ impl GgufCompactMeta {
             .fold(0, u64::saturating_add)
     }
 
-    fn recurrent_plane_bytes_by_layer(&self) -> Vec<u64> {
+    /// F32 bytes of one recurrent-state plane for one native sequence, per
+    /// layer: what one exact-state snapshot copies. Attention-only layers
+    /// report zero.
+    pub fn recurrent_plane_bytes_by_layer(&self) -> Vec<u64> {
         const F32_BYTES: u64 = 4;
 
         let conv_width = u64::from(self.ssm_conv_kernel.saturating_sub(1));
@@ -465,7 +468,11 @@ impl GgufCompactMeta {
             .collect()
     }
 
-    fn recurrent_layer_mask(&self) -> Vec<bool> {
+    /// Which layers keep recurrent state instead of attention KV, from the
+    /// GGUF's explicit mask, per-layer KV head counts or full-attention
+    /// cadence. With recurrent state dimensions but no such discriminator,
+    /// every layer is marked recurrent.
+    pub fn recurrent_layer_mask(&self) -> Vec<bool> {
         let layer_count = self.layer_count as usize;
         if self.recurrent_layers.len() == layer_count {
             return self.recurrent_layers.clone();

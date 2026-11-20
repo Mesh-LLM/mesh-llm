@@ -144,9 +144,13 @@ fn scan_stage_cache_meta(path: &Path) -> Option<GgufCompactMeta> {
         .or_else(|| scan_gguf_compact_meta(&path.join("shared/metadata.gguf")))
 }
 
+/// The exact-state catalog's soft budget for a stage: half of one context
+/// window of the attention KV the stage's layers keep, plus the recurrent
+/// state of one snapshot per lane. Layers that keep recurrent state instead of
+/// KV cost no KV.
 fn estimate_stage_cache_max_bytes(config: &StageConfig, meta: &GgufCompactMeta) -> Option<u64> {
-    let stage_layers = config.layer_end.checked_sub(config.layer_start)?;
-    if stage_layers == 0 {
+    let stage_layers = config.layer_start..config.layer_end;
+    if stage_layers.is_empty() {
         return None;
     }
 
@@ -169,18 +173,53 @@ fn estimate_stage_cache_max_bytes(config: &StageConfig, meta: &GgufCompactMeta) 
     } else {
         return None;
     };
+    let layer_kv_bytes_per_token = |heads: u32| -> Option<u64> {
+        let key_bytes = dtype_bytes(
+            u64::from(key_width) * u64::from(heads),
+            &config.cache_type_k,
+        )?;
+        let value_bytes = dtype_bytes(
+            u64::from(value_width) * u64::from(heads),
+            &config.cache_type_v,
+        )?;
+        key_bytes.checked_add(value_bytes)
+    };
 
-    let key_elems_per_token = u64::from(key_width).checked_mul(u64::from(kv_heads))?;
-    let value_elems_per_token = u64::from(value_width).checked_mul(u64::from(kv_heads))?;
-    let key_bytes_per_token = dtype_bytes(key_elems_per_token, &config.cache_type_k)?;
-    let value_bytes_per_token = dtype_bytes(value_elems_per_token, &config.cache_type_v)?;
-    let bytes_per_token_layer = key_bytes_per_token.checked_add(value_bytes_per_token)?;
+    let recurrent = attention_free_layers(meta);
+    let per_layer_heads = (meta.kv_head_counts.len() == meta.layer_count as usize)
+        .then_some(meta.kv_head_counts.as_slice());
+    let kv_bytes_per_token = stage_layers
+        .clone()
+        .filter(|layer| !recurrent.get(*layer as usize).copied().unwrap_or(false))
+        .map(|layer| {
+            let heads = per_layer_heads
+                .and_then(|heads| heads.get(layer as usize).copied())
+                .filter(|heads| *heads > 0)
+                .unwrap_or(kv_heads);
+            layer_kv_bytes_per_token(heads)
+        })
+        .try_fold(0u64, |total, bytes| total.checked_add(bytes?))?;
+    let attention_budget = kv_bytes_per_token.checked_mul(u64::from(config.ctx_size.max(1)))? / 2;
 
-    let full_pool_bytes = bytes_per_token_layer
-        .checked_mul(u64::from(stage_layers))?
-        .checked_mul(u64::from(config.ctx_size.max(1)))?;
-    let cache_budget_bytes = full_pool_bytes / 2;
+    let plane_bytes = meta.recurrent_plane_bytes_by_layer();
+    let recurrent_bytes_per_snapshot = stage_layers
+        .filter_map(|layer| plane_bytes.get(layer as usize).copied())
+        .fold(0u64, u64::saturating_add);
+    let recurrent_allowance =
+        recurrent_bytes_per_snapshot.saturating_mul(u64::from(config.lane_count.max(1)));
+
+    let cache_budget_bytes = attention_budget.saturating_add(recurrent_allowance);
     (cache_budget_bytes > 0).then_some(cache_budget_bytes)
+}
+
+/// The layers that keep recurrent state and no attention KV. A mask that marks
+/// every layer recurrent although the model has attention heads is a guess
+/// from missing metadata, so every layer is charged KV instead.
+fn attention_free_layers(meta: &GgufCompactMeta) -> Vec<bool> {
+    let mask = meta.recurrent_layer_mask();
+    let guessed = mask.iter().all(|recurrent| *recurrent)
+        && !meta.has_only_recurrent_layers_without_kv_cache();
+    if guessed { Vec::new() } else { mask }
 }
 
 fn dtype_bytes(elements: u64, dtype: &str) -> Option<u64> {
@@ -249,6 +288,68 @@ mod tests {
         // Per token/layer: K = 4*64*2, V = 4*64*34/32. Two layers and
         // 1024 context cells, with half reserved for active lanes.
         assert_eq!(bytes, Some((512 + 272) * 2 * 1024 / 2));
+    }
+
+    /// Four layers with a full-attention layer every fourth: one attention
+    /// layer and three gated-delta layers, as in Qwen3.5.
+    fn hybrid_meta() -> GgufCompactMeta {
+        GgufCompactMeta {
+            layer_count: 4,
+            full_attention_interval: 4,
+            ssm_conv_kernel: 4,
+            ssm_inner_size: 64,
+            ssm_state_size: 16,
+            ssm_group_count: 2,
+            ..kv_meta("hybrid_arch")
+        }
+    }
+
+    #[test]
+    fn hybrid_stages_pay_kv_only_for_attention_layers_and_state_per_lane() {
+        let mut config = stage_config();
+        config.layer_end = 4;
+        config.lane_count = 2;
+        let meta = hybrid_meta();
+        // One attention layer: K = 4*64*2, V = 4*64*34/32 per token.
+        let attention = (512 + 272) * 1024 / 2;
+        // Per gated-delta layer, in f32: a 3-wide conv over 64 + 2*2*16
+        // channels, and a 16x64 state.
+        let plane = (3 * (64 + 2 * 2 * 16) + 16 * 64) * 4;
+        assert_eq!(
+            estimate_stage_cache_max_bytes(&config, &meta),
+            Some(attention + 3 * plane * 2)
+        );
+    }
+
+    #[test]
+    fn a_stage_of_only_recurrent_layers_pays_no_kv() {
+        let mut config = stage_config();
+        config.layer_start = 0;
+        config.layer_end = 3;
+        config.lane_count = 1;
+        let plane = (3 * (64 + 2 * 2 * 16) + 16 * 64) * 4;
+        assert_eq!(
+            estimate_stage_cache_max_bytes(&config, &hybrid_meta()),
+            Some(3 * plane)
+        );
+    }
+
+    #[test]
+    fn a_recurrent_mask_guessed_from_missing_metadata_still_charges_kv() {
+        let mut config = stage_config();
+        config.lane_count = 1;
+        // State dimensions but no mask, KV head counts or cadence: the layer
+        // mask marks every layer recurrent, which the attention heads deny.
+        let meta = GgufCompactMeta {
+            layer_count: 2,
+            full_attention_interval: 0,
+            ..hybrid_meta()
+        };
+        let plane = (3 * (64 + 2 * 2 * 16) + 16 * 64) * 4;
+        assert_eq!(
+            estimate_stage_cache_max_bytes(&config, &meta),
+            Some((512 + 272) * 2 * 1024 / 2 + 2 * plane)
+        );
     }
 
     #[test]

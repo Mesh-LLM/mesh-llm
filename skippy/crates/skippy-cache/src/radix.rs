@@ -5,6 +5,18 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, bail};
 
+/// Which unreferenced recurrent entry an eviction takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecurrentEvictionOrder {
+    /// The least recently used entry.
+    LeastRecentlyUsed,
+    /// First an entry that exactly one branch of longer stored entries
+    /// extends, least recently used first: an earlier turn of a conversation
+    /// whose later turn is cached. Only then any entry, so a prefix several
+    /// conversations share and the latest entry of each conversation go last.
+    SupersededFirst,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComponentKind {
     ResidentKv,
@@ -354,7 +366,15 @@ impl<R, E> UnifiedRadixCache<R, E> {
     }
 
     pub fn evict_lru_recurrent(&mut self) -> Option<RadixEviction<E>> {
-        let victim = self.lru_victim(ComponentKind::KvRecurrent)?;
+        self.evict_recurrent(RecurrentEvictionOrder::LeastRecentlyUsed)
+    }
+
+    pub fn evict_recurrent(&mut self, order: RecurrentEvictionOrder) -> Option<RadixEviction<E>> {
+        let victim = match order {
+            RecurrentEvictionOrder::LeastRecentlyUsed => None,
+            RecurrentEvictionOrder::SupersededFirst => self.superseded_recurrent_victim(),
+        }
+        .or_else(|| self.lru_victim(ComponentKind::KvRecurrent))?;
         let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
         self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
         Some(RadixEviction {
@@ -388,6 +408,14 @@ impl<R, E> UnifiedRadixCache<R, E> {
     fn ensure_node(&mut self, namespace: String, tokens: &[i32]) -> &mut RadixNode<R, E> {
         let root = self.roots.entry(namespace).or_insert_with(RadixNode::root);
         ensure_node(root, tokens, &mut self.splits)
+    }
+
+    fn superseded_recurrent_victim(&self) -> Option<Victim> {
+        let mut victim = None;
+        for (namespace, root) in &self.roots {
+            collect_superseded_recurrent_victim(namespace, root, &mut Vec::new(), &mut victim);
+        }
+        victim
     }
 
     fn lru_victim(&self, component: ComponentKind) -> Option<Victim> {
@@ -856,30 +884,69 @@ fn collect_lru_victim<R, E>(
             .map(|entry| (entry.last_used, entry.logical_bytes)),
     };
     if let Some((last_used, logical_bytes)) = candidate {
-        let replace = victim
-            .as_ref()
-            .map(|current| {
-                (last_used, namespace, path.as_slice())
-                    < (
-                        current.last_used,
-                        current.namespace.as_str(),
-                        current.tokens.as_slice(),
-                    )
-            })
-            .unwrap_or(true);
-        if replace {
-            *victim = Some(Victim {
-                namespace: namespace.to_string(),
-                tokens: path.clone(),
-                logical_bytes,
-                last_used,
-            });
-        }
+        offer_victim(victim, namespace, path, last_used, logical_bytes);
     }
     for child in node.children.values() {
         collect_lru_victim(namespace, child, component, path, victim);
     }
     path.truncate(original_len);
+}
+
+/// Offers the node's recurrent entry when exactly one child branch holds a
+/// recurrent entry, and returns whether this subtree holds any.
+fn collect_superseded_recurrent_victim<R, E>(
+    namespace: &str,
+    node: &RadixNode<R, E>,
+    path: &mut Vec<i32>,
+    victim: &mut Option<Victim>,
+) -> bool {
+    let original_len = path.len();
+    path.extend_from_slice(&node.edge);
+    let extending_branches = node
+        .children
+        .values()
+        .map(|child| collect_superseded_recurrent_victim(namespace, child, path, victim))
+        .filter(|holds_entry| *holds_entry)
+        .count();
+    let entry = node.components.recurrent.as_ref();
+    if extending_branches == 1
+        && let Some(entry) = entry.filter(|entry| entry.active_refs == 0)
+    {
+        offer_victim(
+            victim,
+            namespace,
+            path,
+            entry.last_used,
+            entry.logical_bytes,
+        );
+    }
+    path.truncate(original_len);
+    entry.is_some() || extending_branches > 0
+}
+
+fn offer_victim(
+    victim: &mut Option<Victim>,
+    namespace: &str,
+    path: &[i32],
+    last_used: u64,
+    logical_bytes: u64,
+) {
+    let replace = victim.as_ref().is_none_or(|current| {
+        (last_used, namespace, path)
+            < (
+                current.last_used,
+                current.namespace.as_str(),
+                current.tokens.as_slice(),
+            )
+    });
+    if replace {
+        *victim = Some(Victim {
+            namespace: namespace.to_string(),
+            tokens: path.to_vec(),
+            logical_bytes,
+            last_used,
+        });
+    }
 }
 
 fn collect_resident_eviction_candidates<R: Clone, E>(
@@ -1140,6 +1207,76 @@ mod tests {
         );
         assert_eq!(cache.epoch(), epoch);
         assert_eq!(cache.lru_recurrent_candidate().unwrap().value, "old");
+    }
+
+    #[test]
+    fn superseded_first_takes_an_earlier_turn_before_another_conversation() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_recurrent("stage", &[5, 6], 2, "b turn 1")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "a turn 1")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3, 4], 4, "a turn 2")
+            .unwrap();
+        assert_eq!(cache.lru_recurrent_candidate().unwrap().value, "b turn 1");
+
+        // b's only turn is the oldest, but a's first turn is the one a later
+        // turn makes redundant.
+        let order = RecurrentEvictionOrder::SupersededFirst;
+        assert_eq!(cache.evict_recurrent(order).unwrap().value, "a turn 1");
+        assert_eq!(cache.evict_recurrent(order).unwrap().value, "b turn 1");
+        assert_eq!(cache.evict_recurrent(order).unwrap().value, "a turn 2");
+        assert!(cache.evict_recurrent(order).is_none());
+    }
+
+    #[test]
+    fn superseded_first_keeps_a_prefix_two_conversations_share() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "system prompt")
+            .unwrap();
+        cache.insert_recurrent("stage", &[1, 2, 3], 3, "a").unwrap();
+        cache.insert_recurrent("stage", &[1, 2, 4], 3, "b").unwrap();
+
+        // Nothing is superseded, so the order falls back to least recently used.
+        let evicted = cache.evict_recurrent(RecurrentEvictionOrder::SupersededFirst);
+        assert_eq!(evicted.unwrap().value, "system prompt");
+    }
+
+    #[test]
+    fn superseded_first_counts_a_deeper_fork_as_one_extending_branch() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "turn 1")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3, 4], 4, "regenerated a")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3, 5], 4, "regenerated b")
+            .unwrap();
+
+        let evicted = cache.evict_recurrent(RecurrentEvictionOrder::SupersededFirst);
+        assert_eq!(evicted.unwrap().value, "turn 1");
+    }
+
+    #[test]
+    fn superseded_first_skips_an_entry_a_restore_holds() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "held turn 1")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3], 3, "turn 2")
+            .unwrap();
+        cache.insert_recurrent("stage", &[7], 1, "other").unwrap();
+        assert!(cache.acquire_recurrent("stage", &[1, 2]).is_some());
+
+        let evicted = cache.evict_recurrent(RecurrentEvictionOrder::SupersededFirst);
+        assert_eq!(evicted.unwrap().value, "turn 2");
     }
 
     #[test]
