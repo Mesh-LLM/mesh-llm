@@ -125,7 +125,9 @@ jobs:
           persist-credentials: false
 
       # A named Skippy ref is always built fresh, so its build never writes
-      # to the cache that pinned runs read.
+      # to the runtime cache that pinned runs read. The compiler and model
+      # caches are still used. Dispatching this workflow on main with a
+      # Skippy ref means you trust that code.
       - name: Restore the CPU runtime built from the pinned Skippy commit
         if: steps.skippy.outputs.override != 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
