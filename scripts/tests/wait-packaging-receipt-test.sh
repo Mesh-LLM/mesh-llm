@@ -18,6 +18,18 @@ cat >"$work/bin/gh" <<'STUB'
 path="$4"
 # A request that never answers.
 [[ ! -f "$FIX/stall" ]] || exec sleep 30
+# One that also ignores being asked to stop, and has a child that does too.
+if [[ -f "$FIX/stubborn" ]]; then
+    trap '' TERM
+    sleep 30 &
+    echo "$$ $!" >"$FIX/pids"
+    wait
+fi
+# One that fails after a megabyte of error text.
+if [[ -f "$FIX/noisy" ]]; then
+    head -c 1100000 /dev/zero | tr '\0' e >&2
+    exit 1
+fi
 case "$path" in
     */workflows/images-release.yml/runs)
         n=$(($(cat "$FIX/calls" 2>/dev/null || echo 0) + 1))
@@ -149,6 +161,29 @@ touch "$fix/stall"
 began=$SECONDS
 expect "took longer than 2s" "a request that stalls"
 ((SECONDS - began < 6)) || { echo "FAIL: a stalled request was not cut off at its own limit" >&2; fail=1; }
+
+# Nothing of a stubborn request survives, and nothing keeps our pipe open:
+# `expect` would not return before the 30 seconds were up otherwise.
+good
+touch "$fix/stubborn"
+began=$SECONDS
+expect "took longer than 2s" "a request that ignores TERM"
+((SECONDS - began < 8)) || { echo "FAIL: a stubborn request held the wait or its pipe open" >&2; fail=1; }
+read -r stub_pid child_pid <"$fix/pids"
+for pid in "$stub_pid" "$child_pid"; do
+    ! kill -0 "$pid" 2>/dev/null || { echo "FAIL: request process $pid survived" >&2; kill -KILL "$pid"; fail=1; }
+done
+
+good
+touch "$fix/noisy"
+expect "GitHub request failed" "a request that fails noisily"
+noise="$({ env -i PATH="$work/bin:$PATH" FIX="$fix" "$wait_script" --tag "$tag" --sha "$sha" --assets "$assets" \
+    --skippy-release v0.80.0 --skippy-catalog "$catalog" --correlation mesh-9-1 --since 2026-11-20T00:00:00Z 2>&1 || true; } | wc -c)"
+((noise < 8192)) || { echo "FAIL: $noise bytes of error text got through" >&2; fail=1; }
+
+# The override cannot raise the per-request limit past a minute.
+good
+grep -q 'request_seconds <= 60' "$wait_script" || { echo "FAIL: the request limit is not capped" >&2; fail=1; }
 
 good
 head -c 1100000 /dev/zero | tr '\0' ' ' >>"$fix/runs" # still valid JSON, only too long

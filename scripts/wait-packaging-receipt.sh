@@ -48,45 +48,53 @@ done
 [[ "$correlation" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "invalid correlation id"
 [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "--since must be a UTC timestamp"
 [[ "$timeout" =~ ^[0-9]+$ && "$poll" =~ ^[0-9]+$ && "$request_seconds" =~ ^[1-9][0-9]*$ ]] || fail "timeout and poll interval must be whole seconds"
+((request_seconds <= 60)) || request_seconds=60
 
 title="Packaging · $correlation"
 deadline=$((SECONDS + timeout))
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# Each request gets at most a minute, or what is left of the wait, and at
-# most 1 MiB of response. A request that stalls, fails or answers with more is
-# an error; nothing truncated is ever parsed.
+# Each request gets at most a minute, or what is left of the wait, at most
+# 1 MiB of response and 4 KiB of error text. A request that stalls, fails or
+# answers with more is an error; nothing truncated is ever parsed. The request
+# runs in its own process group, so that all of it can be stopped: asked
+# first, then killed a second later, and nothing of it outlives this function.
 get() { # get <output file> <api path> [field=value ...]
-    local out="$1" path="$2" args=() limit pid status=0 watchdog sleeper
+    local out="$1" path="$2" args=() limit pid status=0 watchdog
     shift 2
     for field in "$@"; do args+=(-f "$field"); done
     limit=$((deadline - SECONDS))
     ((limit > 0)) || fail "timed out waiting for packaging readiness"
     ((limit <= request_seconds)) || limit="$request_seconds"
+    rm -f "$work/stalled"
+    set -m # each background job below leads its own process group
     (
         set -o pipefail
-        gh api --method GET "$path" ${args[@]+"${args[@]}"} | head -c $((max_bytes + 1)) >"$out"
+        gh api --method GET "$path" ${args[@]+"${args[@]}"} 2> >(head -c 4096 >"$work/gh.err") |
+            head -c $((max_bytes + 1)) >"$out"
     ) &
     pid=$!
-    # The watchdog ends the request at its limit and leaves a marker.
-    rm -f "$work/stalled"
     (
         sleep "$limit"
         : >"$work/stalled"
-        pkill -P "$pid" 2>/dev/null
-        kill "$pid" 2>/dev/null
+        kill -TERM -- "-$pid" 2>/dev/null
+        sleep 1
+        kill -KILL -- "-$pid" 2>/dev/null
     ) >/dev/null 2>&1 &
     watchdog=$!
+    set +m
     wait "$pid" 2>/dev/null || status=$?
-    # Stop the watchdog before its sleep, so it cannot leave a late marker.
-    sleeper="$(pgrep -P "$watchdog" 2>/dev/null || true)"
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
-    [[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true
+    if [[ -e "$work/stalled" ]]; then
+        wait "$watchdog" 2>/dev/null || true # it is finishing the kill
+    else
+        kill -KILL -- "-$watchdog" 2>/dev/null || true
+        wait "$watchdog" 2>/dev/null || true
+    fi
+    kill -KILL -- "-$pid" 2>/dev/null || true
     [[ ! -e "$work/stalled" ]] || fail "GitHub request took longer than ${limit}s: $path"
     (($(wc -c <"$out") <= max_bytes)) || fail "GitHub response is larger than $max_bytes bytes: $path"
-    ((status == 0)) || fail "GitHub request failed: $path"
+    ((status == 0)) || fail "GitHub request failed: $path: $(tr -c '[:print:]' ' ' <"$work/gh.err")"
 }
 
 # query <file> [jq args ...] <jq filter>. A filter that errors, or yields null

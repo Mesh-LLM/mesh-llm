@@ -115,8 +115,9 @@ the dispatch.
   attempt, is an error. That is deliberately conservative: the run is refused
   instead of guessing which receipts still count.
 - Each GitHub request gets at most a minute, or what is left of the wait, and
-  at most 1 MiB of response. A stalled, failed or oversized request is an
-  error.
+  at most 1 MiB of response and 4 KiB of error text. A stalled, failed or
+  oversized request is an error. A stalled request is asked to stop and then
+  killed a second later, with everything it started.
 - It re-reads the run afterwards and fails if it was re-run meanwhile.
 - It gives up after two hours.
 
