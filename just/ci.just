@@ -8,6 +8,7 @@ lint:
     shellcheck scripts/*.sh scripts/tests/*.sh mesh/scripts/*.sh
     scripts/tests/ci-resolve-skippy-test.sh
     scripts/tests/ci-skippy-runtime-test.sh
+    scripts/tests/install-asset-test.sh
 
 # Rust tests for the whole workspace.
 test-rust *ARGS:

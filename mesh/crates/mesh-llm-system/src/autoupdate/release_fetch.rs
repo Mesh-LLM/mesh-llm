@@ -205,6 +205,23 @@ pub(super) fn release_asset_candidates(
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
         }
     }
+    // An install made from a per-GPU archive updates to the plain host archive
+    // once a release stops publishing per-GPU ones.
+    let host = target.plain_host();
+    let (first, second) = (
+        host.stable_asset_name(),
+        host.versioned_asset_name(release_tag),
+    );
+    match preference {
+        ReleaseAssetPreference::StableFirst => {
+            push_release_asset_candidate(&mut candidates, first);
+            push_release_asset_candidate(&mut candidates, second);
+        }
+        ReleaseAssetPreference::VersionedFirst => {
+            push_release_asset_candidate(&mut candidates, second);
+            push_release_asset_candidate(&mut candidates, first);
+        }
+    }
     candidates
 }
 
@@ -426,32 +443,34 @@ async fn install_native_runtime_after_update(
     release: &ReleaseInfo,
     workspace: &Path,
 ) {
-    let Some(asset) = release_asset(release, "native-runtimes.json") else {
-        return;
-    };
-    let manifest_path = workspace.join("native-runtimes.json");
-    match download_optional_url(
-        &release_asset_url(&release.tag, "native-runtimes.json"),
-        &manifest_path,
-        &asset.sha256,
-    )
-    .await
-    {
-        Ok(true) => {}
-        Ok(false) => return,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to download native runtime release manifest");
-            return;
+    // Older releases published their own runtime catalog. Without one, the
+    // updated host resolves against the Skippy release it was built for.
+    let mut manifest_path = None;
+    if let Some(asset) = release_asset(release, "native-runtimes.json") {
+        let path = workspace.join("native-runtimes.json");
+        match download_optional_url(
+            &release_asset_url(&release.tag, "native-runtimes.json"),
+            &path,
+            &asset.sha256,
+        )
+        .await
+        {
+            Ok(true) => manifest_path = Some(path),
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(%error, "Failed to download native runtime release manifest");
+                return;
+            }
         }
     }
 
     let binary = install_dir.join(mesh_binary_name());
-    let install_status = std::process::Command::new(&binary)
-        .arg("runtime")
-        .arg("install")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .status();
+    let mut install = std::process::Command::new(&binary);
+    install.arg("runtime").arg("install");
+    if let Some(manifest_path) = &manifest_path {
+        install.arg("--manifest").arg(manifest_path);
+    }
+    let install_status = install.status();
     match install_status {
         Ok(status) if status.success() => {
             let _ = std::process::Command::new(&binary)

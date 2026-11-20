@@ -704,3 +704,109 @@ fn test_staged_binary_version_must_match_release() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn host_only_release() -> ReleaseInfo {
+    ReleaseInfo {
+        tag: "v0.81.0".to_string(),
+        version: "0.81.0".to_string(),
+        assets: [
+            "mesh-llm-aarch64-apple-darwin.tar.gz",
+            "mesh-llm-x86_64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-x86_64-pc-windows-msvc.zip",
+            "mesh-llm-v0.81.0-aarch64-apple-darwin.tar.gz",
+            "mesh-llm-v0.81.0-x86_64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-v0.81.0-aarch64-unknown-linux-gnu.tar.gz",
+            "mesh-llm-v0.81.0-x86_64-pc-windows-msvc.zip",
+        ]
+        .into_iter()
+        .map(test_release_asset)
+        .collect(),
+    }
+}
+
+/// An install made from a per-GPU archive must still find an update once
+/// releases carry one host archive per platform.
+#[test]
+fn test_a_gpu_flavored_install_updates_to_the_plain_host_archive() {
+    use backend::BinaryFlavor::{Cuda, Rocm, Vulkan};
+    let release = host_only_release();
+
+    for (os, arch, flavor, triple, ext) in [
+        (
+            "linux",
+            "x86_64",
+            Cuda,
+            "x86_64-unknown-linux-gnu",
+            "tar.gz",
+        ),
+        (
+            "linux",
+            "x86_64",
+            Rocm,
+            "x86_64-unknown-linux-gnu",
+            "tar.gz",
+        ),
+        (
+            "linux",
+            "x86_64",
+            Vulkan,
+            "x86_64-unknown-linux-gnu",
+            "tar.gz",
+        ),
+        (
+            "linux",
+            "aarch64",
+            Cuda,
+            "aarch64-unknown-linux-gnu",
+            "tar.gz",
+        ),
+        ("windows", "x86_64", Cuda, "x86_64-pc-windows-msvc", "zip"),
+        ("windows", "x86_64", Rocm, "x86_64-pc-windows-msvc", "zip"),
+        ("windows", "x86_64", Vulkan, "x86_64-pc-windows-msvc", "zip"),
+    ] {
+        let target = ReleaseTarget::from_raw(os, arch, flavor).unwrap();
+        for cuda_order in [CudaBundleOrder::Cuda12First, CudaBundleOrder::Cuda13First] {
+            assert_eq!(
+                resolve_release_asset_name(
+                    &release,
+                    target,
+                    ReleaseAssetPreference::StableFirst,
+                    cuda_order,
+                ),
+                Some(format!("mesh-llm-{triple}.{ext}")),
+                "{os}/{arch} {flavor:?} latest"
+            );
+            assert_eq!(
+                resolve_release_asset_name(
+                    &release,
+                    target,
+                    ReleaseAssetPreference::VersionedFirst,
+                    cuda_order,
+                ),
+                Some(format!("mesh-llm-v0.81.0-{triple}.{ext}")),
+                "{os}/{arch} {flavor:?} pinned version"
+            );
+        }
+    }
+}
+
+/// The fallback is last: a release that still has the per-GPU archive keeps
+/// serving it to an install of that flavor.
+#[test]
+fn test_a_gpu_flavored_install_prefers_its_own_archive_while_one_exists() {
+    let mut release = host_only_release();
+    release.assets.push(test_release_asset(
+        "mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz",
+    ));
+
+    assert_eq!(
+        resolve_release_asset_name(
+            &release,
+            ReleaseTarget::from_raw("linux", "x86_64", backend::BinaryFlavor::Vulkan).unwrap(),
+            ReleaseAssetPreference::StableFirst,
+            CudaBundleOrder::Cuda12First,
+        ),
+        Some("mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz".to_string())
+    );
+}

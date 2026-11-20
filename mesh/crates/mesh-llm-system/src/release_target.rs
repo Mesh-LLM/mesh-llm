@@ -151,6 +151,17 @@ impl ReleaseTarget {
         }
     }
 
+    /// The one host archive a release publishes for this platform. Releases
+    /// used to publish a separate archive per GPU flavor; the GPU runtime is
+    /// now downloaded after install, so every flavor shares this archive.
+    pub fn plain_host(self) -> Self {
+        let flavor = match self.os {
+            CanonicalOs::Macos => BinaryFlavor::Metal,
+            CanonicalOs::Linux | CanonicalOs::Windows => BinaryFlavor::Cpu,
+        };
+        Self { flavor, ..self }
+    }
+
     pub fn stable_asset_name(self) -> Option<String> {
         self.asset_name(None)
     }
