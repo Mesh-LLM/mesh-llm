@@ -49,12 +49,29 @@ read_workspace_version() {
     perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' Cargo.toml
 }
 
+# Exit 0 when target >= current by semver precedence (numeric core, then a
+# prerelease sorts before its release; prerelease identifiers compare by sort -V).
+version_at_least() {
+    local current="$1" target="$2"
+    local current_core="${current%%-*}" target_core="${target%%-*}"
+    if [[ "$current_core" != "$target_core" ]]; then
+        [[ "$(printf '%s\n%s\n' "$current_core" "$target_core" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)" == "$target_core" ]]
+        return
+    fi
+    local current_pre="" target_pre=""
+    [[ "$current" == *-* ]] && current_pre="${current#*-}"
+    [[ "$target" == *-* ]] && target_pre="${target#*-}"
+    [[ -z "$target_pre" ]] && return 0
+    [[ -z "$current_pre" ]] && return 1
+    [[ "$(printf '%s\n%s\n' "$current_pre" "$target_pre" | sort -V | tail -n1)" == "$target_pre" ]]
+}
+
 ensure_target_version_not_older() {
     local current="$1"
     local target="$2"
     local compare_status
 
-    if cargo xtool release version-at-least "$current" "$target"
+    if version_at_least "$current" "$target"
     then
         compare_status=0
     else
@@ -245,7 +262,6 @@ main() {
     require_command gh
     require_command git
     require_command perl
-    require_command cargo
 
     local version
     local tag

@@ -16,10 +16,7 @@
 # Exits 0 only if both invariants hold; 1 otherwise.
 
 set -euo pipefail
-automation=(cargo xtool)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
-    automation=("$MESH_LLM_AUTOMATION_BIN")
-fi
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary>}"
 CONSOLE_PORT=3132        # avoid clashing with other CI steps
@@ -117,7 +114,7 @@ if [ "$API_UP" = true ]; then
     STATUS=$(curl -sf --max-time 5 "http://localhost:${CONSOLE_PORT}/api/status" 2>&1 || echo "")
     if [ -n "$STATUS" ]; then
         # Check it's valid JSON with expected fields
-        if echo "$STATUS" | "${automation[@]}" automation smoke-observation status 2>/dev/null; then
+        if echo "$STATUS" | jq -e 'has("version") or has("peers") or has("models")' >/dev/null 2>&1; then
             echo "✅ /api/status returns valid JSON"
         else
             echo "⚠️  /api/status returned something but couldn't validate: $STATUS"
@@ -153,7 +150,7 @@ if [ "$API_UP" = true ]; then
     JOINED=false
     for j in $(seq 1 "$JOIN_WAIT"); do
         STATUS=$(curl -sf --max-time 5 "http://localhost:${CONSOLE_PORT}/api/status" 2>/dev/null || echo "")
-        if [ -n "$STATUS" ] && JOIN_STATUS=$(echo "$STATUS" | "${automation[@]}" automation smoke-observation joined 2>/dev/null); then
+        if [ -n "$STATUS" ] && JOIN_STATUS=$(echo "$STATUS" | jq -er 'select((.mesh_id // "") != "" and ((.peers // []) | length) > 0) | "\(.mesh_id)\t\(.peers | length)"' 2>/dev/null); then
             IFS=$'\t' read -r MESH_ID PEER_COUNT <<<"$JOIN_STATUS"
             echo "✅ Joined mesh after ${j}s — mesh_id=${MESH_ID} peers=${PEER_COUNT}"
             JOINED=true

@@ -5,21 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUILD=0
-REQUIRE_PREBUILT_LLAMA=0
 OUT_DIR="$REPO_ROOT/dist/native-sdk"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_SDK_TARGET:-}"
 PROFILE="${MESH_NATIVE_SDK_PROFILE:-release}"
-LLAMA_WORKDIR="${LLAMA_WORKDIR:-$REPO_ROOT/.deps/llama.cpp}"
-automation=(cargo xtool)
-if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
-    if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
-        echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
-        exit 1
-    fi
-    automation=("$MESH_LLM_AUTOMATION_BIN")
-fi
-
 usage() {
     cat >&2 <<'EOF'
 Usage: scripts/package-native-sdk.sh [options]
@@ -27,10 +16,7 @@ Usage: scripts/package-native-sdk.sh [options]
 Package a backend-flavoured MeshLLM native SDK runtime artifact.
 
 Options:
-  --build             Build patched llama.cpp and mesh-llm-ffi before packaging.
-  --require-prebuilt-llama
-                      With --build, verify and reuse the existing llama.cpp ABI
-                      instead of rebuilding it.
+  --build             Build mesh-llm-ffi before packaging.
   --backend NAME      cpu, metal, cuda, rocm, hip, or vulkan.
   --target TRIPLE     Rust target triple. Defaults to the host target.
   --profile PROFILE   Cargo profile to package: release or debug. Defaults to release.
@@ -38,14 +24,8 @@ Options:
   -h, --help          Show this help.
 
 Environment:
-  LLAMA_STAGE_CUDA_ARCHITECTURES / SKIPPY_CUDA_ARCHITECTURES
-  LLAMA_STAGE_AMDGPU_TARGETS / SKIPPY_AMDGPU_TARGETS
-  LLAMA_STAGE_BUILD_DIR
   MESH_NATIVE_SDK_TARGET
   MESH_NATIVE_SDK_PROFILE
-  MESH_LLM_LLAMA_PIN_SHA
-  MESH_LLM_AUTOMATION_BIN  Absolute restored automation executable used instead
-                           of compiling xtask.
 EOF
 }
 
@@ -53,10 +33,6 @@ while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --build)
             BUILD=1
-            shift
-            ;;
-        --require-prebuilt-llama)
-            REQUIRE_PREBUILT_LLAMA=1
             shift
             ;;
         --backend)
@@ -103,10 +79,6 @@ case "$PROFILE" in
         ;;
 esac
 
-if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" && "$BUILD" != "1" ]]; then
-    echo "--require-prebuilt-llama requires --build" >&2
-    exit 1
-fi
 
 host_os() {
     case "$(uname -s)" in
@@ -226,7 +198,7 @@ sha256_file() {
 }
 
 workspace_version() {
-    "${automation[@]}" native package-source-version workspace "$REPO_ROOT/Cargo.toml"
+    perl -0ne 'print "$1\n" if /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/s' "$REPO_ROOT/Cargo.toml"
 }
 
 if [[ -z "$TARGET_TRIPLE" ]]; then
@@ -237,31 +209,7 @@ if [[ -z "$TARGET_TRIPLE" ]]; then
     exit 1
 fi
 
-# Same ordering constraint as package-native-runtime.sh: the build directory is
-# keyed by the checkout's pin stamp, so the pin must be prepared before it can be
-# resolved, or the new pin builds into the previous stamp's directory.
 if [[ "$BUILD" == "1" ]]; then
-    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
-fi
-
-if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
-    LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
-fi
-
-if [[ "$BUILD" == "1" ]]; then
-    llama_build_dir="$LLAMA_STAGE_BUILD_DIR"
-    if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
-        LLAMA_STAGE_BACKEND="$(build_backend)" \
-            LLAMA_BUILD_DIR="$llama_build_dir" \
-            LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
-            "$SCRIPT_DIR/build-llama.sh" --require-existing
-    else
-        LLAMA_STAGE_BACKEND="$(build_backend)" \
-            LLAMA_BUILD_DIR="$llama_build_dir" \
-            LLAMA_STAGE_BUILD_DIR="$llama_build_dir" \
-            "$SCRIPT_DIR/build-llama.sh"
-    fi
-
     cargo_args=(build -p mesh-llm-ffi --no-default-features --features "embedded-runtime")
     if [[ "$PROFILE" == "release" ]]; then
         cargo_args+=(--release)
@@ -269,13 +217,7 @@ if [[ "$BUILD" == "1" ]]; then
     if [[ "$TARGET_TRIPLE" != "$(default_target_triple)" ]]; then
         cargo_args+=(--target "$TARGET_TRIPLE")
     fi
-    if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
-        export SKIPPY_LLAMA_AUTO_BUILD=0
-        export MESH_LLM_AUTO_BUILD_LLAMA=0
-    fi
-    LLAMA_STAGE_BACKEND="$(build_backend)" \
-        LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-        cargo "${cargo_args[@]}"
+    LLAMA_STAGE_BACKEND="$(build_backend)" cargo "${cargo_args[@]}"
 fi
 
 lib_ext="$(library_extension "$TARGET_TRIPLE")"
@@ -317,25 +259,20 @@ mkdir -p "$stage_dir/lib"
 cp "$lib_path" "$stage_dir/lib/$lib_name"
 cp "$lib_path" "$stage_dir/lib/$uniffi_lib_name"
 
-patched_sha=""
-upstream_sha=""
-patch_digest=""
-if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patched-sha" ]]; then
-    patched_sha="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patched-sha")"
-fi
-if [[ -f "$LLAMA_WORKDIR/.mesh-llm-upstream-sha" ]]; then
-    upstream_sha="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-upstream-sha")"
-fi
-if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patch-digest" ]]; then
-    patch_digest="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patch-digest")"
-fi
-
 sdk_version="$(workspace_version)"
+library_sha256="$(sha256_file "$stage_dir/lib/$lib_name")"
 
-"${automation[@]}" prepared-input native-sdk-manifest-write \
-    "$stage_dir/manifest.json" "$artifact_id" "$sdk_version" "$TARGET_TRIPLE" \
-    "$platform" "$runtime_os" "$runtime_arch" "$BACKEND" "$flavor" "$PROFILE" \
-    "lib/$lib_name" "lib/$uniffi_lib_name" "$upstream_sha" "$patched_sha" "$patch_digest"
+jq -n \
+    --arg id "$artifact_id" --arg version "$sdk_version" --arg target "$TARGET_TRIPLE" \
+    --arg platform "$platform" --arg os "$runtime_os" --arg arch "$runtime_arch" \
+    --arg backend "$BACKEND" --arg flavor "$flavor" --arg profile "$PROFILE" \
+    --arg library "lib/$lib_name" --arg uniffi "lib/$uniffi_lib_name" --arg sha "$library_sha256" \
+    '{schema_version: 1, artifact_id: $id, native_runtime_id: $id, sdk_version: $version,
+      mesh_version: $version, target_triple: $target, platform: $platform, os: $os, arch: $arch,
+      backend: $backend, flavor: $flavor, cargo_profile: $profile, library: $library,
+      library_paths: [$library], uniffi_library: $uniffi, library_sha256: $sha,
+      url: null, sha256: null, signature: null, requirements: []}' \
+    >"$stage_dir/manifest.json"
 
 cat > "$stage_dir/README.md" <<EOF
 # $artifact_id

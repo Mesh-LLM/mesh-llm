@@ -11,9 +11,7 @@ NODE_SDK="$ROOT/mesh/sdk/node/index.js"
 NODE_INFERENCE="$ROOT/mesh/sdk/node/inference.js"
 NODE_NATIVE="$ROOT/mesh/crates/mesh-llm-nodejs/src/lib.rs"
 NODE_TYPES="$ROOT/mesh/sdk/node/index.d.ts"
-automation=(cargo xtool)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
-PYTHON_SOURCE="$(cd "$ROOT" && "${automation[@]}" automation smoke-observation sdk-source --kind root)"
+PYTHON_SOURCE="$ROOT/mesh/sdk/python"
 PYTHON_SDK="$PYTHON_SOURCE/src/meshllm/client.py"
 PYTHON_TYPES="$PYTHON_SOURCE/src/meshllm/types.py"
 
