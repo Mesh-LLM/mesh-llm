@@ -30,8 +30,10 @@ An entry is removed in the same change that closes it.
   That repository reads `native-runtimes.json` and the GPU archives from the
   MeshLLM release, which no longer has them. Its identity-bound dispatch and
   the wait for its receipt are not restored either.
-- **GPU machines.** It is not yet shown by a test that the host prefers a
-  downloaded GPU runtime over the CPU runtime bundled in its archive.
+- **NVIDIA and AMD machines.** No run on real hardware shows the host
+  downloading and loading a GPU runtime. Tests cover the choice only: a better
+  runtime in the catalog, or one already installed, is used over the CPU
+  runtime bundled in the archive. Metal was run on a Mac.
 - **Updating from 0.80.0 on Windows.** The updater swaps in the new runtime
   and manifest with a PowerShell script that no test runs. The Unix path is
   covered. See [Compatibility archive names](#compatibility-archive-names).
