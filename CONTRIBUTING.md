@@ -224,7 +224,7 @@ Pull requests run [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 | Job | Local command |
 |---|---|
 | Lint | `just lint` |
-| Test, per platform | `just test-rust --locked` |
+| Test, per platform | `just test-rust --locked --no-fail-fast` |
 | Console | `just test-ui` |
 | Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>`, then `just test-with-runtime <runtime-dir>` |
 

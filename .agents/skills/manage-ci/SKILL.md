@@ -22,7 +22,7 @@ skill and the inventory in the same change.
 ## What runs
 
 - `ci.yml` runs on every pull request and on pushes to `main`: `just lint`,
-  `just test-rust --locked` on Linux, macOS and Windows, `just test-ui`, and
+  `just test-rust --locked --no-fail-fast` on Linux, macOS and Windows, `just test-ui`, and
   one real inference smoke on Linux with Skippy's CPU runtime.
 - `release.yml` is started by hand (`just release vX.Y.Z`). It builds, signs,
   checks and publishes one host archive per platform and the Swift, Kotlin and

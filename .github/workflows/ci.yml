@@ -50,7 +50,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - run: just test-rust --locked
+      - run: just test-rust --locked --no-fail-fast
 
   ui:
     name: Console
