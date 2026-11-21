@@ -244,6 +244,11 @@ impl PluginManager {
                 event["exchange_id"] = json!(state.exchange_id);
             }
             event["endpoint"] = json!(state.endpoint);
+            // `request_id` names the client's request on every callback of the
+            // exchange; a typed backend only knows its own dispatch id.
+            if !state.request_id.is_empty() {
+                event["request_id"] = json!(state.request_id);
+            }
             state.tier
         };
         event["observation_id"] = json!(observation_id);
@@ -315,6 +320,7 @@ impl PluginManager {
             state.incomplete = true;
             state.evidence_unavailable = true;
         }
+        state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
         state.selected = Some(event);
         result
     }
@@ -673,6 +679,12 @@ struct EmissionState {
     commitment: Option<WireBytesCommitment>,
     copies: super::exchange_streams::ResponseCopies,
     exchange_id: String,
+    /// The request id the session's lifecycle callbacks carry; every event of
+    /// the exchange, `backend_selected` included, reports this one.
+    request_id: String,
+    /// Exchange id of the dispatch that served: the latest `backend_selected`
+    /// event's. Unlike `attempt_history`, never capped.
+    served_exchange_id: Option<String>,
     endpoint: String,
     headers: Vec<(String, String)>,
     annotations: BTreeMap<String, String>,
@@ -791,6 +803,8 @@ impl ExchangeSession {
         let emission = Arc::new(Mutex::new(EmissionState {
             copies,
             exchange_id: event["exchange_id"].as_str().unwrap_or_default().into(),
+            request_id: event["request_id"].as_str().unwrap_or_default().into(),
+            served_exchange_id: None,
             endpoint: event["endpoint"].as_str().unwrap_or_default().into(),
             headers: result.headers.clone(),
             annotations: result.annotations.clone(),
@@ -910,6 +924,10 @@ impl ExchangeSession {
         event["usage"] = json!(emission.usage);
         event["elapsed_ms"] = json!(self.started.elapsed().as_millis());
         event["attempt_history"] = json!(emission.attempt_history);
+        // `exchange_id` stays the session's (response streams are keyed by it);
+        // this names the dispatch that served, which `attempt_history` may
+        // have dropped past its cap.
+        event["served_exchange_id"] = json!(emission.served_exchange_id);
         event["any_response_bytes_emitted"] = json!(
             emission
                 .commitment

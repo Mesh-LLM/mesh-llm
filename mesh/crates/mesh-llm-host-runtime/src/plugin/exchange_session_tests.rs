@@ -517,6 +517,59 @@ async fn terminal_keeps_the_sessions_exchange_id_after_a_repick() {
     assert_eq!(terminal["exchange_id"], "dispatch-0");
     assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-0");
     assert_eq!(terminal["attempt_history"][1]["exchange_id"], "dispatch-1");
+    assert_eq!(terminal["served_exchange_id"], "dispatch-1");
+}
+
+/// A late winning dispatch past the `attempt_history` cap still names itself on
+/// the terminal, and every `backend_selected` reports the session's request id
+/// rather than the dispatch's.
+#[tokio::test]
+async fn terminal_names_the_served_dispatch_past_the_attempt_history_cap() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let mut received = request_event(
+        "dispatch-0".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    received["request_id"] = json!("client-request");
+    let (mut session, _) = ExchangeSession::begin(&manager, received).await;
+    for attempt in 1..=20 {
+        let mut selected = request_event(
+            format!("dispatch-{attempt}"),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+            .await;
+    }
+    session.observer().finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["attempt_history"].as_array().unwrap().len(), 16);
+    assert_eq!(terminal["served_exchange_id"], "dispatch-20");
+    assert_eq!(terminal["request_id"], "client-request");
 }
 
 /// With a response-body observer, a re-pick must leave the terminal under the

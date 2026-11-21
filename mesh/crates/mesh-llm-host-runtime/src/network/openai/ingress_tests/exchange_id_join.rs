@@ -195,6 +195,11 @@ async fn peer_failover_joins_lifecycle_callbacks_and_channel_events_on_one_id() 
     assert_eq!(finished["attempt_history"].as_array().unwrap().len(), 2);
     assert_eq!(finished["attempt_history"][0]["exchange_id"], id.as_str());
     assert_eq!(finished["attempt_history"][1]["exchange_id"], id.as_str());
+    assert_eq!(finished["served_exchange_id"], id.as_str());
+    let request_id = phase(&lifecycle, "request_received")[0]["request_id"].clone();
+    for event in phase(&lifecycle, "backend_selected") {
+        assert_eq!(event["request_id"], request_id);
+    }
 
     // A second request is a different exchange.
     let contacted = Arc::new(AtomicUsize::new(0));
@@ -292,6 +297,17 @@ fn assert_one_typed_exchange(lifecycle: &[Value], channel: &[Value], context: &s
         );
     }
     assert_eq!(phase(lifecycle, "backend_selected").len(), 1);
+    // One request id on every callback: `backend_selected` must not report the
+    // typed backend's own dispatch id in its place.
+    let request_id = phase(lifecycle, "request_received")[0]["request_id"].clone();
+    for event in lifecycle {
+        assert_eq!(
+            event["request_id"], request_id,
+            "{context} request_id: {event}"
+        );
+    }
+    let finished = phase(lifecycle, "exchange_finished")[0];
+    assert_eq!(finished["served_exchange_id"], id.as_str(), "{context}");
     assert_eq!(
         channel.len(),
         2,
