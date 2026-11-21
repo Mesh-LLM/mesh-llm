@@ -4,6 +4,7 @@ use super::common::{
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
+use super::routing::{ProbeOutcome, probe_with_downstream_disconnect};
 use super::served_model_headers::set_served_model_headers;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
@@ -113,8 +114,12 @@ async fn route_http_endpoint_attempt_after_forward(
     response_adapter: ResponseAdapter,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
-    match probe_http_response(upstream).await {
-        Ok(mut probe) => {
+    match probe_with_downstream_disconnect(tcp_stream, probe_http_response(upstream)).await {
+        ProbeOutcome::ClientDisconnected => {
+            let _ = upstream.shutdown().await;
+            RouteAttemptResult::ClientDisconnected
+        }
+        ProbeOutcome::Response(Ok(mut probe)) => {
             // A plugin backend is not this node's native runtime, so any
             // served-model headers it sent are its own claims: strip them
             // before a mesh peer reads this response as the node's.
@@ -139,7 +144,7 @@ async fn route_http_endpoint_attempt_after_forward(
             }
             result
         }
-        Err(err) => {
+        ProbeOutcome::Response(Err(err)) => {
             tracing::warn!(
                 "API proxy: failed to read response from external endpoint {}: {}",
                 base_url,
@@ -570,5 +575,62 @@ mod tests {
             "{head}"
         );
         assert_eq!(forwarded_body, body);
+    }
+
+    #[tokio::test]
+    async fn an_external_endpoint_attempt_cancels_the_upstream_when_the_client_disconnects() {
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::sync::oneshot;
+        use tokio::time::{Duration, timeout};
+
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let (upstream_ready_tx, upstream_ready_rx) = oneshot::channel();
+        let upstream_task = tokio::spawn(async move {
+            let (mut upstream_peer, _) = upstream_listener.accept().await.unwrap();
+            upstream_ready_tx.send(()).unwrap();
+            let mut bytes = [0u8; 1];
+            timeout(Duration::from_secs(2), upstream_peer.read(&mut bytes))
+                .await
+                .expect("external endpoint cancellation must reach the upstream socket")
+                .expect("reading the cancelled upstream socket must succeed")
+        });
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let base_url = format!("http://{upstream_address}");
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            let mut upstream: ClientStream =
+                TcpStream::connect(upstream_address).await.unwrap().into();
+            route_http_endpoint_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                &base_url,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+
+        let client_socket = TcpStream::connect(address).await.unwrap();
+        upstream_ready_rx.await.unwrap();
+        client_socket.set_zero_linger().unwrap();
+        drop(client_socket);
+
+        let result = timeout(Duration::from_secs(2), task)
+            .await
+            .expect("external endpoint route must notice a reset promptly")
+            .unwrap();
+
+        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
+        assert_eq!(
+            upstream_task.await.unwrap(),
+            0,
+            "external endpoint cancellation must shut down the concrete TCP upstream"
+        );
     }
 }

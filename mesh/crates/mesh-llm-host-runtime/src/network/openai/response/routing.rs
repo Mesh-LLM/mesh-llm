@@ -170,7 +170,7 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
     }
 }
 
-enum ProbeOutcome {
+pub(super) enum ProbeOutcome {
     ClientDisconnected,
     Response(Result<ResponseProbe>),
 }
@@ -178,7 +178,10 @@ enum ProbeOutcome {
 /// Race the complete upstream response probe against a non-consuming
 /// downstream close check. Pipelined TCP bytes leave the watcher pending, while
 /// a TCP reset or QUIC STOP_SENDING reports a client disconnect promptly.
-async fn probe_with_downstream_disconnect<F>(client: &ClientStream, probe: F) -> ProbeOutcome
+pub(super) async fn probe_with_downstream_disconnect<F>(
+    client: &ClientStream,
+    probe: F,
+) -> ProbeOutcome
 where
     F: Future<Output = Result<ResponseProbe>>,
 {
