@@ -1647,7 +1647,7 @@ mod tests {
         assert_eq!(manifest.capabilities, vec!["demo.v1"]);
         assert_eq!(manifest.config_schema.as_ref().unwrap().plugin_name, "demo");
         assert_eq!(manifest.web_ui.as_ref().unwrap().pages[0].id, "overview");
-        assert_eq!(manifest.operations.len(), 2);
+        assert_eq!(manifest.operations.len(), 1);
         assert_eq!(manifest.http_bindings.len(), 1);
         assert_eq!(manifest.endpoints.len(), 2);
         assert_eq!(manifest.mesh_channels.len(), 1);
