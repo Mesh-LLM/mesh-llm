@@ -29,6 +29,7 @@ fn finalization_retains_complete_report_when_signal_scope_fails() {
                 forced: true,
                 graceful_signal_failed: true,
                 failure: Some(process::Failure::CleanupDeadline),
+                pre_force: None,
             },
             failure: Some(process::Failure::RawCaptureOverflow {
                 stream: process::Stream::Stdout,
