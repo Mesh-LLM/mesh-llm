@@ -1405,7 +1405,37 @@ permission.
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners`; no
-workflow accepts a raw provider label. Trusted main Linux requires
+workflow accepts a raw provider label.
+
+Hosted precedence crosses every reusable-workflow call that reaches the
+selector. Lanes pass the planner's `hosted_runner_required` signal as
+`force_hosted`; release passes `force_hosted_runners` to its own selector and
+to `native-sdk-artifact.yml` and `swift-sdk-artifact.yml`, and
+`native-sdk-artifact.yml` passes its inputs to `static-abi-artifact.yml`.
+Every call of a workflow declaring `use_depot` forwards it: the Linux lane to
+hosts, CPU runtime, static ABI and Kotlin native SDK input; release to native
+SDK. `force_hosted=true` makes the selector return hosted labels whatever
+`use_depot`, `DEPOT_RUNNERS_ENABLED` or `DEPOT_PR_RUNNERS_ENABLED` say.
+Release native runtime legs prepare Linux automation with `hosted-bare` and
+therefore run on their matrix's hosted label (`ubuntu-24.04`,
+`ubuntu-24.04-arm`, `macos-15`), never a selected label. Rolling previews
+dispatch release with `force_hosted_runners=true` and `use_depot=false`.
+
+| Boundary | `force_hosted` | `use_depot` |
+|---|---|---|
+| `ci-*-lane.yml` -> runner-selecting slices | planner `hosted_runner_required` (missing or malformed = hosted) | lane input, where the slice declares it |
+| `ci-linux-lane.yml` -> `static-abi-artifact.yml`, `native-sdk-artifact.yml` | planner signal | lane input |
+| `native-sdk-artifact.yml` -> `static-abi-artifact.yml` | its input | its input |
+| `ci-pr-canary-lane.yml` -> Linux slices | `true` | `false` |
+| `release.yml` metadata selector | `force_hosted_runners` | `use_depot` |
+| `release.yml` -> `native-sdk-artifact.yml` | `force_hosted_runners` | `use_depot` |
+| `release.yml` -> `swift-sdk-artifact.yml` | `force_hosted_runners` | not declared |
+| `release.yml` -> `ci-ui-artifact-slice.yml` | `true` | not declared |
+
+Rollback valid at every depth: set `DEPOT_RUNNERS_ENABLED=false` (trusted
+pushes and release dispatches without `use_depot` stay hosted), or dispatch
+release with `force_hosted_runners=true` (every leg hosted, including nested
+producers). Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. Eligible same-repository PR jobs may use the
 time-bounded exception when `DEPOT_PR_RUNNERS_ENABLED=true`; it expires on
 2026-09-14 UTC. Forks remain hosted. The intended permanent gate

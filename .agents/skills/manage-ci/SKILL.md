@@ -515,6 +515,32 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- One hosted-override precedence contract holds at every reusable-workflow
+  depth. The hosted override (a lane's planner `hosted_runner_required`
+  signal, release `force_hosted_runners`, or a literal `force_hosted: true`)
+  wins over manual `use_depot` and over the `DEPOT_RUNNERS_ENABLED` and
+  `DEPOT_PR_RUNNERS_ENABLED` gates. It is applied once, inside
+  `select-ci-runners`, as its `force_hosted` input. Every call of a reusable
+  workflow passes each of `force_hosted`, `use_depot` and
+  `original_event_name` that the target declares, from the caller's
+  effective values, and passes none that it does not declare (GitHub rejects
+  an undeclared input). Omitting a declared one, or hardcoding
+  `force_hosted: false`, lets the nested selector rebuild a weaker policy from
+  repository variables and is a defect. Literal
+  `force_hosted: true` and `use_depot: false` are the only constants allowed.
+  Forwarding never relaxes fork, untrusted-ref or PR-origin-dispatch denial.
+- A job whose automation preparation can resolve the `hosted-bare` profile
+  (which requires `RUNNER_ENVIRONMENT=github-hosted`) must take a
+  GitHub-hosted label directly, never a selected provider label. Release
+  native runtime legs therefore run on their matrix's hosted label whatever
+  `use_depot` or the main gate say.
+- The rollback that holds across nested workflows is: an administrator sets
+  `DEPOT_RUNNERS_ENABLED=false` (trusted-main pushes and release dispatches
+  without `use_depot` return to hosted), or a release dispatch passes
+  `force_hosted_runners=true` (every release leg, including nested native SDK
+  and Swift callers, resolves hosted). Rolling previews always dispatch with
+  `force_hosted_runners=true`. A manual `use_depot=true` dispatch remains an
+  explicit opt-in under the first rollback; do not pass it during rollback.
 - Keep runner-contract coverage separate from placement. Exhaustive main and
   manual-full profiles still execute runner contracts; only actual `ci-control`
   or `runner-infra` changes and unknown-diff fallbacks require hosted placement.
