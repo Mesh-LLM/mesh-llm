@@ -515,6 +515,14 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- Keep runner-contract coverage separate from placement. Exhaustive main and
+  manual-full profiles still execute runner contracts; only actual `ci-control`
+  or `runner-infra` changes and unknown-diff fallbacks require hosted placement.
+  Lanes must fail hosted when the placement signal is missing or malformed.
+  Manual-full uses its resolved base/source diff without replacing it with a
+  coverage sentinel; missing comparison history retains the hosted fallback.
+  This separation grants no new provider eligibility and activates no gate.
+  Preserve the Linux CPU runtime's hosted cache-producer exception.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;

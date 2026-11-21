@@ -1525,6 +1525,24 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+Exhaustive coverage does not force hosted placement. The planner keeps
+`runner_contract_required` true for main/manual-full diagnostics and derives
+`hosted_runner_required` from actual `ci-control` or `runner-infra` changes,
+including the `__force_all__` fallback for unavailable change information.
+All five lanes force hosted unless that placement signal is boolean false.
+Manual-full compares the controller's resolved first-parent base and immutable
+source, retaining hosted fallback when the comparison cannot be completed.
+Its profile still selects every diagnostic slice and matrix row.
+
+This only restores reachability under existing gates. An administrator's later
+#2789 rollout may set `DEPOT_RUNNERS_ENABLED` to the exact string `true` for the
+existing trusted-main allowlist, or explicitly select `use_depot=true` on the
+manual controller for its existing supported calls. Unset/false gates with no
+manual opt-in remain hosted. No repository variable, runner group, Depot setting,
+PR exception deadline, cache permission or provider allowlist changes here.
+The Linux CPU runtime cache producer remains hosted even when other eligible
+Linux jobs select Depot. Live qualification and activation belong to #2789.
+
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
 gate checks freshness. Hosted version 2 keys bind the actual hosted image as
