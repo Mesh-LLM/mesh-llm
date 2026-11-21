@@ -115,7 +115,10 @@ of the same exchange. IDs asserted by a peer provide correlation; they are not
 proof of a global execution claim.
 
 Rust authors can call `OpenAiExchangeEvent::parse(&event)` inside the existing
-raw JSON callback. The typed view preserves `observation_id` and the optional
+raw JSON callback. The typed view preserves `request_id` (the request's own id,
+kept apart from the node-internal `exchange_id`), `served_exchange_id` (on
+`exchange_finished`, the exchange id of the dispatch that served, which differs
+from `exchange_id` after a model re-pick), `observation_id` and the optional
 boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
 field means unknown, rather than false. The old `evidence_completeness` string
 field is retained for SDK source compatibility but is not emitted by v1 hosts.

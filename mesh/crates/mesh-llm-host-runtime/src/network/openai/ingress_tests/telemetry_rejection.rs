@@ -68,6 +68,8 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
+        automatic_repick: 0,
         automatic_route: false,
     };
 

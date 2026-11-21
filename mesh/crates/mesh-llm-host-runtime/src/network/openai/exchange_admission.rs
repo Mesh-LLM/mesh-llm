@@ -168,7 +168,7 @@ fn selected_route_event(
     };
     let body = request.effective_http_entity()?;
     let mut event = crate::plugin::request_event(
-        request.request_id.as_uuid().to_string(),
+        request.exchange_id(),
         endpoint,
         &request.method,
         &request.client_path,
@@ -176,6 +176,7 @@ fn selected_route_event(
         Default::default(),
         false,
     );
+    event["request_id"] = json!(request.request_id.as_uuid().to_string());
     event["phase"] = json!("backend_selected");
     event["observation_point"] = json!("backend_dispatch");
     event["model"] = json!(model);
@@ -269,6 +270,49 @@ mod tests {
             public_target(&SelectedRouteTarget::Mesh(&InferenceTarget::Local(3131))),
             "Local(3131)"
         );
+    }
+
+    /// The `backend_selected` event carries the same exchange id as the
+    /// `openai.exchange.v1` events of its dispatch: a node-internal id that no
+    /// client header chooses, distinct on each automatic re-pick.
+    #[tokio::test]
+    async fn selected_event_exchange_id_follows_the_dispatch() {
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        let mut request = transport::read_http_request(&mut reader).await.unwrap();
+        let id_of = |request: &transport::BufferedHttpRequest| {
+            let event = selected_route_event(
+                request,
+                Some("model"),
+                "mesh",
+                SelectedRouteTarget::Mesh(&InferenceTarget::Local(1)),
+                None,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+            event["exchange_id"].as_str().unwrap().to_owned()
+        };
+        let first = id_of(&request);
+        // Same request, same dispatch: every event computes the same id, and
+        // it is not the ingress request id.
+        assert_eq!(first, id_of(&request));
+        assert_eq!(first, request.exchange_id());
+        assert_ne!(first, request.request_id.as_uuid().to_string());
+        // A re-pick is a new dispatch with its own id.
+        request.automatic_repick = 1;
+        let second = id_of(&request);
+        assert_ne!(second, first);
+        assert_eq!(second, request.exchange_id());
+        request.automatic_repick = 2;
+        assert_ne!(id_of(&request), second);
+        // Another request gets another id, and a client-supplied request id
+        // does not choose it.
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-request-id: 00000000-0000-4000-8000-000000000001\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        let other = transport::read_http_request(&mut reader).await.unwrap();
+        assert_ne!(other.exchange_id(), first);
+        assert_ne!(other.exchange_id(), "00000000-0000-4000-8000-000000000001");
     }
 
     #[tokio::test]

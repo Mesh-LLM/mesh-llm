@@ -120,6 +120,8 @@ async fn route_observed(
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        exchange_seq: 0,
+        automatic_repick: 0,
         automatic_route: false,
     };
     request.exchange_observation_id = observation_id;

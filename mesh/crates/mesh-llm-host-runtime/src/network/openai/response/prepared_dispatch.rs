@@ -5,6 +5,8 @@ use serde_json::json;
 pub(crate) struct PreparedSubdispatch<'a> {
     pub observation_id: Option<&'a str>,
     pub exchange_id: String,
+    /// The ingress request id, a separate field from the exchange id.
+    pub request_id: String,
     pub bytes: &'a [u8],
     pub client_path: &'a str,
     pub encoding: &'a str,
@@ -44,6 +46,7 @@ fn prepared_event(dispatch: &PreparedSubdispatch<'_>) -> serde_json::Value {
         Default::default(),
         false,
     );
+    event["request_id"] = json!(dispatch.request_id);
     event["phase"] = json!("backend_selected");
     event["observation_point"] = json!("backend_dispatch");
     event["model"] = json!(dispatch.model);
@@ -70,6 +73,7 @@ mod tests {
             let event = prepared_event(&PreparedSubdispatch {
                 observation_id: None,
                 exchange_id: "test-exchange".into(),
+                request_id: "test-request".into(),
                 bytes: br#"{"request":{"model":"virtual-model","messages":[]}}"#,
                 client_path: path,
                 encoding: "plugin_invocation_json",
@@ -78,6 +82,8 @@ mod tests {
                 target: "author-plugin",
                 attempt: 1,
             });
+            assert_eq!(event["exchange_id"], "test-exchange");
+            assert_eq!(event["request_id"], "test-request");
             assert_eq!(event["endpoint"], endpoint);
             assert_eq!(event["path"], path.split('?').next().unwrap());
             assert_eq!(event["phase"], "backend_selected");

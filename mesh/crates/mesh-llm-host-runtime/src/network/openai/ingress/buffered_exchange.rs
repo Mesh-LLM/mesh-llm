@@ -255,6 +255,9 @@ async fn begin_exchange(
         headers,
         ctx.route.requested_by_node_id.is_some(),
     );
+    // `request_event` names the exchange after its argument; the exchange id is
+    // the node-internal one, and `request_id` stays the ingress request id.
+    event["exchange_id"] = serde_json::json!(request.exchange_id());
     event["node_endpoint_id"] = serde_json::json!(ctx.route.node.id().to_string());
     if let Some(peer) = ctx.route.requested_by_node_id.as_deref() {
         // The QUIC-authenticated mesh peer that sent this request, lowercase

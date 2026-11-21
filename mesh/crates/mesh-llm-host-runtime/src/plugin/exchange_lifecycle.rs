@@ -140,6 +140,20 @@ fn project_event(mut event: Value, grant: &OpenAiExchangeGrant, name: &str) -> V
 }
 
 impl PluginManager {
+    /// The exchange id of the session `observation_id` names: what the
+    /// plugin's lifecycle callbacks carry as `exchange_id`.
+    pub(crate) fn session_exchange_id(&self, observation_id: &str) -> Option<String> {
+        let state = self
+            .inner
+            .exchange_observations
+            .0
+            .lock()
+            .unwrap()
+            .get(observation_id)
+            .and_then(Weak::upgrade)?;
+        let state = state.lock().unwrap();
+        Some(state.exchange_id.clone())
+    }
     pub(crate) fn record_typed_execution_outcome(&self, backend_exchange_id: &str, outcome: &str) {
         let state = self
             .inner
@@ -223,8 +237,18 @@ impl PluginManager {
         };
         let tier = {
             let state = state.lock().unwrap();
-            event["exchange_id"] = json!(state.exchange_id);
+            // A dispatch names its own exchange (a model re-pick is a new
+            // exchange of the same session); only an event that carries no id
+            // takes the session's.
+            if event["exchange_id"].as_str().is_none_or(str::is_empty) {
+                event["exchange_id"] = json!(state.exchange_id);
+            }
             event["endpoint"] = json!(state.endpoint);
+            // `request_id` names the client's request on every callback of the
+            // exchange; a typed backend only knows its own dispatch id.
+            if !state.request_id.is_empty() {
+                event["request_id"] = json!(state.request_id);
+            }
             state.tier
         };
         event["observation_id"] = json!(observation_id);
@@ -276,6 +300,7 @@ impl PluginManager {
         if state.attempt_history.len() < 16 {
             let mut attempt = serde_json::Map::new();
             for key in [
+                "exchange_id",
                 "model",
                 "provider",
                 "target",
@@ -295,6 +320,7 @@ impl PluginManager {
             state.incomplete = true;
             state.evidence_unavailable = true;
         }
+        state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
         state.selected = Some(event);
         result
     }
@@ -653,6 +679,12 @@ struct EmissionState {
     commitment: Option<WireBytesCommitment>,
     copies: super::exchange_streams::ResponseCopies,
     exchange_id: String,
+    /// The request id the session's lifecycle callbacks carry; every event of
+    /// the exchange, `backend_selected` included, reports this one.
+    request_id: String,
+    /// Exchange id of the dispatch that served: the latest `backend_selected`
+    /// event's. Unlike `attempt_history`, never capped.
+    served_exchange_id: Option<String>,
     endpoint: String,
     headers: Vec<(String, String)>,
     annotations: BTreeMap<String, String>,
@@ -771,6 +803,8 @@ impl ExchangeSession {
         let emission = Arc::new(Mutex::new(EmissionState {
             copies,
             exchange_id: event["exchange_id"].as_str().unwrap_or_default().into(),
+            request_id: event["request_id"].as_str().unwrap_or_default().into(),
+            served_exchange_id: None,
             endpoint: event["endpoint"].as_str().unwrap_or_default().into(),
             headers: result.headers.clone(),
             annotations: result.annotations.clone(),
@@ -890,6 +924,10 @@ impl ExchangeSession {
         event["usage"] = json!(emission.usage);
         event["elapsed_ms"] = json!(self.started.elapsed().as_millis());
         event["attempt_history"] = json!(emission.attempt_history);
+        // `exchange_id` stays the session's (response streams are keyed by it);
+        // this names the dispatch that served, which `attempt_history` may
+        // have dropped past its cap.
+        event["served_exchange_id"] = json!(emission.served_exchange_id);
         event["any_response_bytes_emitted"] = json!(
             emission
                 .commitment
@@ -898,6 +936,10 @@ impl ExchangeSession {
         );
         event["response_wire_commitment"] = json!(emission.commitment);
         if let Some(selected) = &emission.selected {
+            // `exchange_id` is deliberately not copied: the response side
+            // streams were opened under the session's id, and observers key
+            // their response receipts by the terminal's `exchange_id`. The
+            // served dispatch's id stays on `attempt_history`.
             for key in [
                 "effective_request_wire_digest",
                 "effective_request_encoding",
