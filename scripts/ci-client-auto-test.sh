@@ -55,7 +55,7 @@ echo "Starting mesh-llm client --auto..."
 MESH_PID=$!
 echo "  PID: $MESH_PID"
 
-# shellcheck disable=SC2329 # invoked through the EXIT trap below
+# shellcheck disable=SC2317,SC2329 # invoked through the EXIT trap below
 cleanup() {
     echo "Shutting down mesh-llm (PID $MESH_PID)..."
     kill "$MESH_PID" 2>/dev/null || true
