@@ -635,6 +635,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   caches and package-manager download stores with lockfile-exact keys.
 - Assign one publisher for a shared package-manager key. Other focused PR
   workflows may restore it but must not race to upload the same cache entry.
+- A job that resolves dependencies from a public registry (Maven Central,
+  the Gradle plugin portal) restores an exact-key download store, so a warm
+  run makes no registry requests. Trusted main pushes alone save it; PRs
+  restore only. A failed run may retry once, after a cooldown, only when its
+  output contains the registry's HTTP 429 response (which a warm cache never
+  reaches). Every other resolution, compile or runtime failure fails
+  immediately.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
