@@ -3,7 +3,7 @@ use crate::{support, workflow_yaml::Node};
 use sha2::{Digest, Sha256};
 use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
 
-const SOURCE: &str = "0123456789012345678901234567890123456789";
+pub(super) const SOURCE: &str = "0123456789012345678901234567890123456789";
 const ACTION: &str = ".github/actions/audit-pr-authority-verified/action.yml";
 
 fn document() -> Node {
@@ -17,7 +17,7 @@ fn steps(document: &Node) -> &[Node] {
     steps
 }
 
-fn script(index: usize) -> String {
+pub(super) fn script(index: usize) -> String {
     steps(&document())[index]
         .get("run")
         .unwrap()
@@ -26,11 +26,11 @@ fn script(index: usize) -> String {
         .to_owned()
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn command(directory: &Path) -> Command {
+pub(super) fn command(directory: &Path) -> Command {
     let mut command = Command::new("/bin/bash");
     command.env_clear().current_dir(directory);
     command.env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
@@ -50,7 +50,7 @@ fn command(directory: &Path) -> Command {
     command
 }
 
-fn run(command: &mut Command, body: &str) -> std::process::Output {
+pub(super) fn run(command: &mut Command, body: &str) -> std::process::Output {
     command.args(["-c", body]);
     let mut owned = Command::new(command.get_program());
     owned.env_clear().args(command.get_args());
@@ -66,7 +66,7 @@ fn run(command: &mut Command, body: &str) -> std::process::Output {
 }
 
 fn manifest(directory: &Path) {
-    let stage = directory.join("immutable-automation-restored");
+    let stage = directory.join("immutable-authority-audit");
     fs::write(
         stage.join("SHA256SUMS"),
         format!(
@@ -78,11 +78,11 @@ fn manifest(directory: &Path) {
     .unwrap();
 }
 
-fn staged(binary: &[u8]) -> tempfile::TempDir {
+pub(super) fn staged(binary: &[u8]) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let output = run(&mut command(directory.path()), &script(0));
     assert!(output.status.success(), "{output:?}");
-    let stage = directory.path().join("immutable-automation-restored");
+    let stage = directory.path().join("immutable-authority-audit");
     fs::write(stage.join("xtask"), binary).unwrap();
     fs::write(stage.join("source.txt"), format!("{SOURCE}\n")).unwrap();
     manifest(directory.path());
@@ -119,9 +119,11 @@ fn consumer_requires_exact_same_run_download_before_verification_and_native_audi
         assert!(input.get("default").is_none());
     }
     let execution = script(3);
-    assert!(execution.contains(
-        "\"$RUNNER_TEMP/immutable-automation-restored/$binary\" ci-ops pr-authority-audit"
-    ));
+    assert!(
+        execution.contains(
+            "\"$RUNNER_TEMP/immutable-authority-audit/$binary\" ci-ops pr-authority-audit"
+        )
+    );
     assert!(!execution.contains("MESH_LLM_AUTOMATION_BIN"));
 }
 
@@ -141,12 +143,7 @@ fn consumer_identity_refuses_download_admission_before_creating_a_stage() {
         let directory = tempfile::tempdir().unwrap();
         let result = run(command(directory.path()).env(name, value), &script(0));
         assert!(!result.status.success(), "{name}");
-        assert!(
-            !directory
-                .path()
-                .join("immutable-automation-restored")
-                .exists()
-        );
+        assert!(!directory.path().join("immutable-authority-audit").exists());
     }
 }
 
@@ -165,7 +162,7 @@ fn substituted_untrusted_payloads_cannot_run_even_with_a_rehashed_manifest() {
         "wrong-platform",
     ] {
         let directory = staged(payload);
-        let stage = directory.path().join("immutable-automation-restored");
+        let stage = directory.path().join("immutable-authority-audit");
         match attack {
             "wrong-source" => {
                 fs::write(
