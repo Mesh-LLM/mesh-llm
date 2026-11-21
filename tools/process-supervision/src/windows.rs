@@ -131,6 +131,20 @@ impl OwnedChild {
     pub(super) fn active(&mut self) -> Result<bool, Failure> {
         self.job.active()
     }
+    pub(super) fn pre_force(&mut self) -> super::PreForceObservation {
+        let leader = self
+            .child
+            .try_wait()
+            .map(|status| match status {
+                Some(status) => super::LeaderState::Exited(status),
+                None => super::LeaderState::Alive,
+            })
+            .map_err(|error| Failure::io("observe pre-force leader", error));
+        super::PreForceObservation {
+            leader,
+            members: Some(self.job.members()),
+        }
+    }
     pub(super) fn graceful(&mut self) -> Result<(), Failure> {
         // SAFETY: CREATE_NEW_PROCESS_GROUP made this owned PID the group ID.
         // The retained process handle prevents PID reuse until the last signal.

@@ -49,6 +49,52 @@ fn migration_lifecycle_accepts_only_clean_requested_stop() {
     assert!(result.is_ok());
 }
 
+#[test]
+fn forced_shutdown_error_retains_pre_force_leader_and_members() {
+    for leader in [LeaderState::Alive, LeaderState::Exited(status(23))] {
+        let mut report = ready_report();
+        report.cleanup.forced = true;
+        report.cleanup.pre_force = Some(Box::new(PreForceObservation {
+            leader: Ok(leader),
+            members: Some(Ok(vec![ProcessMember {
+                pid: 42,
+                image: Ok("powershell.exe".into()),
+            }])),
+        }));
+
+        let message = accept(report).unwrap_err().to_string();
+
+        assert!(
+            message.contains("client did not complete clean unforced shutdown"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("leader: Ok({leader:?})")),
+            "{message}"
+        );
+        assert!(message.contains("pid: 42"), "{message}");
+        assert!(message.contains("powershell.exe"), "{message}");
+    }
+}
+
+#[test]
+fn forced_shutdown_error_distinguishes_unavailable_diagnostics() {
+    let mut report = ready_report();
+    report.cleanup.forced = true;
+    report.cleanup.pre_force = Some(Box::new(PreForceObservation {
+        leader: Err(Failure::CleanupDeadline),
+        members: None,
+    }));
+
+    let message = accept(report).unwrap_err().to_string();
+
+    assert!(
+        message.contains("leader: Err(CleanupDeadline)"),
+        "{message}"
+    );
+    assert!(message.contains("members: None"), "{message}");
+}
+
 macro_rules! rejected {
     ($name:ident, $edit:expr) => {
         #[test]
