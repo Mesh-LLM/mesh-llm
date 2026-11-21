@@ -5,6 +5,7 @@ use crate::plan::catalog::{self, Ownership};
 use crate::plan::diagnostics::{PlanResult, fail};
 use crate::plan::document::Json;
 use crate::plan::matrices::{self, RowRequest};
+use crate::plan::matrix_budgets;
 use crate::plan::profile_catalog::BUDGET_KEYS;
 use crate::plan::request::{self, Profile};
 use crate::plan::selection;
@@ -109,6 +110,22 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
         .get(&profile)
         .map(|definition| definition.budgets)
         .unwrap_or_default();
+    let mut budget_map = BUDGET_KEYS
+        .iter()
+        .zip(budgets)
+        .map(|(key, value)| ((*key).to_owned(), json!(value)))
+        .collect::<Map<_, _>>();
+    let matrix_limits = [budgets[0], budgets[1], budgets[2]];
+    let workers = [budgets[3], budgets[4], budgets[5]];
+    budget_map.insert(
+        "matrix_max_parallel".to_owned(),
+        Value::Object(matrix_budgets::allowances(
+            &matrices,
+            profile,
+            matrix_limits,
+            workers,
+        )?),
+    );
     let plan = json!({
         "schema_version": 1,
         "profile": profile.name(),
@@ -124,7 +141,7 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
         "dependencies": per_slice(&|slice| json!(slice.depends_on)),
         "runner_roles": per_slice(&|slice| json!(slice.runner_role)),
         "cache_modes": per_slice(&|slice| json!(planned_cache_mode(slice, profile))),
-        "budgets": BUDGET_KEYS.iter().zip(budgets).map(|(key, value)| ((*key).to_owned(), json!(value))).collect::<Map<_, _>>(),
+        "budgets": budget_map,
         "signals": signals::signals(&changed_files, &domains, profile),
     });
     validate(&plan, profile, &packages)?;

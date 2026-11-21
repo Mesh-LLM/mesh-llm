@@ -143,7 +143,7 @@ jobs:
       plugin_exemplars_changed: ${{ fromJson(inputs.lane_plan_json).signals.plugin_exemplars_changed || false }}
       cli_surface_changed: ${{ fromJson(inputs.lane_plan_json).signals.cli_surface_changed }}
       website_docs_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_docs_changed }}
-      clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
+      clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.matrix_max_parallel.linux_clippy }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ toJson(fromJson(inputs.lane_plan_json).signals.hosted_runner_required) != 'false' }}
       use_depot: ${{ inputs.use_depot }}

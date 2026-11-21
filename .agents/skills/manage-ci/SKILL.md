@@ -471,12 +471,13 @@ retired parser behavior, and source review still owns semantic emulation.
   needs only its own runtime, the shared host, and its existing automation and
   authority producers. Each smoke needs only its consumed backend product;
   Rust and Kotlin SDK smokes consume CPU. Keep catalog rows and artifact IDs.
-  Four singleton runtime and product calls stay below Linux's existing 7-worker
-  PR and 12-worker main/manual matrix budgets. A failed backend fails the lane;
+  The singleton runtime and product calls count against Linux's 12-worker
+  per-run ceiling together with the Clippy, test and host matrices. A failed backend fails the lane;
   other backends in that lane may finish. The protected sibling monitor alone
   cancels other PR lanes; never add cancellation credentials to executors.
-  Windows retains its shared 1-worker PR/2-worker main/manual matrices until
-  row-specific consumers can advance without multiplying native capacity.
+  Windows matrices keep a 1-worker PR/2-worker main/manual per-matrix limit
+  inside the 3/5-worker per-run Windows ceiling until row-specific consumers
+  can advance without multiplying native capacity.
   macOS has one Metal row. Release restructuring remains deferred because its
   literal image bindings require a separate runner-image catalog change.
 - Within other PR platform matrices, compilation, functional-test, product, and smoke
@@ -494,6 +495,25 @@ retired parser behavior, and source review still owns semantic emulation.
 - Control fan-out in the graph. Use bounded matrices and `max-parallel` after
   eliminating irrelevant work; do not use additional runner capacity as a
   substitute for routing and composition.
+- Keep per-matrix limits separate from per-run budgets. `<os>_max_parallel`
+  bounds one lane matrix; `<os>_max_workers` bounds the summed allowances of
+  every set of selected matrices on that OS that can run at the same time in
+  one run (matrices ordered by lane `needs` do not overlap), and the three
+  ceilings must fit `total_max_workers`. The planner emits one allowance per
+  lane matrix in `budgets.matrix_max_parallel`; lanes pass only that value to
+  `max_parallel`, never a profile budget, and Linux backend singletons keep
+  literal `1`. A new lane matrix needs a planner entry in the same change.
+  The planner never drops or merges a selected slice or row to fit: it lowers
+  the largest overlapping allowance and fails planning when even 1 per matrix
+  exceeds the ceiling. Raising a ceiling is a capacity change that needs
+  #2789-style qualification evidence. Per-run ceilings do not bound concurrent
+  PRs, main revisions, releases or warmers; organization/provider admission
+  is separate and unimplemented.
+- Queue time is not created-to-start time. Measure with
+  `cargo xtool ci-ops collect-metrics` and separate dependency readiness,
+  matrix eligibility (`max-parallel` holding a row back), runner queue and
+  execution; follow the measurement protocol in
+  `references/current-inventory.md`.
 
 ## Trust, runners, and providers
 

@@ -101,7 +101,7 @@ fn artifact_main_budget_and_cuda_catalog_preserve_registered_product_smokes() {
     assert_eq!(catalog["profiles"]["main"]["all_rows"], true);
     assert_eq!(
         catalog["profiles"]["main"]["budgets"],
-        json!({"total_max_workers":18,"linux_max_parallel":12,"macos_max_parallel":4,"windows_max_parallel":2})
+        json!({"total_max_workers":25,"linux_max_parallel":12,"macos_max_parallel":4,"windows_max_parallel":2,"linux_max_workers":12,"macos_max_workers":8,"windows_max_workers":5})
     );
     let cuda = catalog["runtime_rows"]
         .as_array()

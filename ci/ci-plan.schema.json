@@ -54,12 +54,16 @@
     "budgets": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["linux_max_parallel", "macos_max_parallel", "windows_max_parallel", "total_max_workers"],
+      "required": ["linux_max_parallel", "macos_max_parallel", "windows_max_parallel", "linux_max_workers", "macos_max_workers", "windows_max_workers", "total_max_workers", "matrix_max_parallel"],
       "properties": {
         "linux_max_parallel": {"type": "integer", "minimum": 1},
         "macos_max_parallel": {"type": "integer", "minimum": 1},
         "windows_max_parallel": {"type": "integer", "minimum": 1},
-        "total_max_workers": {"type": "integer", "minimum": 1}
+        "linux_max_workers": {"type": "integer", "minimum": 1},
+        "macos_max_workers": {"type": "integer", "minimum": 1},
+        "windows_max_workers": {"type": "integer", "minimum": 1},
+        "total_max_workers": {"type": "integer", "minimum": 1},
+        "matrix_max_parallel": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}}
       }
     },
     "signals": {

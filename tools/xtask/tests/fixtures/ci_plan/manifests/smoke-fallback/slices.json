@@ -13,7 +13,10 @@
         "linux_max_parallel": 7,
         "macos_max_parallel": 2,
         "windows_max_parallel": 1,
-        "total_max_workers": 10
+        "linux_max_workers": 12,
+        "macos_max_workers": 4,
+        "windows_max_workers": 3,
+        "total_max_workers": 19
       }
     },
     "pr-ready": {
@@ -38,7 +41,10 @@
         "linux_max_parallel": 7,
         "macos_max_parallel": 2,
         "windows_max_parallel": 1,
-        "total_max_workers": 10
+        "linux_max_workers": 12,
+        "macos_max_workers": 4,
+        "windows_max_workers": 3,
+        "total_max_workers": 19
       }
     },
     "main": {
@@ -73,7 +79,10 @@
         "linux_max_parallel": 12,
         "macos_max_parallel": 4,
         "windows_max_parallel": 2,
-        "total_max_workers": 18
+        "linux_max_workers": 12,
+        "macos_max_workers": 8,
+        "windows_max_workers": 5,
+        "total_max_workers": 25
       }
     },
     "manual-full": {
@@ -108,7 +117,10 @@
         "linux_max_parallel": 12,
         "macos_max_parallel": 4,
         "windows_max_parallel": 2,
-        "total_max_workers": 18
+        "linux_max_workers": 12,
+        "macos_max_workers": 8,
+        "windows_max_workers": 5,
+        "total_max_workers": 25
       }
     }
   },

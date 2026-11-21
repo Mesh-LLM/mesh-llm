@@ -69,6 +69,21 @@ fn check_case(case: &Case) -> TestResult {
                 .remove("hosted_runner_required")
                 .is_some_and(|value| value.is_boolean())
         );
+        // Per-run ceilings and matrix allowances are owned by ci-controller's
+        // capacity_budgets tests; the goldens keep the historical row bytes.
+        let budgets = current["budgets"].as_object_mut().ok_or("budgets")?;
+        for key in [
+            "linux_max_workers",
+            "macos_max_workers",
+            "windows_max_workers",
+            "matrix_max_parallel",
+        ] {
+            assert!(
+                budgets.remove(key).is_some(),
+                "{}: budgets.{key}",
+                case.name
+            );
+        }
         assert_eq!(
             ci_controller::plan::plan_bytes::render(&current),
             golden,

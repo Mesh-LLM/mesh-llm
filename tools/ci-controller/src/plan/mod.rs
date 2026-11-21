@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod document;
 mod glob_pattern;
 mod matrices;
+pub mod matrix_budgets;
 pub use construction::CONTRACT_TESTED_CRATES;
 pub mod plan_bytes;
 mod profile_catalog;

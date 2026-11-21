@@ -66,7 +66,7 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
     );
     assert_eq!(
         input(swift, "max_parallel"),
-        Some("${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}")
+        Some("${{ fromJson(inputs.lane_plan_json).budgets.matrix_max_parallel.macos_swift_sdk }}")
     );
     assert_eq!(
         input(swift, "fail_fast"),

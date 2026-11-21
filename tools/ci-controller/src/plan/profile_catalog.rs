@@ -1,6 +1,6 @@
 //! Profile definitions in `ci/slices.yml`: base and control slices, the
-//! all-rows switch and fan-out budgets whose platform ceilings must fit the
-//! total worker ceiling.
+//! all-rows switch and fan-out budgets: per-matrix platform limits and
+//! per-run platform worker ceilings, whose sum must fit the total ceiling.
 
 use crate::plan::diagnostics::{
     PlanResult, fail, positive_int, repr_list, sorted_unknown, string_list,
@@ -8,19 +8,24 @@ use crate::plan::diagnostics::{
 use crate::plan::document::Json;
 use std::collections::BTreeSet;
 
-pub(super) const BUDGET_KEYS: [&str; 4] = [
+pub(super) const BUDGET_KEYS: [&str; 7] = [
     "linux_max_parallel",
     "macos_max_parallel",
     "windows_max_parallel",
+    "linux_max_workers",
+    "macos_max_workers",
+    "windows_max_workers",
     "total_max_workers",
 ];
+
+pub(super) const TOTAL_WORKERS: usize = 6;
 
 pub(super) struct ProfileDefinition {
     pub(super) base_slices: Vec<String>,
     pub(super) control_slices: Vec<String>,
     pub(super) all_rows: bool,
     /// Budget values in `BUDGET_KEYS` order.
-    pub(super) budgets: [u64; 4],
+    pub(super) budgets: [u64; 7],
 }
 
 pub(super) fn profile_definition(
@@ -57,7 +62,7 @@ pub(super) fn profile_definition(
     })
 }
 
-fn budgets(name: &str, raw: Option<&Json>) -> PlanResult<[u64; 4]> {
+fn budgets(name: &str, raw: Option<&Json>) -> PlanResult<[u64; 7]> {
     let Some(entries) = raw.and_then(Json::as_object) else {
         return fail(format!("profile {name}.budgets must be an object"));
     };
@@ -68,7 +73,7 @@ fn budgets(name: &str, raw: Option<&Json>) -> PlanResult<[u64; 4]> {
     if keys != BUDGET_KEYS.into_iter().collect() {
         return fail(format!("profile {name}.budgets has an unexpected shape"));
     }
-    let mut values = [0_u64; 4];
+    let mut values = [0_u64; 7];
     // The legacy check walks a Python set, whose order varies per process, so
     // with several invalid budgets it may name any of them; this names the
     // first in catalog order.
@@ -81,8 +86,11 @@ fn budgets(name: &str, raw: Option<&Json>) -> PlanResult<[u64; 4]> {
             values[slot] = number;
         }
     }
-    let platform: u128 = values[..3].iter().map(|value| u128::from(*value)).sum();
-    if platform > u128::from(values[3]) {
+    let platform: u128 = values[3..TOTAL_WORKERS]
+        .iter()
+        .map(|value| u128::from(*value))
+        .sum();
+    if platform > u128::from(values[TOTAL_WORKERS]) {
         return fail(format!(
             "profile {name}.budgets platform ceilings exceed total_max_workers"
         ));

@@ -1040,7 +1040,20 @@ source commit.
 - `ci/ownership.yml` maps paths and direct crates to semantic domains; unknown
   paths fail closed.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
-  cache modes and worker budgets.
+  cache modes and worker budgets. Each profile has per-matrix limits
+  (`<os>_max_parallel`: 7/2/1 for PRs, 12/4/2 for main and manual-full) and
+  per-run ceilings (`<os>_max_workers`: 12/4/3 for PRs, 12/8/5 for main and
+  manual-full; `total_max_workers` 19/25). `tools/ci-controller/src/plan/matrix_budgets.rs`
+  emits `budgets.matrix_max_parallel` with one allowance per lane matrix
+  (`linux_clippy`, `linux_rust_tests`, `linux_hosts`, `macos_hosts`,
+  `macos_runtimes`, `macos_products`, `macos_platform_checks`,
+  `macos_swift_sdk`, `windows_hosts`, `windows_runtimes`, `windows_products`,
+  `windows_platform_checks`) so the summed allowances of the matrices that
+  can overlap stay within that OS ceiling; the eight Linux backend
+  runtime/product calls stay literal 1 and are counted. The ceilings were set
+  to the concurrency the profile budgets already allowed, so the exhaustive
+  main plan keeps its earlier allowances (peak 11 Linux, 8 macOS, 5 Windows)
+  and new matrices can no longer grow it. They are not qualified capacity.
 - `ci/ci-plan.schema.json` versions the machine-readable output.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
@@ -1346,6 +1359,43 @@ registry. Cache publication is limited
 to the exhaustive trusted-main batch containing `skippy-runtime`; PR jobs are
 restore-only and jobs for which central runner policy denies native GitHub
 cache access download and verify the immutable revision without publishing.
+
+### Capacity inventory and queue measurement for #2789
+
+Capacity is modelled per role, not per workflow. For every semantic runner
+role (`linux-plan`, `linux-build-4`, `linux-build-8`, `linux-native-16`,
+`macos-build`, `windows-build`, `platform-build`, `gpu-nvidia`, `gpu-amd`)
+record: provider and label per event, OS/architecture, image/toolchain epoch,
+CPU, memory and disk, runner-group workflow restriction, and the provider's
+concurrency quota. Demand per run is the planner's per-OS peak (the widest
+overlapping set of `budgets.matrix_max_parallel` allowances plus singleton
+calls and non-matrix jobs). Aggregate demand adds every concurrently active
+PR revision (older ones are superseded), every main revision (never
+cancelled), releases, warmers, canaries and control jobs. Quota is unverified
+until read back from the provider; the per-run ceilings in `ci/slices.yml`
+are not quota evidence.
+
+Measure with `cargo xtool ci-ops collect-metrics`, one focused workflow at a
+time, and attribute each job's created-to-start interval in this order:
+
+1. dependency readiness: until every `needs` job finished
+   (`dependency_ready_at`; the plain jobs API lacks it, so reconstruct it from
+   the checked lane `needs` and producer `completed_at`);
+2. matrix eligibility: after dependencies, a row waits while sibling rows hold
+   the matrix's `max-parallel` slots (reconstruct from sibling start and end
+   times);
+3. runner queue: from eligibility to `started_at`; only this is provider
+   queueing;
+4. execution: `started_at` to `completed_at`.
+
+The raw created-to-start interval is never provider queue. Without
+dependency-ready data the collector falls back to it and labels the
+separation unavailable; report that as queue uncertainty. For each condition
+(provider, OS, role, profile, change class) collect at least three
+comparable first-attempt runs, five pairs when variance matters, with cold
+and warm cache cohorts kept separate, and fix the acceptance bounds before
+sampling. Report queue uncertainty, peak workers, wall time, runner-minutes,
+cancelled work and memory/disk headroom by provider, OS and role.
 
 `cargo xtool ci-ops collect-metrics` is the read-only timing evidence collector. Its
 schema-v3 report keeps workflow wall/queue, job runner queue, measured

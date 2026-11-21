@@ -108,7 +108,8 @@ fn artifact_cuda_smoke_uses_only_the_registered_gpu_role_or_hosted_fallback() {
 
 #[test]
 fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
-    let mut observed = std::collections::BTreeSet::new();
+    let mut allowances = std::collections::BTreeSet::new();
+    let mut total = 0;
     for lane in ["quality", "linux", "macos", "windows"] {
         let document = document(&format!("ci-{lane}-lane.yml"));
         for (name, job) in document.get("jobs").unwrap().entries() {
@@ -116,10 +117,15 @@ fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
                 continue;
             };
             for (key, value) in inputs.entries() {
-                if !matches!(
-                    key.as_str(),
-                    "max_parallel" | "clippy_max_parallel" | "total_max_workers"
-                ) {
+                if key == "total_max_workers" {
+                    assert_eq!(
+                        value.text(),
+                        Some("${{ fromJson(inputs.lane_plan_json).budgets.total_max_workers }}")
+                    );
+                    total += 1;
+                    continue;
+                }
+                if !matches!(key.as_str(), "max_parallel" | "clippy_max_parallel") {
                     continue;
                 }
                 if lane == "linux"
@@ -128,37 +134,29 @@ fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
                     assert_eq!(value.text(), Some("1"));
                     continue;
                 }
-                let budget = if key == "total_max_workers" {
-                    key.clone()
-                } else {
-                    format!(
-                        "{}_max_parallel",
-                        if lane == "quality" { "linux" } else { lane }
-                    )
-                };
-                assert_eq!(
-                    value.text(),
-                    Some(
-                        format!("${{{{ fromJson(inputs.lane_plan_json).budgets.{budget} }}}}")
-                            .as_str()
-                    )
+                let allowance = value
+                    .text()
+                    .and_then(|text| {
+                        text.strip_prefix(
+                            "${{ fromJson(inputs.lane_plan_json).budgets.matrix_max_parallel.",
+                        )
+                    })
+                    .and_then(|rest| rest.strip_suffix(" }}"))
+                    .unwrap_or_else(|| panic!("{lane}.{name} bypasses its matrix allowance"));
+                let platform = if lane == "quality" { "linux" } else { lane };
+                assert!(
+                    allowance.starts_with(&format!("{platform}_")),
+                    "{lane}.{name}"
                 );
-                observed.insert(budget);
+                assert!(
+                    allowances.insert(allowance.to_owned()),
+                    "{allowance} shared"
+                );
             }
         }
     }
-    assert_eq!(
-        observed,
-        std::collections::BTreeSet::from(
-            [
-                "linux_max_parallel",
-                "macos_max_parallel",
-                "windows_max_parallel",
-                "total_max_workers"
-            ]
-            .map(str::to_owned)
-        )
-    );
+    assert_eq!(total, 1);
+    assert_eq!(allowances.len(), 12);
 }
 
 #[test]

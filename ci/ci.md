@@ -1400,9 +1400,13 @@ no change for its single Metal row. Release is deferred pending runner-image
 catalog changes. Catalog membership, slice IDs and immutable artifacts remain
 unchanged. Hosted timing and peak-worker evidence for this graph are pending.
 
-The planner records profile budgets: PR drafts/ready runs allow at most
-7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
-main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
+The planner records profile budgets: PR drafts/ready matrices allow at most
+7 Linux, 2 macOS and 1 Windows workers each, within per-run ceilings of 12,
+4 and 3 (19 overall); main/manual allow 12, 4 and 2 per matrix within 12, 8
+and 5 per run (25 overall). Lanes take each matrix's `max-parallel` from
+`budgets.matrix_max_parallel`, which keeps the matrices that can overlap
+within the per-run ceiling; see the manage-ci inventory for the capacity
+model and the queue measurement protocol. Each matrix sets
 `max-parallel`, and backend/platform rows are selected by ownership rather than
 by a blanket PR fan-out. The fixed two-row split-model matrix is serialized, so
 it adds runner-minutes without increasing peak workers. Host, ABI and runtime
