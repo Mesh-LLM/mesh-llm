@@ -1,3 +1,4 @@
+use super::shutdown_steps::shutdown_step;
 use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, IntentSource, MODEL_TARGET_RECONCILIATION_INTERVAL,
     ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
@@ -357,11 +358,17 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         runtime,
     } = ctx;
     super::node_lifecycle_events::emit_node_draining();
-    node.broadcast_leaving().await;
+    // Each step says so once it runs long, so a stop that hangs names the
+    // step it is in even if a supervisor kills it before the step ends.
+    shutdown_step("broadcast_leaving", node.broadcast_leaving()).await;
     // Memberships serve this node's models, so they leave their meshes first.
-    node.close_memberships().await;
+    shutdown_step("close_memberships", node.close_memberships()).await;
 
-    unpublish_run_auto_nostr_listing(options).await;
+    shutdown_step(
+        "unpublish_nostr_listing",
+        unpublish_run_auto_nostr_listing(options),
+    )
+    .await;
     if let Some(handle) = discovery_publisher {
         handle.abort();
     }
@@ -370,33 +377,43 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     lan_bootstrap_tasks.abort();
     if let Some(handle) = presentation_subscriber {
         handle.abort();
-        let _ = handle.await;
+        let _ = shutdown_step("presentation_subscriber", handle).await;
     }
 
-    shutdown_run_auto_services(
-        node,
-        plugin_manager,
-        api_proxy_handle,
-        console_server_handle,
+    shutdown_step(
+        "shutdown_run_auto_services",
+        shutdown_run_auto_services(
+            node,
+            plugin_manager,
+            api_proxy_handle,
+            console_server_handle,
+        ),
     )
     .await;
 
-    shutdown_runtime_loaded_models(
-        runtime_models,
-        runtime_survey_models,
-        ShutdownRuntimeLoadedModelsContext {
-            survey_telemetry,
-            dashboard_processes,
-            console_state,
-            target_tx,
-            runtime_instance_registry,
-            node,
-            runtime_data_producer,
-            dashboard_context_usage,
-        },
+    shutdown_step(
+        "shutdown_runtime_loaded_models",
+        shutdown_runtime_loaded_models(
+            runtime_models,
+            runtime_survey_models,
+            ShutdownRuntimeLoadedModelsContext {
+                survey_telemetry,
+                dashboard_processes,
+                console_state,
+                target_tx,
+                runtime_instance_registry,
+                node,
+                runtime_data_producer,
+                dashboard_context_usage,
+            },
+        ),
     )
     .await;
-    shutdown_runtime_managed_models(managed_models).await;
+    shutdown_step(
+        "shutdown_runtime_managed_models",
+        shutdown_runtime_managed_models(managed_models),
+    )
+    .await;
     skippy_serving::telemetry::finish_process_telemetry();
 
     node.set_serving_models(Vec::new()).await;
@@ -407,7 +424,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     // log `Endpoint dropped without calling `Endpoint::close`. Aborting
     // ungracefully.` and abandon the connection-close frames, leaving peers to
     // time this node out rather than seeing it depart.
-    node.close_endpoint().await;
+    shutdown_step("close_endpoint", node.close_endpoint()).await;
 
     cleanup_run_auto_runtime_dir(runtime);
     super::node_lifecycle_events::emit_node_stopped();
@@ -415,7 +432,11 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     // is what applies and publishes both node_draining and node_stopped to
     // any attached v1 stream -- aborting the driver any earlier would leave
     // node_stopped sitting in the wake list with nothing left to drain it.
-    crate::runtime_events::driver::finalize_engine_driver(runtime_event_driver).await;
+    shutdown_step(
+        "finalize_engine_driver",
+        crate::runtime_events::driver::finalize_engine_driver(runtime_event_driver),
+    )
+    .await;
 }
 
 pub(super) async fn run_auto_handle_control_request(
