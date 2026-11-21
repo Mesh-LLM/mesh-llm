@@ -1068,7 +1068,7 @@ impl PluginRuntime {
             plugin.manifest().as_ref(),
             |capability| context.host_supports(capability),
         ) {
-            Some(message) => Err(PluginError::invalid_request(message)),
+            Some(message) => Err(PluginError::startup_disabled(message)),
             None => {
                 plugin
                     .initialize(PluginInitializeRequest::from(request), &mut context)
@@ -1083,7 +1083,7 @@ impl PluginRuntime {
                 |capability| context.host_supports(capability),
             )
         {
-            init_result = Err(PluginError::invalid_request(message));
+            init_result = Err(PluginError::startup_disabled(message));
         }
         if let Err(err) = init_result {
             Self::write_payload(
@@ -1360,14 +1360,11 @@ fn normalize_call_tool_output(result: &CallToolResult) -> PluginResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{mcp, plugin, plugin_server_info};
-    #[cfg(unix)]
-    use crate::{read_envelope, write_envelope};
+    use crate::{mcp, plugin, plugin_server_info, read_envelope, write_envelope};
     use rmcp::model::{ArgumentInfo, ContentBlock, PromptMessage, Reference, Role};
     use serde_json::json;
     #[cfg(unix)]
     use tokio::sync::{Barrier, Notify};
-    #[cfg(unix)]
     use tokio::time::{Duration, timeout};
 
     #[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
@@ -2060,41 +2057,49 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_local_channel_declared_during_initialize_is_refused_without_host_support() {
-        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
-        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
-            LateLocalChannel { declared: false },
-            LocalStream::Unix(plugin_stream),
-        ));
-        let mut host_stream = LocalStream::Unix(host_stream);
-        write_envelope(
-            &mut host_stream,
-            &proto::Envelope {
-                protocol_version: PROTOCOL_VERSION,
-                plugin_id: "demo".into(),
-                request_id: 1,
-                payload: Some(proto::envelope::Payload::InitializeRequest(
-                    proto::InitializeRequest {
-                        host_protocol_version: PROTOCOL_VERSION,
-                        host_capabilities: Vec::new(),
-                        ..Default::default()
-                    },
-                )),
-            },
-        )
-        .await
-        .unwrap();
-        let response = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+        for initially_declared in [false, true] {
+            let (plugin_stream, host_stream) = tokio::io::duplex(64 * 1024);
+            let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+                LateLocalChannel {
+                    declared: initially_declared,
+                },
+                LocalStream::Memory(plugin_stream),
+            ));
+            let mut host_stream = LocalStream::Memory(host_stream);
+            write_envelope(
+                &mut host_stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    plugin_id: "demo".into(),
+                    request_id: 1,
+                    payload: Some(proto::envelope::Payload::InitializeRequest(
+                        proto::InitializeRequest {
+                            host_protocol_version: PROTOCOL_VERSION,
+                            host_capabilities: Vec::new(),
+                            ..Default::default()
+                        },
+                    )),
+                },
+            )
             .await
-            .expect("initialize response")
             .unwrap();
-        let Some(proto::envelope::Payload::ErrorResponse(error)) = response.payload else {
-            panic!("expected a refusal, got {:?}", response.payload);
-        };
-        assert!(error.message.contains("local_channels.v1"), "{error:?}");
-        runtime.abort();
+            let response = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+                .await
+                .expect("initialize response")
+                .unwrap();
+            let Some(proto::envelope::Payload::ErrorResponse(error)) = response.payload else {
+                panic!("expected a refusal, got {:?}", response.payload);
+            };
+            assert_eq!(
+                error.code,
+                crate::STARTUP_DISABLED_ERROR_CODE,
+                "initially_declared={initially_declared}: {error:?}"
+            );
+            assert!(error.message.contains("local_channels.v1"), "{error:?}");
+            runtime.abort();
+        }
     }
 
     #[cfg(unix)]
