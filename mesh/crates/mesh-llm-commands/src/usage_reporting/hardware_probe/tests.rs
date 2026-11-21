@@ -77,10 +77,13 @@ fn shutdown_reaps_inflight_probe_and_allows_runtime_teardown() {
         mesh_llm_system::process::process_liveness(pid),
         mesh_llm_system::process::Liveness::Dead
     );
+    // A killed peer closes its socket: Unix reports EOF, Windows reports an
+    // abortive reset (WSAECONNRESET). Either proves the probe is gone; data or
+    // a still-open socket would not.
     let mut byte = [0];
-    assert_eq!(
-        connection.read(&mut byte).unwrap(),
-        0,
-        "probe must close its connection"
-    );
+    match connection.read(&mut byte) {
+        Ok(0) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+        other => panic!("probe must close its connection, got {other:?}"),
+    }
 }
