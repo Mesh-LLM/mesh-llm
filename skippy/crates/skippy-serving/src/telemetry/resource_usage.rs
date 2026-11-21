@@ -260,12 +260,13 @@ mod platform {
     }
 }
 
-#[cfg(test)]
+// Every test reads a macOS or Linux source, so on other targets the module
+// would only hold an unused import.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn this_process_has_cpu_time_and_resident_memory() {
         let usage = process_usage().expect("process usage");
         assert!(usage.resident_bytes > 0);
@@ -279,7 +280,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn the_system_reports_total_and_free_memory() {
         let memory = system_memory().expect("system memory");
         assert!(memory.total_bytes > 0);
