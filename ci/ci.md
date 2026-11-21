@@ -1562,6 +1562,14 @@ holds across nested workflows is `DEPOT_RUNNERS_ENABLED=false`, or a release
 dispatch with `force_hosted_runners=true`. Fork, non-main-ref and PR-origin
 dispatch denial is unchanged.
 
+Each runner role has one row in `ci/runner-roles.json` with its trust,
+architecture, providers, labels, preparation profiles, cache mode, artifact
+dependencies, hosted fallback, main and PR decisions, and readiness. The
+role table is in the inventory's "Runner role matrix" section; the
+`runner_roles` contract keeps the rows equal to the workflow selector inputs.
+On main only `quality`, `linux-host`, `linux-runtime-gpu`, `static-abi` and
+`kotlin-native-sdk` can select Depot.
+
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
 gate checks freshness. Hosted version 2 keys bind the actual hosted image as

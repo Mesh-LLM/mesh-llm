@@ -1,0 +1,864 @@
+{
+  "schema_version": 1,
+  "roles": [
+    {
+      "id": "control-authority",
+      "summary": "Protected authority automation producers and the exact-ref authority sentinel diagnostic.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04",
+        "macos-15",
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm",
+        "windows-2022"
+      ],
+      "preparation_profiles": [
+        "hosted-bare",
+        "image"
+      ],
+      "cache_mode": "none",
+      "artifact_dependencies": [],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "sentinel-ref",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/blob/main/ci/DEPOT_PR_RISK_EXCEPTION.md"
+      },
+      "selectors": [
+        "ci-quality-slice.yml#runner_policy/sentinel_policy"
+      ],
+      "jobs": [
+        "protected-automation-artifact.yml#producer"
+      ]
+    },
+    {
+      "id": "product-automation",
+      "summary": "Same-run product-source xtask producer for each platform lane.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "github-hosted"
+      ],
+      "labels": [
+        "macos-15",
+        "ubuntu-24.04",
+        "windows-2022"
+      ],
+      "preparation_profiles": [
+        "hosted-bare",
+        "image"
+      ],
+      "cache_mode": "hosted-exact-key",
+      "artifact_dependencies": [],
+      "hosted_fallback": "always-hosted",
+      "main": "no-depot",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2788"
+      },
+      "selectors": [],
+      "jobs": [
+        "product-automation-artifact.yml#producer"
+      ]
+    },
+    {
+      "id": "quality",
+      "summary": "Quality contracts, Clippy, formatting, machete, CLI docs and the Skippy C++ API check.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04-4",
+        "depot-ubuntu-24.04-8",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer"
+      ],
+      "hosted_fallback": "selector",
+      "main": "depot-gated",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/pull/3177"
+      },
+      "selectors": [
+        "ci-quality-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "rust-tests",
+      "summary": "Linux Rust test shards and the safetensors runtime smoke.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer"
+      ],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-rust-tests-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "linux-host",
+      "summary": "Backend-neutral Linux host producer.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04-8",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer",
+        "ci-ui-artifact-slice.yml#ui_artifact"
+      ],
+      "hosted_fallback": "selector",
+      "main": "depot-gated",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/pull/3177"
+      },
+      "selectors": [
+        "ci-linux-host-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "linux-runtime-gpu",
+      "summary": "Linux CUDA, ROCm and Vulkan native runtime producers.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04-16",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer"
+      ],
+      "hosted_fallback": "selector",
+      "main": "depot-gated",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/pull/3177"
+      },
+      "selectors": [
+        "ci-linux-runtime-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "linux-runtime-cpu-cache-producer",
+      "summary": "Linux CPU native runtime, the hosted producer of the trusted CPU runtime package cache.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "github-hosted"
+      ],
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "hosted-trusted-publisher",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer"
+      ],
+      "hosted_fallback": "always-hosted",
+      "main": "no-depot",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/blob/main/.agents/skills/manage-ci/SKILL.md"
+      },
+      "selectors": [
+        "ci-linux-runtime-slice.yml#runner_policy/cpu_policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "linux-product",
+      "summary": "Composition-only Linux product per backend.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer",
+        "ci-linux-host-slice.yml#linux_host",
+        "ci-linux-runtime-slice.yml#linux_runtime"
+      ],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-linux-product-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "static-abi",
+      "summary": "Static native ABI producer for SDK and C++ API consumers.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04",
+        "depot-ubuntu-24.04-16",
+        "depot-ubuntu-24.04-4",
+        "depot-ubuntu-24.04-8",
+        "depot-ubuntu-24.04-arm",
+        "depot-ubuntu-24.04-arm-16",
+        "depot-ubuntu-24.04-arm-4",
+        "depot-ubuntu-24.04-arm-8",
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer"
+      ],
+      "hosted_fallback": "selector",
+      "main": "depot-gated",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/pull/3177"
+      },
+      "selectors": [
+        "static-abi-artifact.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "kotlin-native-sdk",
+      "summary": "Native SDK input for the Kotlin smoke and release native SDK bundles.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-macos-15",
+        "depot-ubuntu-24.04",
+        "depot-ubuntu-24.04-16",
+        "depot-ubuntu-24.04-4",
+        "depot-ubuntu-24.04-8",
+        "depot-ubuntu-24.04-arm",
+        "depot-ubuntu-24.04-arm-16",
+        "depot-ubuntu-24.04-arm-4",
+        "depot-ubuntu-24.04-arm-8",
+        "macos-15",
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm"
+      ],
+      "preparation_profiles": [
+        "hosted-bare-github-hosted-only",
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer",
+        "static-abi-artifact.yml#static_abi_artifact"
+      ],
+      "hosted_fallback": "selector",
+      "main": "depot-gated",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/pull/3177"
+      },
+      "selectors": [
+        "native-sdk-artifact.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "console-ui-artifact",
+      "summary": "Immutable console UI artifact consumed by every host producer.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04-4",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "image"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-ui-artifact-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "website",
+      "summary": "Console UI quality, end-to-end and website build.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04-4",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-web-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "macos",
+      "summary": "macOS host, Metal runtime, product and Swift SDK producers.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-macos-15",
+        "macos-15"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer",
+        "ci-ui-artifact-slice.yml#ui_artifact"
+      ],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-macos-host-slice.yml#runner_policy/policy",
+        "ci-macos-runtime-slice.yml#runner_policy/policy",
+        "ci-macos-product-slice.yml#runner_policy/policy",
+        "swift-sdk-artifact.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "windows",
+      "summary": "Windows host, runtime and product producers.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-windows-2022",
+        "windows-2022"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "product-automation-artifact.yml#producer",
+        "ci-ui-artifact-slice.yml#ui_artifact"
+      ],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-windows-host-slice.yml#runner_policy/policy",
+        "ci-windows-runtime-slice.yml#runner_policy/policy",
+        "ci-windows-product-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "platform-checks",
+      "summary": "macOS and Windows platform unit checks.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot",
+        "github-hosted"
+      ],
+      "labels": [
+        "depot-macos-15",
+        "depot-windows-2022",
+        "macos-15",
+        "windows-2022"
+      ],
+      "preparation_profiles": [
+        "image"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [],
+      "hosted_fallback": "selector",
+      "main": "no-depot",
+      "pull_request": "depot-gated",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "supported",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2789"
+      },
+      "selectors": [
+        "ci-platform-checks-slice.yml#runner_policy/policy"
+      ],
+      "jobs": []
+    },
+    {
+      "id": "specialized-gpu",
+      "summary": "Hardware GPU smokes and the self-hosted CUDA release runtime build.",
+      "trust": [
+        "pull-request",
+        "main-push",
+        "manual-dispatch",
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64"
+      ],
+      "providers": [
+        "github-hosted",
+        "self-hosted"
+      ],
+      "labels": [
+        "Linux",
+        "X64",
+        "amd64",
+        "gpu-amd",
+        "gpu-nvidia",
+        "mesh-llm",
+        "mesh-llm-amd64",
+        "self-hosted",
+        "ubuntu-24.04"
+      ],
+      "preparation_profiles": [
+        "hosted-bare-github-hosted-only",
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "job-local",
+      "artifact_dependencies": [
+        "ci-linux-product-slice.yml#linux_product"
+      ],
+      "hosted_fallback": "queue",
+      "main": "no-depot",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2788"
+      },
+      "selectors": [],
+      "jobs": [
+        "ci-linux-product-smoke-slice.yml#laya_cuda",
+        "ci-linux-product-smoke-slice.yml#laya_rocm",
+        "ci-linux-product-smoke-slice.yml#laya_vulkan",
+        "release.yml#build_native_runtime_linux_x86_64_cuda",
+        "smoke.yml#smoke_tests"
+      ]
+    },
+    {
+      "id": "self-hosted-lab",
+      "summary": "Managed lab pools for the llama upstream canary and agentic replay.",
+      "trust": [
+        "manual-dispatch",
+        "schedule"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "self-hosted"
+      ],
+      "labels": [
+        "ARM64",
+        "Linux",
+        "X64",
+        "accelerator-memory-128plus",
+        "accelerator-memory-256plus",
+        "agentic-replay",
+        "family-certify",
+        "jy-managed",
+        "macOS",
+        "self-hosted"
+      ],
+      "preparation_profiles": [
+        "preinstalled-linux",
+        "preinstalled-macos"
+      ],
+      "cache_mode": "job-local",
+      "artifact_dependencies": [],
+      "hosted_fallback": "queue",
+      "main": "no-depot",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2788"
+      },
+      "selectors": [],
+      "jobs": [
+        "agentic-replay-nightly.yml#replay",
+        "llama-canary-family-pass.yml#aggregate",
+        "llama-canary-family-pass.yml#build",
+        "llama-canary-family-pass.yml#build_linux",
+        "llama-canary-family-pass.yml#build_linux_pinned",
+        "llama-canary-family-pass.yml#combine",
+        "llama-canary-family-pass.yml#family",
+        "llama-canary-family-pass.yml#reconcile",
+        "llama-canary-family-pass.yml#retry_family",
+        "llama-upstream-canary.yml#alert-consecutive-failures",
+        "llama-upstream-canary.yml#attempt_1",
+        "llama-upstream-canary.yml#attempt_2",
+        "llama-upstream-canary.yml#attempt_3",
+        "llama-upstream-canary.yml#preflight",
+        "llama-upstream-canary.yml#publish-certified-canary",
+        "llama-upstream-canary.yml#resolve",
+        "llama-upstream-canary.yml#result"
+      ]
+    },
+    {
+      "id": "trusted-runner-image",
+      "summary": "Self-hosted trusted runner image verification on exhaustive main and manual-full.",
+      "trust": [
+        "main-push",
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "self-hosted"
+      ],
+      "labels": [
+        "mesh-llm-amd64",
+        "mesh-llm-arm64"
+      ],
+      "preparation_profiles": [],
+      "cache_mode": "none",
+      "artifact_dependencies": [],
+      "hosted_fallback": "queue",
+      "main": "no-depot",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2788"
+      },
+      "selectors": [],
+      "jobs": [
+        "ci-runner-contract-slice.yml#trusted_runner_image"
+      ]
+    },
+    {
+      "id": "depot-diagnostics",
+      "summary": "Manual default-branch Depot runner, cache-authority and registry canaries.",
+      "trust": [
+        "manual-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "depot"
+      ],
+      "labels": [
+        "depot-ubuntu-24.04",
+        "depot-ubuntu-24.04-16",
+        "depot-ubuntu-24.04-4",
+        "depot-ubuntu-24.04-8",
+        "depot-ubuntu-24.04-arm",
+        "depot-ubuntu-24.04-arm-8"
+      ],
+      "preparation_profiles": [],
+      "cache_mode": "diagnostic-probe",
+      "artifact_dependencies": [],
+      "hosted_fallback": "queue",
+      "main": "manual-diagnostic",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {},
+      "readiness": {
+        "state": "active",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/blob/main/ci/DEPOT_MIGRATION.md"
+      },
+      "selectors": [],
+      "jobs": [
+        "depot-canary.yml#runner",
+        "depot-canary.yml#seed_authority_marker",
+        "depot-canary.yml#verify_pr_write",
+        "depot-registry-canary.yml#pull"
+      ]
+    },
+    {
+      "id": "release-publication",
+      "summary": "Full-release and rolling-preview Linux legs; hosted while force_hosted_runners is true, which overrides use_depot.",
+      "trust": [
+        "release-dispatch"
+      ],
+      "architecture": [
+        "amd64",
+        "arm64"
+      ],
+      "providers": [
+        "github-hosted"
+      ],
+      "labels": [
+        "macos-15",
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm"
+      ],
+      "preparation_profiles": [
+        "image",
+        "restore-automation"
+      ],
+      "cache_mode": "provider-derived",
+      "artifact_dependencies": [
+        "release.yml#build_native_runtime"
+      ],
+      "hosted_fallback": "operator-input",
+      "main": "operator-input-hosted",
+      "pull_request": "no-depot",
+      "hosted_required_inputs": {
+        "force_hosted_runners": true
+      },
+      "readiness": {
+        "state": "excluded",
+        "evidence": "https://github.com/Mesh-LLM/mesh-llm/issues/2783"
+      },
+      "selectors": [
+        "release.yml#metadata/runners"
+      ],
+      "jobs": []
+    }
+  ]
+}

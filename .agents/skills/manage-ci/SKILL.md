@@ -481,6 +481,22 @@ retired parser behavior, and source review still owns semantic emulation.
 - Treat GitHub and Depot as placement providers, not different build graphs.
   Slices request a semantic runner role; a centralized, event-derived policy
   maps that role to a provider label and cache mode.
+- Every runner role has one row in the checked-in role matrix
+  `ci/runner-roles.json`. A row records event/ref trust, architecture,
+  allowed providers and labels, preparation profiles, cache mode, artifact
+  dependencies, hosted fallback, the trusted-main and pull-request decisions,
+  and a readiness state (`excluded`, `supported`, `prepared`, `qualified` or
+  `active`) with an evidence link. Only a row whose trusted-main decision
+  places it on Depot is `active`. Every `select-ci-runners` step and every
+  job whose `runs-on` uses a selector output, a non-GitHub-hosted label or a
+  dynamic label belongs to a row, and the row's selector decisions must match
+  the workflow inputs. A new provider-capable caller is not complete until it
+  declares its row. A reachable provider/preparation combination that the
+  preparation action does not support (for example Depot with `hosted-bare`)
+  fails the contract unless the row names the operator inputs that keep the
+  route hosted. Each row is decided on its own evidence: no row becomes
+  eligible because another row passed, and a matrix edit never changes
+  placement by itself; the workflow inputs do, and both change together.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.

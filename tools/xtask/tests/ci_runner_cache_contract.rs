@@ -103,5 +103,8 @@ mod authority_remaining;
 #[path = "ci_runner_cache_contract/runner_contract.rs"]
 mod runner_contract;
 
+#[path = "ci_runner_cache_contract/runner_roles/mod.rs"]
+mod runner_roles;
+
 #[path = "ci_runner_cache_contract/sentinel_source_boundary.rs"]
 mod sentinel_source_boundary;

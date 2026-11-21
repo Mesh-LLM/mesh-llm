@@ -1551,6 +1551,45 @@ release/deployment variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 
+### Runner role matrix
+
+`ci/runner-roles.json` is the machine-readable role matrix. The
+`runner_roles` module of the `ci_runner_cache_contract` xtask target derives
+every `select-ci-runners` step and every job whose `runs-on` uses a selector
+output, a non-hosted label or a dynamic label from the workflows, and fails
+when one has no row, when a row's trusted-main or PR decision differs from its
+selector inputs, when the labels or preparation profiles differ, or when a
+reachable provider/profile pair is unsupported. Current rows (main / PR):
+
+| Role | Main | PR | Profiles | Readiness |
+|---|---|---|---|---|
+| `control-authority` | hosted | sentinel ref only | hosted-bare, image | excluded |
+| `product-automation` | hosted | hosted | hosted-bare, image | excluded |
+| `quality` | Depot when `DEPOT_RUNNERS_ENABLED` | Depot gate | restore-automation | active |
+| `rust-tests` | hosted (literal `false`) | Depot gate | restore-automation | supported |
+| `linux-host` | Depot when gated | Depot gate | restore-automation | active |
+| `linux-runtime-gpu` | Depot when gated | Depot gate | image, restore-automation | active |
+| `linux-runtime-cpu-cache-producer` | hosted (`force_hosted: true`) | hosted | image, restore-automation | excluded |
+| `linux-product` | hosted (literal `false`) | Depot gate | image, restore-automation | supported |
+| `static-abi` | Depot when gated | Depot gate | image, restore-automation | active |
+| `kotlin-native-sdk` | Depot when gated | Depot gate | guarded hosted-bare, image, restore-automation | active |
+| `console-ui-artifact` | hosted (literal `false`) | Depot gate | image | supported |
+| `website` | hosted (literal `false`) | Depot gate | none | supported |
+| `macos` | hosted (literal `false`) | Depot gate | image, restore-automation | supported |
+| `windows` | hosted (literal `false`) | Depot gate | image, restore-automation | supported |
+| `platform-checks` | hosted (literal `false`) | Depot gate | image | supported |
+| `specialized-gpu` | self-hosted GPU / hosted | self-hosted GPU / hosted | guarded hosted-bare, image, restore-automation | excluded |
+| `self-hosted-lab` | managed lab pool | none | preinstalled-linux, preinstalled-macos | excluded |
+| `trusted-runner-image` | self-hosted image check | none | none | excluded |
+| `depot-diagnostics` | manual Depot canaries | none | none | active |
+| `release-publication` | hosted with `force_hosted_runners=true` | none | image, restore-automation | excluded |
+
+The release selector can reach Depot on a trusted-main release dispatch
+unless the operator sets `force_hosted_runners=true` (rolling previews always
+do); that input overrides `use_depot`. The full-release `build_native_runtime`
+Linux legs prepare with `hosted-bare` and run on their matrix's hosted label,
+so they are outside the selector row.
+
 ## Live inspection
 
 Use read-only commands when live state matters:
