@@ -40,7 +40,7 @@ sudo apt-get install -y mold lld
 
 GPU toolchains (CUDA, ROCm, Vulkan) are not needed to build MeshLLM. The
 inference runtime is built and released by
-[Skippy](https://github.com/general-inference/skippy); MeshLLM only loads it.
+[Skippy](https://github.com/Mesh-LLM/skippy); MeshLLM only loads it.
 
 **Windows**: install the Rust lld tools with
 `rustup component add llvm-tools-preview`, or install LLVM with `winget install
