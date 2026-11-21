@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 mod child;
 use child::ProbeChild;
 
+#[cfg(test)]
+mod tests;
+
 thread_local! {
     static CURRENT: RefCell<Option<Arc<ProbeScope>>> = const { RefCell::new(None) };
 }
