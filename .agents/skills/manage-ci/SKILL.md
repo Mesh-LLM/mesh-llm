@@ -513,7 +513,9 @@ retired parser behavior, and source review still owns semantic emulation.
   job whose `runs-on` uses a selector output, a non-GitHub-hosted label or a
   dynamic label belongs to a row, and the row's selector decisions must match
   the workflow inputs. A new provider-capable caller is not complete until it
-  declares its row. A reachable provider/preparation combination that the
+  declares its row and the `composed_routing` contract reaches its selector
+  from the real planner output of a lane, so every trust case resolves it to
+  the provider its row allows. A reachable provider/preparation combination that the
   preparation action does not support (for example Depot with `hosted-bare`)
   fails the contract unless the row names the operator inputs that keep the
   route hosted. Each row is decided on its own evidence: no row becomes

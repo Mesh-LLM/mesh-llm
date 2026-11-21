@@ -1595,6 +1595,23 @@ do); that input overrides `use_depot`. The full-release `build_native_runtime`
 Linux legs prepare with `hosted-bare` and run on their matrix's hosted label,
 so they are outside the selector row.
 
+The `composed_routing` module walks the real planner output through all five
+lanes into every nested `select-ci-runners` step and compares each result
+with the step's row:
+
+| Case | Expected at every nested selector |
+|---|---|
+| Main push, CI-policy change or `__force_all__` | hosted |
+| Main push, source change, `DEPOT_RUNNERS_ENABLED=true` | Depot only where the row's main is `depot-gated` |
+| Main push, source change, `DEPOT_RUNNERS_ENABLED=false` | hosted |
+| Manual-full, `use_depot=true`, CI-policy change | hosted |
+| Fork PR, `pull_request_target`, or non-main push ref | hosted |
+| Same-repository PR on 2027-09-13 / 2027-09-15 | Depot where the row's PR is `depot-gated` / hosted |
+
+Each selector also writes one `decision_record` output and step-summary line
+with the event, ref, gates, override, provider, cache authority, selected
+runner and its own `RUNNER_ENVIRONMENT`.
+
 ### Cache authority by trust context
 
 Selector outputs by context (`select-ci-runners`). Roles pick the main gate:

@@ -46,6 +46,7 @@ fn assert_mutation_rejected(file: &str, from: &str, to: &str, check: impl Fn(&No
 }
 
 mod cache_flow_intent;
+mod composed_routing;
 mod declared_graph;
 mod hosted_precedence;
 mod lane_policy_intent;
