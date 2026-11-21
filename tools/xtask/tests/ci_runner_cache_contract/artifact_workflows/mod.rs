@@ -49,6 +49,7 @@ mod cache_flow_intent;
 mod declared_graph;
 mod lane_policy_intent;
 mod linker_traces;
+mod placement;
 mod release_flow_intent;
 mod release_node_step;
 mod release_notes_step;

@@ -1021,6 +1021,14 @@ source commit.
 
 ## Planner contract
 
+- `signals.hosted_runner_required` records actual `ci-control`/`runner-infra`
+  changes or `__force_all__` unknown-diff fallback, independently of exhaustive
+  `runner_contract_required` coverage. All five lanes forward the placement
+  signal and force hosted unless it is explicitly boolean false. Manual-full
+  retains its resolved base/source diff; unavailable history stays hosted.
+  Existing provider gates, allowlists and the hosted CPU runtime producer are
+  unchanged. This change does not alter provider gates; a gate that is already
+  enabled lets eligible runs resume Depot execution without a separate step.
 - `tools/ci-controller/src/plan` owns routing, and xtask delegates `ci plan` to
   it; the legacy Python planner and its identity/test import closure are
   deleted.

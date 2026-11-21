@@ -80,10 +80,12 @@ runs:
         if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
           # For pull_request: use base_sha...head_sha
           git diff --name-only "${{ inputs.base_sha }}...${{ inputs.head_sha }}" > /tmp/changed_files.txt
-        elif [[ "${{ inputs.event_name }}" == "push" ]]; then
+        elif [[ "${{ inputs.event_name }}" == "push" || "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
           # A push may contain more than one commit. Diff the complete event
           # range; never classify only the final commit. New branches, missing
           # history, and malformed payloads fail open to the full CI graph.
+          # Manual-full keeps its resolved comparison for placement; its
+          # semantic profile independently selects exhaustive diagnostics.
           base_sha="${{ inputs.base_sha }}"
           head_sha="${{ inputs.head_sha }}"
           if [[ -z "$base_sha" || -z "$head_sha" || "$base_sha" =~ ^0+$ ]] ||
@@ -93,9 +95,6 @@ runs:
           elif ! git diff --name-only "$base_sha" "$head_sha" > /tmp/changed_files.txt; then
             echo "__force_all__" > /tmp/changed_files.txt
           fi
-        elif [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
-          # For workflow_dispatch: force all by using a known Rust file
-          echo "__force_all__" > /tmp/changed_files.txt
         else
           echo "Unknown event type: ${{ inputs.event_name }}" >&2
           exit 1
