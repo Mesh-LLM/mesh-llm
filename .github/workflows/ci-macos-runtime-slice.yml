@@ -66,7 +66,9 @@ env:
   CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
-  SCCACHE_GHA_ENABLED: "true"
+  # macOS compiler caching stays job-local disk; configure-sccache-gha still
+  # applies the selector's denial and clears ambient remote endpoints.
+  SCCACHE_GHA_ENABLED: "false"
 
 jobs:
   runner_policy:
@@ -139,6 +141,11 @@ jobs:
           include_tool_versions: "true"
       - name: Install macOS native linker
         uses: ./.github/actions/setup-macos-lld
+      - name: Apply runner cache policy to the macOS compiler cache
+        uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.runtime.backend }}

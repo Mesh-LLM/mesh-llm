@@ -952,10 +952,15 @@ bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 resolved bin directory to the job path, and invokes the checked-in
 `scripts/cargo-linker` probe. It does not export Rust flags. The repository
 Cargo config owns every later link, so Android target flags and caller flags
-continue to compose normally. Seven call sites:
+continue to compose normally. Direct call sites:
 `ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
-`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
-`node-sdk-addon-artifact.yml`, and two in `release.yml`.
+`ci-macos-runtime-slice.yml`, `swift-sdk-artifact.yml`,
+`native-sdk-artifact.yml`, `node-sdk-addon-artifact.yml`, `prepare-automation`,
+and two in `release.yml`. The action does not read cache authority. Each job that
+uses it also runs `configure-sccache-gha` with its selector outputs. The
+macOS host and runtime slices run it right after this action with workflow
+`SCCACHE_GHA_ENABLED=false`, so their compiler cache stays the job-local disk
+it effectively was before, on the same exported socket.
 
 Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
@@ -1437,8 +1442,8 @@ pushes and release dispatches without `use_depot` stay hosted), or dispatch
 release with `force_hosted_runners=true` (every leg hosted, including nested
 producers). Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. Eligible same-repository PR jobs may use the
-time-bounded exception when `DEPOT_PR_RUNNERS_ENABLED=true`; it expires on
-2026-09-14 UTC. Forks remain hosted. The intended permanent gate
+time-bounded exception when `DEPOT_PR_RUNNERS_ENABLED=true`; it expires at
+the start of 2027-09-14 UTC. Forks remain hosted. The intended permanent gate
 may cover eligible build/test rows across Linux, Depot macOS 15 and Windows
 2022 when equivalent images/architectures exist; planning/required summaries,
 credential-bearing smokes, `gpu-nvidia` hardware and uncertified Intel macOS
@@ -1589,6 +1594,31 @@ unless the operator sets `force_hosted_runners=true` (rolling previews always
 do); that input overrides `use_depot`. The full-release `build_native_runtime`
 Linux legs prepare with `hosted-bare` and run on their matrix's hosted label,
 so they are outside the selector row.
+
+### Cache authority by trust context
+
+Selector outputs by context (`select-ci-runners`). Roles pick the main gate:
+Quality, Linux host, Linux accelerator runtimes, static ABI and native SDK pass
+`DEPOT_RUNNERS_ENABLED`; the other slices pass `'false'`; the Linux CPU runtime
+is forced hosted; release passes `depot_pr_enabled: 'false'`, so a Depot
+release job gets no native cache authority.
+
+| Event and trust class | Provider | Native GHA cache | Depot remote cache | Trusted sccache seed |
+|---|---|---|---|---|
+| `pull_request`, same-repository merge ref, exception active (gate `true`, date before 2027-09-14), not forced hosted | Depot | true (repository-wide Depot proxy) | false | false |
+| `pull_request`, exact `DEPOT_PR_CANARY_REF`, exception inactive | Depot | false | false | false |
+| `pull_request` fork, non-merge ref, forced hosted, gate off or expired | hosted | true (ref-scoped; sccache disk-only) | false | true |
+| `pull_request_target` | hosted, never Depot | true | false | true |
+| `push` to `refs/heads/main`, role main gate `true`, not forced hosted | Depot | true only while the exception is active | false | false |
+| `workflow_dispatch` on main, source `push` or manual, main gate or `manual_use_depot` | Depot | true only while the exception is active | false | false |
+| `workflow_dispatch` declaring a `pull_request(_target)` source | hosted | true (sccache disk-only) | false | true |
+| Other pushes, tags, schedules, forced hosted, gates off | hosted | true | false | true |
+
+Every sccache startup applies these outputs through `configure-sccache-gha`;
+`sccache_startup_policy` in the cache contract suite enforces this for every
+workflow job. Hosted-literal exemptions are listed there with their owning guard.
+The PR outcome is the existing bounded exception without expansion. Historical
+shared Depot cache contents are untrusted inputs and nothing is promoted.
 
 ## Live inspection
 
