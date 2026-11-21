@@ -53,6 +53,9 @@ message StageArtifactTransferResponse {
 }
 
 message LoadStage {
+  // A load names the model and the neighbouring stages by identity, never a
+  // file or address on the receiving node: it resolves its own model source,
+  // listens on loopback, and reaches neighbours through the stage transport.
   string topology_id = 1;
   string run_id = 2;
   string model_id = 3;
@@ -63,77 +66,74 @@ message LoadStage {
   uint32 stage_index = 8;
   uint32 layer_start = 9;
   uint32 layer_end = 10;
-  optional string model_path = 11;
-  optional StageDevice selected_device = 12;
-  string bind_addr = 13;
-  uint32 ctx_size = 14;
-  int32 n_gpu_layers = 15;
-  string cache_type_k = 16;
-  string cache_type_v = 17;
-  uint64 shutdown_generation = 18;
-  StageLoadMode load_mode = 19;
-  optional StagePeer upstream = 20;
-  optional StagePeer downstream = 21;
-  optional string projector_path = 22;
-  uint32 lane_count = 23;
-  optional uint32 n_batch = 24;
-  optional uint32 n_ubatch = 25;
-  StageFlashAttnType flash_attn_type = 26;
-  optional uint64 source_model_bytes = 27;
-  uint64 coordinator_term = 28;
-  optional string coordinator_id = 29;
-  uint64 lease_until_unix_ms = 30;
-  optional bool native_mtp_enabled = 31;
-  optional bool mmap = 32;
-  optional bool mlock = 33;
-  optional bool projector_use_gpu = 34;
-  optional string media_marker = 35;
-  optional uint32 image_min_tokens = 36;
-  optional uint32 image_max_tokens = 37;
-  optional uint32 batch_max_tokens = 38;
-  StageGlmDsaPolicy glm_dsa_policy = 39;
-  optional uint32 generation_signal_window = 40;
-  optional StageLoadRuntimeSettings runtime_settings = 41;
-  bool continuous_batching = 42;
-  optional string source_model_sha256 = 43;
-  SourceResolutionPolicy source_resolution_policy = 44;
-  optional string runtime_profile = 45;
-  StageAdmissionDescriptor admission = 46;
-  string participant_set_hash = 47;
-  string topology_hash = 48;
-  StageActivationCodec activation_codec = 49;
-  StageActivationCodecPolicy activation_codec_policy = 50;
-  repeated StageTopologyStage topology_stages = 51;
-  optional string split_certification = 52;
+  optional StageDevice selected_device = 11;
+  uint32 ctx_size = 12;
+  int32 n_gpu_layers = 13;
+  string cache_type_k = 14;
+  string cache_type_v = 15;
+  uint64 shutdown_generation = 16;
+  StageLoadMode load_mode = 17;
+  optional StagePeer upstream = 18;
+  optional StagePeer downstream = 19;
+  uint32 lane_count = 20;
+  optional uint32 n_batch = 21;
+  optional uint32 n_ubatch = 22;
+  StageFlashAttnType flash_attn_type = 23;
+  optional uint64 source_model_bytes = 24;
+  uint64 coordinator_term = 25;
+  optional string coordinator_id = 26;
+  uint64 lease_until_unix_ms = 27;
+  optional bool native_mtp_enabled = 28;
+  optional bool mmap = 29;
+  optional bool mlock = 30;
+  optional bool projector_use_gpu = 31;
+  optional string media_marker = 32;
+  optional uint32 image_min_tokens = 33;
+  optional uint32 image_max_tokens = 34;
+  optional uint32 batch_max_tokens = 35;
+  StageGlmDsaPolicy glm_dsa_policy = 36;
+  optional uint32 generation_signal_window = 37;
+  optional StageLoadRuntimeSettings runtime_settings = 38;
+  bool continuous_batching = 39;
+  optional string source_model_sha256 = 40;
+  SourceResolutionPolicy source_resolution_policy = 41;
+  optional string runtime_profile = 42;
+  StageAdmissionDescriptor admission = 43;
+  string participant_set_hash = 44;
+  string topology_hash = 45;
+  StageActivationCodec activation_codec = 46;
+  StageActivationCodecPolicy activation_codec_policy = 47;
+  repeated StageTopologyStage topology_stages = 48;
+  optional string split_certification = 49;
   // Planned by the coordinator because the stage that owns the output
   // layers is a different process - on a mesh split a different machine -
   // from the one the operator configured, and rebalancing can move it.
-  optional bool last_stage_decode_batch = 53;
+  optional bool last_stage_decode_batch = 50;
   // A DFlash draft on the final stage of this split. Stages that own one of
   // its target layers capture that layer's input and forward it with their
   // activations; the final stage drafts. Older stages ignore it.
-  optional StageDFlashPlan dflash = 54;
+  optional StageDFlashPlan dflash = 51;
 }
 
 message StageDFlashPlan {
+  // The final stage gets its draft from draft_source, as it gets its layers,
+  // never from a path on the planning node.
   repeated uint32 target_layers = 1;
-  // Set on the final stage only.
-  optional string draft_model_path = 2;
-  optional uint32 max_draft_tokens = 3;
-  optional int32 draft_n_gpu_layers = 4;
-  // The pinned default draft (from the package, the pairing index or the
-  // bootstrap table), on the final stage only, which fetches and verifies its
-  // own copy. Unset for a configured draft and from older planners; the stage
-  // then loads draft_model_path as sent.
-  optional StageDFlashDraftSource draft_source = 5;
+  optional uint32 max_draft_tokens = 2;
+  optional int32 draft_n_gpu_layers = 3;
+  // The pinned draft, on the final stage only, which fetches and verifies its
+  // own copy: a default draft (from the package, the pairing index or the
+  // bootstrap table), or a configured draft from the planner's Hugging Face
+  // cache. Unset when the final stage has no draft to load.
+  optional StageDFlashDraftSource draft_source = 4;
   // The configured draft device, on the final stage only. A stage without
   // it places the draft with the target.
-  optional string draft_device = 6;
+  optional string draft_device = 5;
   // How the stages before the final one encode the feature rows they
   // forward (bf16, q8 or q4), settled against what the final stage reports
   // it reads. Unset sends q8 (a plan built from local configuration). A stage's
   // SKIPPY_DFLASH_FEATURE_ENCODING overrides it.
-  optional string feature_encoding = 7;
+  optional string feature_encoding = 6;
 }
 
 message StageDFlashDraftSource {
@@ -151,7 +151,6 @@ message StageTopologyStage {
   bytes node_id = 3;
   uint32 layer_start = 4;
   uint32 layer_end = 5;
-  string bind_addr = 6;
 }
 
 message StageLoadRuntimeSettings {
@@ -246,6 +245,7 @@ message StageAdmissionAdmitted {
 }
 
 message StageStatus {
+  // Local paths of the reporting node stay on that node.
   string topology_id = 1;
   string run_id = 2;
   string model_id = 3;
@@ -255,6 +255,8 @@ message StageStatus {
   uint32 layer_start = 7;
   uint32 layer_end = 8;
   StageRuntimeState state = 9;
+  // The stage server's loopback address on the reporting node. The
+  // coordinator requires a nonzero port on a ready local-source stage.
   string bind_addr = 10;
   optional string error = 11;
   uint64 shutdown_generation = 12;
@@ -262,41 +264,38 @@ message StageStatus {
   uint32 ctx_size = 14;
   optional string package_ref = 15;
   optional string manifest_sha256 = 16;
-  optional string source_model_path = 17;
-  optional string source_model_sha256 = 18;
-  optional uint64 source_model_bytes = 19;
-  optional string materialized_path = 20;
-  optional bool materialized_pinned = 21;
-  optional string projector_path = 22;
-  uint32 lane_count = 23;
-  optional uint32 n_batch = 24;
-  optional uint32 n_ubatch = 25;
-  StageFlashAttnType flash_attn_type = 26;
-  uint64 coordinator_term = 27;
-  optional string coordinator_id = 28;
-  uint64 lease_until_unix_ms = 29;
-  optional ActivationBoundaryDescriptor input_activation_boundary = 30;
-  optional ActivationBoundaryDescriptor output_activation_boundary = 31;
-  StageActivationCodec activation_codec = 32;
-  StageActivationCodecPolicy activation_codec_policy = 33;
+  optional string source_model_sha256 = 17;
+  optional uint64 source_model_bytes = 18;
+  optional bool materialized_pinned = 19;
+  uint32 lane_count = 20;
+  optional uint32 n_batch = 21;
+  optional uint32 n_ubatch = 22;
+  StageFlashAttnType flash_attn_type = 23;
+  uint64 coordinator_term = 24;
+  optional string coordinator_id = 25;
+  uint64 lease_until_unix_ms = 26;
+  optional ActivationBoundaryDescriptor input_activation_boundary = 27;
+  optional ActivationBoundaryDescriptor output_activation_boundary = 28;
+  StageActivationCodec activation_codec = 29;
+  StageActivationCodecPolicy activation_codec_policy = 30;
   oneof admission_state {
-    StageAdmissionIdle idle = 34;
-    StageAdmissionAdmitted admitted = 35;
+    StageAdmissionIdle idle = 31;
+    StageAdmissionAdmitted admitted = 32;
   }
-  optional string split_certification = 36;
+  optional string split_certification = 33;
   // Cumulative runtime compute-busy time on this stage and the operations it
   // covers, for auto-balance split placement. Zero when not reported.
-  uint64 compute_busy_nanos = 37;
-  uint64 compute_operations = 38;
+  uint64 compute_busy_nanos = 34;
+  uint64 compute_operations = 35;
   // Serial decode steps run on this stage, as its compute meter counts them.
   // Zero from older stages.
-  uint64 compute_decode_tokens = 40;
+  uint64 compute_decode_tokens = 36;
   // Token positions run in speculative verify windows on this stage, as its
   // compute meter counts them. Zero from older stages.
-  uint64 compute_verify_tokens = 41;
+  uint64 compute_verify_tokens = 37;
   // Set by a split final stage that attached its DFlash draft. Unset when the
   // stage drafts nothing, and from older stages.
-  optional StageDFlashDraftStatus dflash_draft = 39;
+  optional StageDFlashDraftStatus dflash_draft = 38;
 }
 
 message StageDFlashDraftStatus {
@@ -324,11 +323,10 @@ message LayerInventory {
   repeated LayerRange ready_ranges = 5;
   repeated LayerRange available_ranges = 6;
   repeated LayerRange missing_ranges = 7;
-  optional string source_model_path = 8;
-  optional uint64 source_model_bytes = 9;
-  SourceModelKind source_model_kind = 10;
-  optional string source_model_sha256 = 11;
-  optional bool content_addressed_local_source = 12;
+  optional uint64 source_model_bytes = 8;
+  SourceModelKind source_model_kind = 9;
+  optional string source_model_sha256 = 10;
+  optional bool content_addressed_local_source = 11;
 }
 
 enum SourceResolutionPolicy {
@@ -417,10 +415,11 @@ enum StageGlmDsaPolicy {
 }
 
 message StagePeer {
+  // A neighbouring stage is reached through the stage transport to its node,
+  // which the receiver opens; node_id is required.
   string stage_id = 1;
   uint32 stage_index = 2;
-  string endpoint = 3;
-  optional bytes node_id = 4;
+  optional bytes node_id = 3;
 }
 
 message StageDevice {

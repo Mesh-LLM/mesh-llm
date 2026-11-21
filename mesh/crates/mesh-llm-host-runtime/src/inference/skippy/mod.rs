@@ -28,8 +28,9 @@ mod projector;
 #[cfg(test)]
 mod resolver_host_tests;
 pub(crate) use dflash_draft::{
-    default_dflash_draft_cached, materialize_default_dflash_draft, materialize_split_dflash_draft,
-    refresh_dflash_pairing_index, split_dflash_draft_source,
+    configured_split_dflash_draft_source, default_dflash_draft_cached,
+    materialize_default_dflash_draft, materialize_split_dflash_draft, refresh_dflash_pairing_index,
+    split_dflash_draft_source,
 };
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
@@ -118,10 +119,8 @@ pub(crate) use resolver::{
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
 pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
-pub(crate) use source_fetch::StageSourceFetch;
+pub(crate) use source_fetch::{StageSourceFetch, names_a_local_path, peer_may_name_package};
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
-#[cfg(test)]
-pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
     LayerRange, SourceModelKind, StageControlCommand, StageControlHandle, StageControlRequest,
     StageControlResponse, StageCoordinatorClaim, StageCoordinatorClaimAck, StageInventoryRequest,
@@ -130,6 +129,10 @@ pub(crate) use stage::{
     StageStopRequest, StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
 };
 pub(crate) use stage::{admitted_activation_frontier, admitted_resident_tensor_names};
+#[cfg(test)]
+pub(crate) use stage::{
+    spawn_stage_control_loop_with_placeholder_stage, test_stage_admission, test_stage_load_request,
+};
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
 

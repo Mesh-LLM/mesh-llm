@@ -34,18 +34,20 @@ const MAX_WIRE_DRAFT_TOKENS: usize = 15;
 pub struct SplitDFlashStage {
     /// Every target layer the draft reads, across all stages.
     pub target_layers: Vec<u32>,
-    /// The draft, on the final stage only. A path on the planning node; a
-    /// stage on another node only finds it there if `draft_source` is unset.
+    /// The draft, on the final stage only, as a path on this node. It never
+    /// crosses the stage protocol: a final stage on another node resolves its
+    /// own copy from `draft_source`.
     pub draft_model_path: Option<PathBuf>,
     pub max_draft_tokens: Option<usize>,
     pub draft_n_gpu_layers: Option<i32>,
     /// The backend device the configured draft runs on, on the final stage
     /// only. `None` puts it on the target's device.
     pub draft_device: Option<String>,
-    /// Where a default draft (from the package, the pairing index or the
-    /// bootstrap table) comes from, on the final stage only, so that stage
-    /// fetches and verifies its own copy. `None` for a configured draft, which
-    /// the operator places, and from older planners.
+    /// Where the draft comes from, on the final stage only, so that stage
+    /// fetches and verifies its own copy: a default draft (from the package,
+    /// the pairing index or the bootstrap table), or a configured draft from
+    /// the planner's Hugging Face cache. `None` when there is no pinned draft;
+    /// a final stage on another node then serves without speculation.
     pub draft_source: Option<SplitDFlashDraftSource>,
     /// How the stages before the final one encode the feature rows they
     /// forward, settled against what the final stage reads. `None` sends Q8,
@@ -54,7 +56,7 @@ pub struct SplitDFlashStage {
     pub feature_encoding: Option<skippy_runtime::DFlashFeatureEncoding>,
 }
 
-/// A default DFlash draft pinned on Hugging Face.
+/// A DFlash draft pinned on Hugging Face.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SplitDFlashDraftSource {
     pub repo: String,

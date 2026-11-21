@@ -6,10 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use mesh_llm_skippy_adapter::readiness::{
-    StageReadinessProbe, materialize_stage_bind_addr, parse_bind_addr,
-    start_binary_stage_ready_probe,
-};
+use mesh_llm_skippy_adapter::readiness::{StageReadinessProbe, start_binary_stage_ready_probe};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
 use skippy_serving::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
@@ -19,13 +16,21 @@ use tokio::{
 };
 
 mod inventory;
+mod launch;
+#[cfg(test)]
+mod replacement_tests;
 mod runtime_events;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use replacement_tests::spawn_stage_control_loop_with_placeholder_stage;
+#[cfg(test)]
+pub(crate) use tests::load_request as test_stage_load_request;
 mod types;
 
 use super::StageSourceFetch;
 use inventory::{layer_ranges, local_only_package_layers, resolve_inventory_source};
+use launch::{PreparedStageLaunch, prepare_stage_launch};
 pub(crate) use types::*;
 
 struct RunningStage {
@@ -97,7 +102,7 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                             }
                         }
                         StageControlCommand::ValidateLoad { load, resp } => {
-                            let _ = resp.send(state.validate_load_claim(&load));
+                            let _ = resp.send(state.load_preflight_rejection(&load));
                         }
                     }
                 }
@@ -324,21 +329,6 @@ impl StageControlState {
         requester: iroh::EndpointId,
         source_fetch: StageSourceFetch,
     ) -> Result<StageReadyResponse> {
-        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-        if let Some(existing) = self.stages.get(&key) {
-            // An unbound load (no coordinator identity) never takes over a
-            // generation a coordinator has bound: it carries no term or
-            // identity to fence with (#2217).
-            if load.coordinator_id.is_none() && existing.load.coordinator_id.is_some() {
-                let error = "an unbound stage load cannot replace a coordinator-bound stage";
-                return Ok(StageReadyResponse {
-                    accepted: false,
-                    removed_running_stage: false,
-                    status: failed_status_from_load(&load, error.to_string()),
-                    error: Some(error.to_string()),
-                });
-            }
-        }
         if let Some(coordinator_id) = load.coordinator_id {
             // A claimed load must be issued by the coordinator it names. The
             // wire conversion rejects a mismatched identity for remote
@@ -347,24 +337,17 @@ impl StageControlState {
             if coordinator_id != requester {
                 let error =
                     "stage load coordinator identity does not match the authenticated requester";
-                return Ok(StageReadyResponse {
-                    accepted: false,
-                    removed_running_stage: false,
-                    status: failed_status_from_load(&load, error.to_string()),
-                    error: Some(error.to_string()),
-                });
+                return Ok(rejected_load_response(&load, error.to_string()));
             }
+        }
+        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
+        if let Some(error) = self.replacement_rejection(&load) {
+            return Ok(rejected_load_response(&load, error.to_string()));
         }
         if let Err(error) =
             crate::system::native_runtime_requirement::ensure_native_runtime_available()
         {
-            let error = error.to_string();
-            return Ok(StageReadyResponse {
-                accepted: false,
-                removed_running_stage: false,
-                status: failed_status_from_load(&load, error.clone()),
-                error: Some(error),
-            });
+            return Ok(rejected_load_response(&load, error.to_string()));
         }
         anyhow::ensure!(
             load.backend == "skippy",
@@ -372,12 +355,7 @@ impl StageControlState {
             load.backend
         );
         if let Some(error) = self.validate_load_claim(&load) {
-            return Ok(StageReadyResponse {
-                accepted: false,
-                removed_running_stage: false,
-                status: failed_status_from_load(&load, error.clone()),
-                error: Some(error),
-            });
+            return Ok(rejected_load_response(&load, error));
         }
         let stage_op = runtime_events::StageLoadOperation::begin(
             &load.topology_id,
@@ -390,34 +368,29 @@ impl StageControlState {
         })
         .await
         .context("join verify local-required stage load source task")??;
-        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-        let mut effective_load = load;
-        super::configure_materialized_stage_cache();
-        if let Some(plan) = effective_load.dflash.as_mut() {
-            crate::inference::skippy::materialize_split_dflash_draft(plan, source_fetch).await;
-        }
-        settle_final_stage_dflash(&mut effective_load);
-        let package_request = effective_load.clone();
-        let mut resolved_package = None;
-        if let Some(package) = tokio::task::spawn_blocking(move || {
-            resolve_stage_load_package_with_borrowed_tensors(&package_request, source_fetch)
-        })
-        .await
-        .context("join resolve stage load package task")??
-        {
-            effective_load.model_path = Some(package.local_ref.clone());
-            effective_load.source_model_bytes = package.source_model_bytes;
-            resolved_package = Some(package);
-        }
-        // Stop a running stage only once its replacement's files are on disk,
-        // so a replacement that cannot resolve (a refused fetch, a network
-        // error) leaves the running stage serving.
+        self.launch_stage(key, load, source_fetch, stage_op).await
+    }
+
+    /// Start `load` at `key`, replacing any stage running there. Everything
+    /// that can reject the new load runs while the stage it replaces keeps
+    /// serving; only a launch-ready load takes it down.
+    async fn launch_stage(
+        &mut self,
+        key: String,
+        load: StageLoadRequest,
+        source_fetch: StageSourceFetch,
+        stage_op: runtime_events::StageLoadOperation,
+    ) -> Result<StageReadyResponse> {
+        let PreparedStageLaunch {
+            load: effective_load,
+            bind_addr,
+            package: resolved_package,
+            config,
+        } = prepare_stage_launch(load, source_fetch).await?;
         if let Some(existing) = self.stages.remove(&key) {
             existing.server.shutdown().await?;
         }
-        let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&effective_load.bind_addr)?)?;
-        effective_load.bind_addr = bind_addr.to_string();
-        let config = stage_config(&effective_load, resolved_package.as_ref())?;
+
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
             tuning: Default::default(),
@@ -572,6 +545,21 @@ impl StageControlState {
             .collect()
     }
 
+    /// Why `load` would be refused before it fetches anything, checked before
+    /// a node resolves its source or records its topology: it would replace a
+    /// stage it may not, or its coordinator claim is not current.
+    fn load_preflight_rejection(&self, load: &StageLoadRequest) -> Option<String> {
+        self.replacement_rejection(load)
+            .map(str::to_string)
+            .or_else(|| self.validate_load_claim(load))
+    }
+
+    fn replacement_rejection(&self, load: &StageLoadRequest) -> Option<&'static str> {
+        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
+        let existing = self.stages.get(&key)?;
+        stage_replacement_rejection(&existing.load, load)
+    }
+
     fn validate_load_claim(&self, load: &StageLoadRequest) -> Option<String> {
         if load.coordinator_term == 0 && load.coordinator_id.is_none() {
             return None;
@@ -617,6 +605,33 @@ impl StageStatusFilter {
                 .stage_id
                 .as_ref()
                 .is_none_or(|value| value == &load.stage_id)
+    }
+}
+
+/// Why `load` may not replace the running stage loaded by `existing`, if it
+/// may not. A coordinator-bound stage belongs to its coordinator: an unbound
+/// load carries no term or identity to fence with, and another coordinator
+/// takes the model over with a newer claim, which fences the old stage,
+/// rather than by replacing the stage in place (#2217).
+fn stage_replacement_rejection(
+    existing: &StageLoadRequest,
+    load: &StageLoadRequest,
+) -> Option<&'static str> {
+    match (existing.coordinator_id, load.coordinator_id) {
+        (Some(_), None) => Some("an unbound stage load cannot replace a coordinator-bound stage"),
+        (Some(owner), Some(coordinator)) if owner != coordinator => {
+            Some("a stage load cannot replace a stage bound to a different coordinator")
+        }
+        _ => None,
+    }
+}
+
+fn rejected_load_response(load: &StageLoadRequest, error: String) -> StageReadyResponse {
+    StageReadyResponse {
+        accepted: false,
+        removed_running_stage: false,
+        status: failed_status_from_load(load, error.clone()),
+        error: Some(error),
     }
 }
 
@@ -739,53 +754,6 @@ pub(crate) fn admitted_activation_frontier(
     load: &StageLoadRequest,
 ) -> Result<&skippy_protocol::StageAdmissionProfile> {
     skippy_api::stage_load::admitted_activation_frontier(&load.admission)
-}
-
-/// A final stage with a split DFlash plan serves the draft when this node has
-/// it, which replaces native MTP; without it the stage drops the plan (no
-/// borrowed tensors, no extra rollback depth) and keeps the native MTP the
-/// planner sent for that case. The stage reports which it did in its status.
-fn settle_final_stage_dflash(load: &mut StageLoadRequest) {
-    if load.downstream.is_some() {
-        return;
-    }
-    match load.dflash.as_ref() {
-        Some(plan) if plan.drafts() => load.native_mtp_enabled = false,
-        Some(_) => load.dflash = None,
-        None => {}
-    }
-}
-
-/// [`super::materialization::resolve_stage_load_package`] with the target
-/// tensors a drafting final stage's DFlash draft borrows added to the
-/// admitted closure, so the stage fetches the artifacts that hold them. The
-/// admission itself, which the status attests, is unchanged. When the
-/// package cannot supply them the stage resolves its admission alone and
-/// serves without the draft.
-fn resolve_stage_load_package_with_borrowed_tensors(
-    load: &StageLoadRequest,
-    fetch: StageSourceFetch,
-) -> Result<Option<super::materialization::ResolvedStagePackage>> {
-    let borrowed = load.dflash.as_ref().and_then(|plan| {
-        skippy_serving::split_dflash::borrowed_resident_tensor_ids(
-            plan,
-            load.downstream.is_none(),
-            &load.admission.resident_tensor_ids,
-        )
-    });
-    if let Some(resident_tensor_ids) = borrowed {
-        let mut widened = load.clone();
-        widened.admission.resident_tensor_ids = resident_tensor_ids;
-        match super::materialization::resolve_stage_load_package(&widened, fetch) {
-            Ok(package) => return Ok(package),
-            Err(error) => tracing::warn!(
-                stage = load.stage_id,
-                error = format!("{error:#}"),
-                "cannot fetch the tensors the split DFlash draft borrows; resolving the stage without them"
-            ),
-        }
-    }
-    super::materialization::resolve_stage_load_package(load, fetch)
 }
 
 pub(crate) fn admitted_resident_tensor_names(

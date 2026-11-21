@@ -58,6 +58,16 @@ pub(super) fn resolve_inventory_source(
         });
     }
     if is_layer_package_ref(&request.package_ref) {
+        // A peer names a layer package by its hf:// ref, or by a package
+        // directory on this node whose manifest has the requested hash.
+        if request.from_peer
+            && !crate::inference::skippy::peer_may_name_package(
+                &request.package_ref,
+                &request.manifest_sha256,
+            )
+        {
+            return None;
+        }
         // Inspecting an uncached package downloads its metadata.
         if !source_fetch.allows_fetch()
             && !crate::inference::skippy::package_metadata_is_local(&request.package_ref)
@@ -74,6 +84,21 @@ pub(super) fn resolve_inventory_source(
                 error
             })
             .ok()?;
+        // The package may have changed since its manifest was checked, or a
+        // cached revision may differ from the one the request names; its
+        // layers are reported under the requested manifest only if it is it.
+        if !identity
+            .manifest_sha256
+            .eq_ignore_ascii_case(&request.manifest_sha256)
+        {
+            tracing::debug!(
+                package_ref = request.package_ref,
+                requested = request.manifest_sha256,
+                inspected = identity.manifest_sha256,
+                "package inventory manifest differs from the requested manifest"
+            );
+            return None;
+        }
         let kind = if is_split_gguf_path(&identity.source_model_path) {
             SourceModelKind::SplitGguf
         } else {
@@ -129,14 +154,22 @@ fn resolve_direct_gguf_inventory_source(candidate: &Path) -> Option<InventorySou
     })
 }
 
+/// The GGUFs a direct-GGUF inventory looks at: the `gguf://` path, then the
+/// model id in the model store. A peer's names that are local paths are
+/// skipped, so a peer cannot learn whether a file exists here, its size or
+/// its GGUF metadata.
 pub(super) fn inventory_source_candidates(request: &StageInventoryRequest) -> Vec<PathBuf> {
+    let allowed = |name: &str| {
+        !name.is_empty()
+            && !(request.from_peer && crate::inference::skippy::names_a_local_path(name))
+    };
     let mut candidates = Vec::new();
     if let Some(path) = request.package_ref.strip_prefix("gguf://")
-        && !path.is_empty()
+        && allowed(path)
     {
         candidates.push(PathBuf::from(path));
     }
-    if !request.model_id.is_empty() {
+    if allowed(&request.model_id) {
         candidates.push(crate::models::find_model_path(&request.model_id));
     }
     candidates
