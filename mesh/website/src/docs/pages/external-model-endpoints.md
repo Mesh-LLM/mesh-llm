@@ -9,7 +9,8 @@ You do not need a second model download, a GGUF, or a separate `share` command.
 These examples assume Mesh and the provider run on the same machine and that
 Mesh's default ports (9337 API, 3131 console) are free. Start with a fresh/default
 mesh configuration; existing discovery/publication and admission settings still apply.
-Do not add `--auto` or `--publish` for this private recipe.
+Do not add `--auto` or `--publish` for this unpublished setup. To restrict membership,
+configure [admission control](/docs/pages/private-meshes/#restrict-membership).
 
 ### 1. Start your provider
 

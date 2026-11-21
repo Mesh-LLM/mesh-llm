@@ -653,7 +653,7 @@ Suggested detail views:
 For local mesh management surfaces:
 
 - show whether the local node is signed before copying an invite token
-- if running an admission-controlled private mesh, explain that only trusted owners can join
+- only when the applicable admission policy enforces an owner allowlist, explain that only trusted owners can join
 
 For now, public discovery does not need owner badges unless the data is exposed
 in Nostr or another API.
