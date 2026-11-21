@@ -1573,6 +1573,8 @@ role table is in the inventory's "Runner role matrix" section; the
 `runner_roles` contract keeps the rows equal to the workflow selector inputs.
 On main only `quality`, `linux-host`, `linux-runtime-gpu`, `static-abi` and
 `kotlin-native-sdk` can select Depot. The `composed_routing` contract checks that end to end from real plans; its acceptance table is in the inventory.
+Other roles move one at a time through
+the per-role proposals in `ci/DEPOT_MIGRATION.md`.
 
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
