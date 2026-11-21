@@ -11,6 +11,17 @@ fn exiting_probe_child() {
     }
 }
 
+/// `first_line` keeps only the first record, so a malformed later record
+/// cannot make the caller reject the whole sample.
+#[test]
+fn first_line_keeps_only_the_first_record() {
+    assert_eq!(
+        super::first_record(b"RAM 123/4096MB\n\xffbroken later record\n".to_vec()),
+        b"RAM 123/4096MB"
+    );
+    assert_eq!(super::first_record(b"no newline".to_vec()), b"no newline");
+}
+
 /// #3067: a probe tool that exits by itself must be reaped and return its
 /// output. On Windows the job-object wait used to block forever here, which
 /// hung every hardware survey.

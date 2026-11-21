@@ -70,8 +70,13 @@ impl ProbeScope {
     fn output(&self, command: &mut Command, first_line: bool) -> io::Result<Output> {
         // Files avoid pipe-reader threads that can outlive the probe, and allow
         // cancellation even when a tool closes stdout before it stops running.
-        let mut stdout = tempfile::tempfile()?;
-        let mut stderr = tempfile::tempfile()?;
+        let (mut stdout, mut stderr) = match (tempfile::tempfile(), tempfile::tempfile()) {
+            (Ok(stdout), Ok(stderr)) => (stdout, stderr),
+            // shortcut: without a usable temp directory the probe runs as before
+            // this scope existed (uncancellable), so the survey still reports
+            // hardware; a missing TMPDIR is rare on hosts that serve models.
+            _ => return command.stdin(Stdio::null()).output(),
+        };
         command.stdin(Stdio::null());
         command.stdout(stdout.try_clone()?);
         command.stderr(stderr.try_clone()?);
@@ -101,10 +106,7 @@ impl ProbeScope {
                 ));
             }
             let sampled = if first_line {
-                stdout.rewind()?;
-                let mut bytes = Vec::new();
-                stdout.read_to_end(&mut bytes)?;
-                bytes.contains(&b'\n')
+                sample(&stdout)?.contains(&b'\n')
             } else {
                 false
             };
@@ -167,7 +169,45 @@ pub fn is_cancelled() -> bool {
 }
 
 /// Sample a streaming probe, then kill and reap it instead of waiting for EOF.
+/// Returns only the first line, so a malformed later record cannot spoil it.
 pub fn first_line(command: &mut Command) -> io::Result<Vec<u8>> {
     let scope = CURRENT.with_borrow(Clone::clone).unwrap_or_default();
-    scope.output(command, true).map(|output| output.stdout)
+    scope
+        .output(command, true)
+        .map(|output| first_record(output.stdout))
+}
+
+fn first_record(mut stdout: Vec<u8>) -> Vec<u8> {
+    if let Some(end) = stdout.iter().position(|&byte| byte == b'\n') {
+        stdout.truncate(end);
+    }
+    stdout
+}
+
+/// Read what a live tool has written so far without moving the shared file
+/// cursor, which would make the tool's next write overwrite captured bytes.
+#[cfg(unix)]
+fn sample(file: &std::fs::File) -> io::Result<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let mut bytes = vec![0; usize::try_from(file.metadata()?.len()).map_err(io::Error::other)?];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        match file.read_at(&mut bytes[filled..], filled as u64)? {
+            0 => break,
+            read => filled += read,
+        }
+    }
+    bytes.truncate(filled);
+    Ok(bytes)
+}
+
+// shortcut: Windows positional reads move the cursor; the only streaming probe
+// (tegrastats) is Linux-only, so this path is not used there today.
+#[cfg(not(unix))]
+fn sample(file: &std::fs::File) -> io::Result<Vec<u8>> {
+    let mut file = file.try_clone()?;
+    file.rewind()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }

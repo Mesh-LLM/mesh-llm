@@ -168,10 +168,13 @@ impl Collector for DefaultCollector {
                     } else {
                         let intel_gpus: Option<Vec<XpuSmiGpuInfo>> = (|| {
                             for args in [["discovery", "--json"], ["discovery", "-j"]] {
-                                let out = skippy_hardware_profile::probe::output(
+                                let Ok(out) = skippy_hardware_profile::probe::output(
                                     std::process::Command::new("xpu-smi").args(args),
-                                )
-                                .ok()?;
+                                ) else {
+                                    // A timed-out or missing form may still
+                                    // succeed with the other flag spelling.
+                                    continue;
+                                };
                                 if !out.status.success() {
                                     continue;
                                 }
