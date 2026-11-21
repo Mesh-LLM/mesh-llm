@@ -202,6 +202,18 @@ fn command_summary_covers_auth_trust_and_nested_command_families() {
         ]),
         "mesh-llm auth trust add owner_id [REDACTED] --trust-store [REDACTED]"
     );
+    assert_eq!(
+        parsed_summary(&[
+            "mesh-llm",
+            "auth",
+            "trust",
+            "policy",
+            "require-owned",
+            "--trust-store",
+            "/private/trust.json"
+        ]),
+        "mesh-llm auth trust policy require-owned --trust-store [REDACTED]"
+    );
     assert!(
         parsed_summary(&["mesh-llm", "models", "show", "private/model"])
             .contains("mesh-llm models show model [REDACTED]")

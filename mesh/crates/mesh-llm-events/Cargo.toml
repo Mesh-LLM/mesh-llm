@@ -25,6 +25,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 libc = "0.2"
+same-file = "1.0.6"
 
 [dev-dependencies]
 tempfile = "3"

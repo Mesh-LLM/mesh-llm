@@ -4876,6 +4876,7 @@ dependencies = [
  "crossterm",
  "libc",
  "ratatui",
+ "same-file",
  "serde",
  "serde_json",
  "skippy-events",

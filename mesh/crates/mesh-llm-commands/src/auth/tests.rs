@@ -1,5 +1,215 @@
 use super::*;
+use mesh_llm_identity::save_trust_store;
 use serial_test::serial;
+
+struct FailedAuthAudit;
+
+impl mesh_llm_events::audit::AuditSink for FailedAuthAudit {
+    fn emit_audit(&self, event: &mesh_llm_events::audit::AuditEvent) -> std::io::Result<()> {
+        if matches!(
+            event.action.as_str(),
+            "auth_init"
+                | "auth_sign_node"
+                | "auth_rotate_node"
+                | "auth_revoke_owner"
+                | "auth_revoke_node_cert"
+                | "auth_revoke_node_id"
+                | "auth_rotate_owner"
+        ) {
+            return Err(std::io::Error::other("audit disk is full"));
+        }
+        Ok(())
+    }
+
+    fn flush(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct RestoreAuditSink(Option<std::sync::Arc<dyn mesh_llm_events::audit::AuditSink>>);
+
+impl Drop for RestoreAuditSink {
+    fn drop(&mut self) {
+        if let Some(sink) = self.0.take() {
+            mesh_llm_events::audit::set_audit_sink(sink);
+        } else {
+            mesh_llm_events::audit::clear_audit_sink();
+        }
+    }
+}
+
+fn install_failed_auth_audit() -> RestoreAuditSink {
+    let restore = RestoreAuditSink(mesh_llm_events::audit::audit_sink());
+    mesh_llm_events::audit::set_audit_sink(std::sync::Arc::new(FailedAuthAudit));
+    restore
+}
+
+struct FailFirstCertificateAudit {
+    fail_certificate: std::sync::atomic::AtomicBool,
+    attempts: std::sync::Mutex<Vec<String>>,
+}
+
+impl mesh_llm_events::audit::AuditSink for FailFirstCertificateAudit {
+    fn emit_audit(&self, event: &mesh_llm_events::audit::AuditEvent) -> std::io::Result<()> {
+        if !matches!(
+            event.action.as_str(),
+            "auth_revoke_node_cert" | "auth_revoke_node_id"
+        ) {
+            return Ok(());
+        }
+        self.attempts.lock().unwrap().push(event.action.clone());
+        if event.action == "auth_revoke_node_cert"
+            && self
+                .fail_certificate
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(std::io::Error::other("certificate audit write failed"));
+        }
+        Ok(())
+    }
+
+    fn flush(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[test]
+#[serial]
+fn mixed_revocation_attempts_both_audits_after_first_write_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trust-store.json");
+    let node_id = hex::encode(SecretKey::generate().public().as_bytes());
+    let sink = std::sync::Arc::new(FailFirstCertificateAudit {
+        fail_certificate: std::sync::atomic::AtomicBool::new(true),
+        attempts: std::sync::Mutex::new(Vec::new()),
+    });
+    let _restore = RestoreAuditSink(mesh_llm_events::audit::audit_sink());
+    mesh_llm_events::audit::set_audit_sink(sink.clone());
+
+    let error = run_revoke_node(
+        Some("cert-a".into()),
+        Some(node_id.clone()),
+        None,
+        Some(path.clone()),
+    )
+    .expect_err("the failed audit write must still reach the caller");
+    assert!(error.to_string().contains("saved"), "{error:#}");
+    assert!(format!("{error:#}").contains("certificate audit write failed"));
+    let saved = load_effective_trust_store(&path).unwrap();
+    assert_eq!(saved.revoked_node_certs[0].cert_id, "cert-a");
+    assert_eq!(saved.revoked_node_ids[0].node_endpoint_id, node_id);
+    assert_eq!(
+        *sink.attempts.lock().unwrap(),
+        ["auth_revoke_node_cert", "auth_revoke_node_id"]
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn revocation_audit_write_failure_reports_saved_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trust-store.json");
+    let _restore = install_failed_auth_audit();
+
+    let owner_error = run_revoke_owner("owner-a".into(), None, Some(path.clone()))
+        .expect_err("a saved revocation must report its failed audit write");
+    assert!(owner_error.to_string().contains("saved"), "{owner_error:#}");
+    assert_eq!(
+        load_effective_trust_store(&path)
+            .unwrap()
+            .revoked_owners
+            .len(),
+        1
+    );
+
+    let cert_error = run_revoke_node(Some("cert-a".into()), None, None, Some(path.clone()))
+        .expect_err("a saved certificate revocation must report its failed audit write");
+    assert!(cert_error.to_string().contains("saved"), "{cert_error:#}");
+    assert_eq!(
+        load_effective_trust_store(&path)
+            .unwrap()
+            .revoked_node_certs
+            .len(),
+        1
+    );
+
+    let node_id = hex::encode(SecretKey::generate().public().as_bytes());
+    let node_error = run_revoke_node(None, Some(node_id), None, Some(path.clone()))
+        .expect_err("a saved node revocation must report its failed audit write");
+    assert!(node_error.to_string().contains("saved"), "{node_error:#}");
+    assert_eq!(
+        load_effective_trust_store(&path)
+            .unwrap()
+            .revoked_node_ids
+            .len(),
+        1
+    );
+    mesh_llm_events::audit::flush_audit().await.unwrap();
+}
+
+#[test]
+#[serial]
+fn keystore_audit_write_failure_reports_saved_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner_path = directory.path().join("owner.json");
+    let node_path = directory.path().join("node.key");
+    let certificate_path = directory.path().join("node.json");
+    let trust_path = directory.path().join("trust.json");
+    let _restore = install_failed_auth_audit();
+
+    let error = run_init(Some(owner_path.clone()), false, true, false).unwrap_err();
+    assert!(error.to_string().contains("saved"), "{error:#}");
+    let original_owner = load_owner_keypair_from_path(&owner_path)
+        .unwrap()
+        .owner_id()
+        .to_string();
+    save_node_key_to_path(&node_path, &SecretKey::generate()).unwrap();
+
+    let error = run_sign_node(
+        Some(owner_path.clone()),
+        Some(node_path.clone()),
+        Some(certificate_path.clone()),
+        None,
+        None,
+        1,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("saved"), "{error:#}");
+    let original_certificate = load_node_ownership(&certificate_path).unwrap();
+
+    let error = run_rotate_node(
+        Some(owner_path.clone()),
+        Some(node_path.clone()),
+        Some(certificate_path.clone()),
+        None,
+        None,
+        1,
+        false,
+        None,
+        Some(trust_path),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("saved"), "{error:#}");
+    let rotated_certificate = load_node_ownership(&certificate_path).unwrap();
+    assert_ne!(
+        rotated_certificate.claim.cert_id,
+        original_certificate.claim.cert_id
+    );
+
+    let error = run_rotate_owner(Some(owner_path.clone()), true, true).unwrap_err();
+    assert!(error.to_string().contains("saved"), "{error:#}");
+    assert_ne!(
+        load_owner_keypair_from_path(&owner_path)
+            .unwrap()
+            .owner_id()
+            .to_string(),
+        original_owner
+    );
+}
 
 fn temporary_auth_test_dir(label: &str) -> std::path::PathBuf {
     let path =
