@@ -43,7 +43,7 @@ on:
         default: ''
         type: string
       force_hosted:
-        description: Force GitHub-hosted placement for runner-contract changes.
+        description: Effective hosted override from the caller (planner hosted_runner_required or release force_hosted_runners); wins over use_depot and every repository Depot gate.
         required: false
         default: false
         type: boolean
@@ -75,7 +75,7 @@ on:
         default: 45
         type: number
       use_depot:
-        description: Opt into the guarded main-only Depot canary.
+        description: Manual trusted-main Depot opt-in forwarded by the caller; ignored when force_hosted is true and denied for forks, non-main refs and PR-origin dispatches.
         required: false
         default: false
         type: boolean

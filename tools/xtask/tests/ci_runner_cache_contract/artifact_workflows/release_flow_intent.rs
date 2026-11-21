@@ -198,9 +198,11 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
     assert_eq!(input(selector, "ref"), Some("${{ github.ref }}"));
     assert_eq!(
         input(selector, "depot_main_enabled"),
-        // Rolling previews pass force_hosted_runners=true so main dispatches stay
-        // on GitHub-hosted runners, like tagged releases from release/* refs.
-        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}")
+        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
+    );
+    assert_eq!(
+        input(selector, "force_hosted"),
+        Some("${{ inputs.force_hosted_runners == true }}")
     );
     assert_eq!(
         input(selector, "manual_use_depot"),
@@ -476,12 +478,7 @@ fn graph_release_smokes_consume_composed_products_and_verified_extraction() {
 fn graph_release_cpu_cache_authority_uses_the_selected_architecture_runner() {
     let doc = document("release.yml");
     let j = job(&doc, "build_native_runtime");
-    assert_eq!(
-        text(j, "runs-on"),
-        Some(
-            "${{ matrix.target == 'x86_64-unknown-linux-gnu' && needs.metadata.outputs.runner_8 || matrix.target == 'aarch64-unknown-linux-gnu' && needs.metadata.outputs.runner_arm_8 || matrix.os }}"
-        )
-    );
+    assert_eq!(text(j, "runs-on"), Some("${{ matrix.os }}"));
     let cache = action(j, "./.github/actions/configure-sccache-gha");
     assert_eq!(
         input(cache, "allow_native_github_cache"),

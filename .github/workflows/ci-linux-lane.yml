@@ -37,7 +37,7 @@ on:
         default: "[]"
         type: string
       use_depot:
-        description: Opt into the guarded main-only Depot canary.
+        description: Manual trusted-main Depot opt-in forwarded by the caller; ignored when force_hosted is true and denied for forks, non-main refs and PR-origin dispatches.
         required: false
         default: false
         type: boolean
@@ -140,6 +140,7 @@ jobs:
       runner_size: '8'
       retention_days: 1
       timeout_minutes: 60
+      use_depot: ${{ inputs.use_depot }}
 
   rust_tests:
     name: Rust tests
@@ -327,6 +328,7 @@ jobs:
       static_abi_artifact_path: ci-sdk-kotlin-static-abi
       runner_size: '8'
       retention_days: 1
+      use_depot: ${{ inputs.use_depot }}
 
   sdk_rust:
     name: Linux rust SDK smoke
