@@ -817,7 +817,12 @@ fn test_a_gpu_flavored_install_prefers_its_own_archive_while_one_exists() {
 fn commands_run_after_update(release: &ReleaseInfo, install_succeeds: bool) -> Vec<String> {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = temp_dir("after-update");
+    // The two callers run in parallel and the clock in temp_dir's name can tie.
+    let dir = temp_dir(if install_succeeds {
+        "after-update-ok"
+    } else {
+        "after-update-failed"
+    });
     let log = dir.join("commands.log");
     let host = dir.join(mesh_binary_name());
     let exit = if install_succeeds { 0 } else { 1 };

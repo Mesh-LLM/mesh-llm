@@ -302,6 +302,8 @@ fn a_runtime_built_for_another_platform_is_refused() {
     without_runtime_overrides!(a_runtime_built_for_another_platform_is_refused);
     let mut artifact = compatible_artifact();
     artifact.platform.os = "plan9".to_string();
+    // Skippy rejects a glibc floor on a non-Linux runtime before it compares platforms.
+    artifact.platform.min_glibc = None;
     artifact.platform.target = Some("riscv64-unknown-plan9".to_string());
     assert!(refusal(Release::of(artifact)).contains("no compatible native runtime found"));
 }
@@ -324,7 +326,8 @@ fn an_archive_holding_a_different_runtime_than_its_catalog_entry_is_refused() {
             runtime.skippy_abi = "0.0.0".to_string()
         }),
         ("platform", |runtime| {
-            runtime.platform.os = "plan9".to_string()
+            runtime.platform.os = "plan9".to_string();
+            runtime.platform.min_glibc = None;
         }),
         ("backend", |runtime| {
             runtime.backend = NativeRuntimeBackend::metal()
