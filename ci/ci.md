@@ -1544,7 +1544,7 @@ role against hosted and verifies the rollback. Unset/false gates with no
 manual opt-in remain hosted. No repository variable, runner group, Depot setting,
 PR exception deadline, cache permission or provider allowlist changes here.
 The Linux CPU runtime cache producer remains hosted even when other eligible
-Linux jobs select Depot. Live qualification and activation belong to #2789.
+Linux jobs select Depot. Live qualification belongs to #2789.
 
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
