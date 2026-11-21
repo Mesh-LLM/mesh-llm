@@ -19,7 +19,7 @@ pub(super) async fn run(
             .await;
         session.finish(false);
         usage_reporting::shutdown().await;
-        probe_shutdown?;
+        report_probe_shutdown(probe_shutdown);
         return Err(error);
     }
     super::install_cli_operational_audit_bridge();
@@ -32,7 +32,20 @@ pub(super) async fn run(
     let outcome =
         mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await;
     let probe_shutdown = hardware_profile.shutdown().await;
-    session.finish(outcome.is_ok() && probe_shutdown.is_ok());
+    session.finish(outcome.is_ok());
     usage_reporting::shutdown().await;
-    outcome.and(probe_shutdown)
+    report_probe_shutdown(probe_shutdown);
+    outcome
+}
+
+/// The survey is best-effort telemetry: failing to stop a probe tool is worth
+/// reporting but must not turn a clean shutdown into a failed exit (#3067).
+fn report_probe_shutdown(result: anyhow::Result<()>) {
+    if let Err(error) = result {
+        use std::io::Write;
+        let _ = writeln!(
+            mesh_llm_events::console_err(),
+            "warning: could not stop the hardware survey cleanly: {error:#}"
+        );
+    }
 }
