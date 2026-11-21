@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshNode, Peer } from '@/features/app-tabs/types'
-import { peerPlacementProfile, reconcileDashboardMeshNodes } from '@/features/network/lib/dashboard-mesh-nodes'
+import {
+  buildDashboardMeshNodes,
+  meshNodeForPeer,
+  peerPlacementProfile,
+  reconcileDashboardMeshNodes
+} from '@/features/network/lib/dashboard-mesh-nodes'
 import { chooseClusteredMeshNodePosition } from '@/features/network/lib/mesh-placement'
 
 const selfSeed: MeshNode = {
@@ -250,5 +255,47 @@ describe('reconcileDashboardMeshNodes', () => {
     )
 
     expect(distanceBetweenPeers(nextNodes, 'new-worker', 'later-survivor')).toBeGreaterThanOrEqual(10)
+  })
+})
+
+describe('peers that share a hostname', () => {
+  // A node with no reported hostname is seeded as "localhost", and remote
+  // machines report that same hostname often enough to collide with it.
+  const localhostSeed: MeshNode = { id: 'self-node', label: 'localhost', x: 50, y: 50, status: 'online', role: 'self' }
+  const peers = [
+    peer({ id: 'self-node', hostname: 'localhost', region: '', role: 'you', nodeState: 'standby' }),
+    peer({ id: 'remote-client', hostname: 'localhost', region: '', role: 'client', nodeState: 'client', vramGB: 0 })
+  ]
+
+  function expectSeparateNodes(nodes: MeshNode[]) {
+    expect(nodes.map((node) => node.id)).toEqual(['self-node', 'remote-client'])
+    expect(nodes.map((node) => node.subLabel)).toEqual(['LOCAL', 'CLIENT'])
+    expect(nodes[1]).toEqual(expect.objectContaining({ peerId: 'remote-client', role: 'peer' }))
+    expect({ x: nodes[1].x, y: nodes[1].y }).not.toEqual({ x: nodes[0].x, y: nodes[0].y })
+  }
+
+  it('builds a separate node for a remote peer with the same hostname as this node', () => {
+    expectSeparateNodes(buildDashboardMeshNodes(peers, 'mesh-h', [localhostSeed]))
+  })
+
+  it('keeps the nodes separate when the status refreshes', () => {
+    const initialNodes = reconcileDashboardMeshNodes([], peers, 'mesh-h', [localhostSeed])
+    const nextNodes = reconcileDashboardMeshNodes(initialNodes, peers, 'mesh-h', [localhostSeed])
+
+    expectSeparateNodes(initialNodes)
+    expectSeparateNodes(nextNodes)
+  })
+
+  it('does not resolve a peer to a node that belongs to another peer', () => {
+    const selfNodes = buildDashboardMeshNodes([peers[0]], 'mesh-h', [localhostSeed])
+
+    expect(meshNodeForPeer(peers[1], selfNodes, 'mesh-h').id).toBe('remote-client')
+  })
+
+  it('still pins a peer by hostname to a seed whose owner is not in the mesh', () => {
+    const seed: MeshNode = { id: 'desk', peerId: 'p1', label: 'CARRACK', x: 12, y: 34, status: 'online' }
+    const nodes = buildDashboardMeshNodes([peer({ id: 'p9', hostname: 'carrack' })], 'mesh-h', [seed])
+
+    expect(nodes).toEqual([expect.objectContaining({ id: 'desk', peerId: 'p9', x: 12, y: 34 })])
   })
 })

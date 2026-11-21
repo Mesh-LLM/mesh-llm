@@ -5,12 +5,20 @@ import { chooseClusteredMeshNodePosition, type MeshPlacementProfile } from '@/fe
 
 export const DASHBOARD_MESH_ID = 'dashboard-mesh'
 
-function pinnedMeshNodeForPeer(peer: Peer, meshNodeSeeds: MeshNode[] = MESH_NODES) {
+// Hostnames are not unique across a mesh ("localhost" is common), so a hostname
+// may only match a node that no other peer owns by id.
+function seedBelongsToAnotherPeer(seed: MeshNode, peer: Peer, peerIds: ReadonlySet<string>) {
+  return [seed.peerId, seed.id].some((id) => id != null && id !== peer.id && peerIds.has(id))
+}
+
+function pinnedMeshNodeForPeer(peer: Peer, peerIds: ReadonlySet<string>, meshNodeSeeds: MeshNode[] = MESH_NODES) {
   const normalizedHostname = peer.hostname.toLowerCase()
 
   return (
     meshNodeSeeds.find((node) => node.peerId === peer.id || node.id === peer.id) ??
-    meshNodeSeeds.find((node) => node.label.toLowerCase() === normalizedHostname)
+    meshNodeSeeds.find(
+      (node) => node.label.toLowerCase() === normalizedHostname && !seedBelongsToAnotherPeer(node, peer, peerIds)
+    )
   )
 }
 
@@ -84,7 +92,9 @@ export function meshNodeForPeer(peer: Peer, meshNodes: MeshNode[], meshId = DASH
 
   return (
     meshNodes.find((node) => node.peerId === peer.id || node.id === peer.id) ??
-    meshNodes.find((node) => node.label.toLowerCase() === normalizedHostname) ??
+    meshNodes.find(
+      (node) => node.label.toLowerCase() === normalizedHostname && (node.peerId == null || node.peerId === peer.id)
+    ) ??
     peerToMeshNode(
       peer,
       chooseClusteredMeshNodePosition(meshId, meshNodes.length + 1, peerPlacementProfile(peer), meshNodes)
@@ -115,8 +125,10 @@ export function buildDashboardMeshNodes(
   meshId = DASHBOARD_MESH_ID,
   meshNodeSeeds: MeshNode[] = MESH_NODES
 ) {
+  const peerIds = new Set(peers.map((peer) => peer.id))
+
   return peers.reduce<MeshNode[]>((meshNodes, peer, index) => {
-    const pinnedNode = pinnedMeshNodeForPeer(peer, meshNodeSeeds)
+    const pinnedNode = pinnedMeshNodeForPeer(peer, peerIds, meshNodeSeeds)
     const profile = peerPlacementProfile(peer)
 
     if (pinnedNode) {
@@ -140,7 +152,7 @@ export function reconcileDashboardMeshNodes(
   const survivorNodes = previousNodes.filter((node) => livePeerIds.has(node.peerId ?? node.id))
 
   return peers.reduce<MeshNode[]>((meshNodes, peer) => {
-    const pinnedNode = pinnedMeshNodeForPeer(peer, meshNodeSeeds)
+    const pinnedNode = pinnedMeshNodeForPeer(peer, livePeerIds, meshNodeSeeds)
     const previousNode = existingMeshNodeForPeer(peer, previousNodes)
 
     if (pinnedNode) {

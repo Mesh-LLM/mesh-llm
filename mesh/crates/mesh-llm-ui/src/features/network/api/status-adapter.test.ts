@@ -114,7 +114,12 @@ describe('adaptStatusToDashboard', () => {
       })
     ])
     expect(dashboard.meshNodeSeeds[0]).toEqual(
-      expect.objectContaining({ id: '16ce0bb4de', firstJoinedMeshTs: 1_700_000_000_000 })
+      expect.objectContaining({
+        id: '16ce0bb4de',
+        label: 'public-host',
+        hostname: 'public-host',
+        firstJoinedMeshTs: 1_700_000_000_000
+      })
     )
   })
 
