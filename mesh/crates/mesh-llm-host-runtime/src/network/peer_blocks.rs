@@ -955,6 +955,7 @@ mod tests {
             web_ui_primary_tab: None,
             allow_peer_blocks,
             allow_inference_observation: None,
+            exclusive_gpu: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),

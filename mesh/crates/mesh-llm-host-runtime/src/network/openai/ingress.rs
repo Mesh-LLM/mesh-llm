@@ -789,6 +789,27 @@ async fn route_to_plugin_endpoint(
     model_name: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    let _gpu_handoff = if ctx
+        .node
+        .plugin_exclusive_gpu_enabled(&endpoint.plugin_name)
+        .await
+        && let Some(lifecycle) = ctx.node.native_model_lifecycle.get()
+    {
+        match lifecycle.acquire_exclusive_gpu_handoff().await {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                tracing::warn!(
+                    plugin = %endpoint.plugin_name,
+                    model = %model_name,
+                    %error,
+                    "exclusive_gpu handoff failed before forwarding to plugin endpoint"
+                );
+                return proxy::RouteDispatchOutcome::Failed("plugin_gpu_handoff_failed");
+            }
+        }
+    } else {
+        None
+    };
     let tiered_call = plugin_manager.begin_tiered_invocation(
         &endpoint.plugin_name,
         crate::mesh::request_tier::current_request_tier(),
@@ -1890,3 +1911,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ingress_tests/telemetry_rejection.rs"]
 mod telemetry_rejection;
+
+#[cfg(test)]
+#[path = "ingress_tests/exclusive_gpu.rs"]
+mod exclusive_gpu;

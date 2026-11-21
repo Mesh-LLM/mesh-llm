@@ -498,6 +498,7 @@ impl ConfigEditor {
                     web_ui_primary_tab: None,
                     allow_peer_blocks: None,
                     allow_inference_observation: None,
+                    exclusive_gpu: None,
                     openai_exchange_grant: None,
                     command: None,
                     args: Vec::new(),
@@ -732,6 +733,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn allow_inference_observation(&mut self, allowed: Option<bool>) -> &mut Self {
         self.plugin.allow_inference_observation = allowed;
+        self
+    }
+
+    pub fn exclusive_gpu(&mut self, enabled: Option<bool>) -> &mut Self {
+        self.plugin.exclusive_gpu = enabled;
         self
     }
 
@@ -1395,6 +1401,26 @@ ctx_size = 8192
         let deserialized = parse_config_toml(&serialized).expect("should deserialize");
         assert!(!deserialized.plugins[0].peer_blocks_allowed());
         assert!(deserialized.plugins[1].peer_blocks_allowed());
+    }
+
+    #[test]
+    fn plugin_exclusive_gpu_is_off_unless_set() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor.upsert_plugin("unset").unwrap();
+        editor
+            .upsert_plugin("handoff")
+            .unwrap()
+            .exclusive_gpu(Some(true));
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let toml_str = serialized.to_string();
+        assert!(!toml_str.contains("name = \"unset\"\nexclusive_gpu"));
+        assert!(toml_str.contains("name = \"handoff\"\nexclusive_gpu = true"));
+
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert!(!deserialized.plugins[0].exclusive_gpu_enabled());
+        assert!(deserialized.plugins[1].exclusive_gpu_enabled());
     }
 
     #[test]

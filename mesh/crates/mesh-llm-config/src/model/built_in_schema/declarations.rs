@@ -347,6 +347,17 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.allow_inference_observation"),
             ConfigValueSchema::Boolean,
         ),
+        {
+            // Read on each plugin inference request, so toggling takes effect
+            // immediately without restarting the node.
+            let mut setting = plugin_setting(
+                &format!("{plugin_prefix}.exclusive_gpu"),
+                ConfigValueSchema::Boolean,
+            );
+            setting.apply_mode = ConfigApplyMode::DynamicApply;
+            setting.restart_scope = ConfigRestartScope::None;
+            setting
+        },
         plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,

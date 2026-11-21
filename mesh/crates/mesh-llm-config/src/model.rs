@@ -1863,6 +1863,11 @@ pub struct PluginConfigEntry {
     /// unless the operator turns it on. Read when the plugin subscribes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_inference_observation: Option<bool>,
+    /// Whether the host should unload idle on-demand native models and hold
+    /// exclusive local GPU access while forwarding inference requests to this
+    /// plugin. Host-owned; off unless the operator turns it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusive_gpu: Option<bool>,
     /// Explicit operator lifecycle permissions. An absent grant gives no access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_exchange_grant: Option<crate::OpenAiExchangeGrant>,
@@ -1924,6 +1929,12 @@ impl PluginConfigEntry {
     /// plugin subscribe to the local inference observation feed.
     pub const fn inference_observation_allowed(&self) -> bool {
         matches!(self.allow_inference_observation, Some(true))
+    }
+
+    /// Off unless the operator has explicitly opted in: only then does routing
+    /// to this plugin unload on-demand native models for exclusive GPU access.
+    pub const fn exclusive_gpu_enabled(&self) -> bool {
+        matches!(self.exclusive_gpu, Some(true))
     }
 }
 

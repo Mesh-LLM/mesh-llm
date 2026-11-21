@@ -4,6 +4,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl Node {
+    /// Whether the operator enabled `exclusive_gpu = true` for `plugin_id` in
+    /// the live config, opting into unloading on-demand native models before
+    /// routing inference requests to this plugin.
+    pub(crate) async fn plugin_exclusive_gpu_enabled(&self, plugin_id: &str) -> bool {
+        self.config_state
+            .lock()
+            .await
+            .config()
+            .plugins
+            .iter()
+            .any(|plugin| plugin.name == plugin_id && plugin.exclusive_gpu_enabled())
+    }
+
     pub(crate) async fn set_plugin_web_ui_enabled(
         &self,
         plugin_name: &str,
@@ -37,6 +50,7 @@ impl Node {
                     web_ui_primary_tab: None,
                     allow_peer_blocks: None,
                     allow_inference_observation: None,
+                    exclusive_gpu: None,
                     openai_exchange_grant: None,
                     command: None,
                     args: Vec::new(),
@@ -113,6 +127,7 @@ impl Node {
                     web_ui_primary_tab: Some(primary_tab_enabled),
                     allow_peer_blocks: None,
                     allow_inference_observation: None,
+                    exclusive_gpu: None,
                     openai_exchange_grant: None,
                     command: None,
                     args: Vec::new(),
@@ -202,6 +217,7 @@ impl Node {
                         web_ui_primary_tab: None,
                         allow_peer_blocks: None,
                         allow_inference_observation: None,
+                        exclusive_gpu: None,
                         openai_exchange_grant: None,
                         command: None,
                         args: Vec::new(),

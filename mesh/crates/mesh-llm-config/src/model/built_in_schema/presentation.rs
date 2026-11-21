@@ -952,6 +952,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.exclusive_gpu" => Some(
+            sp(
+                "Exclusive GPU handoff",
+                "Unload on-demand native models and hold exclusive GPU residency while forwarding inference requests to this plugin. Off unless turned on.",
+                PLUGIN_HOST_CATEGORY,
+                19,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",

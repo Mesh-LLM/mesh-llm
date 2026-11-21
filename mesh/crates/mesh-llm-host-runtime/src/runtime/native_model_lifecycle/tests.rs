@@ -137,6 +137,99 @@ mod requests {
         assert!(request.await.unwrap().is_some());
     }
 
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_drains_native_lease_unloads_and_reloads_after_release() {
+        // Large idle timeout (300s) proves handoff unloads immediately instead of waiting for idle eviction.
+        let (lifecycle, mut intents, targets) = fixture(300);
+
+        // 1. Load native model and hold an active request lease.
+        let active = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire("test").await.unwrap().unwrap() })
+        };
+        finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
+        let active_lease = active.await.unwrap();
+
+        // 2. Start exclusive_gpu plugin handoff: must wait while `active_lease` is held.
+        let handoff_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire_exclusive_gpu_handoff().await.unwrap() })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            intents.try_recv().is_err(),
+            "handoff must not unload while native RequestLease is active"
+        );
+
+        // 3. Dropping the active native lease lets handoff proceed and unload immediately.
+        drop(active_lease);
+        let ModelIntent::Unload {
+            target,
+            completion: Some(completion),
+            options,
+            ..
+        } = intents.recv().await.unwrap()
+        else {
+            panic!("expected unload intent for exclusive_gpu handoff")
+        };
+        assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
+        assert!(!options.force);
+        targets.send_modify(|t| {
+            t.targets.clear();
+        });
+        completion
+            .send(Ok(crate::api::RuntimeUnloadResponse {
+                model: "loaded-test".into(),
+                instance_id: "runtime-1".into(),
+                unloaded: true,
+            }))
+            .unwrap();
+        let handoff_lease = handoff_task.await.unwrap();
+
+        // 4. While the plugin holds `handoff_lease`, a new native request must block without loading.
+        let reload_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire("test").await.unwrap().unwrap() })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            intents.try_recv().is_err(),
+            "native reload must wait until exclusive_gpu handoff lease is dropped"
+        );
+
+        // 5. Releasing `handoff_lease` allows the waiting native request to reload cleanly.
+        drop(handoff_lease);
+        finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
+        let reloaded = reload_task.await.unwrap();
+        assert_eq!(lifecycle.execution_model("test"), "loaded-test");
+        drop(reloaded);
+    }
+
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_propagates_unload_failure_without_dropping_instance() {
+        let (lifecycle, mut intents, _targets) = fixture(300);
+        *lifecycle.models["test"].instance.lock().unwrap() =
+            Some(("runtime-1".into(), "loaded-test".into(), 1234));
+
+        let handoff_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire_exclusive_gpu_handoff().await })
+        };
+        let ModelIntent::Unload {
+            completion: Some(completion),
+            ..
+        } = intents.recv().await.unwrap()
+        else {
+            panic!("expected unload intent")
+        };
+        completion
+            .send(Err(anyhow::anyhow!("maintained owner intent")))
+            .unwrap();
+        let err = handoff_task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("failed to unload native model"));
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_some());
+    }
+
     /// Rejections and lost completions wait another idle interval before retrying.
     #[tokio::test]
     async fn deferred_idle_unloads_back_off_before_retrying() {

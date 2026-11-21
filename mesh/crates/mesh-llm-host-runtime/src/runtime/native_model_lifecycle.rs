@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use mesh_llm_config::managed_models::{ModelLifecycle, ModelLoadPolicy};
-use tokio::sync::{Mutex, OwnedMutexGuard, OwnedRwLockReadGuard, RwLock, mpsc, watch};
+use tokio::sync::{
+    Mutex, OwnedMutexGuard, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, mpsc, watch,
+};
 
 pub(in crate::runtime) mod sources;
 type LoadResult = Option<Result<(), String>>;
@@ -36,6 +38,14 @@ struct Residency {
 pub(crate) struct RequestLease {
     residency: Arc<Residency>,
     _gate: OwnedRwLockReadGuard<()>,
+}
+
+/// Exclusive local GPU lease held while forwarding to an `exclusive_gpu`
+/// inference plugin. Unloads all resident on-demand native models before
+/// returning and blocks native reloads until dropped.
+#[derive(Debug)]
+pub(crate) struct ExclusiveGpuHandoffLease {
+    _gates: Vec<OwnedRwLockWriteGuard<()>>,
 }
 
 impl Drop for RequestLease {
@@ -197,17 +207,75 @@ impl NativeModelLifecycle {
         let model = model.clone();
         let residency = residency.clone();
         tokio::time::timeout(LOAD_TIMEOUT, async {
-            let gate = residency.gate.clone().read_owned().await;
-            if !ready(&self.targets(), &model, true) {
-                self.ensure_loaded(model, residency.clone()).await?;
+            loop {
+                let gate = residency.gate.clone().read_owned().await;
+                if ready(&self.targets(), &model, true) {
+                    return Ok(Some(RequestLease {
+                        residency,
+                        _gate: gate,
+                    }));
+                }
+                // Release the read lock before loading so a waiting write lock
+                // (`acquire_exclusive_gpu_handoff`) cannot deadlock with
+                // `ensure_loaded`'s inner read acquisition under writer-preferring RwLock.
+                drop(gate);
+                self.ensure_loaded(model.clone(), residency.clone()).await?;
             }
-            Ok(Some(RequestLease {
-                residency,
-                _gate: gate,
-            }))
         })
         .await
         .context("native model residency wait timed out")?
+    }
+
+    /// Wait for in-flight on-demand native requests to drain, unload any loaded
+    /// on-demand native instances immediately, and hold exclusive write gates so
+    /// native models stay unloaded until the plugin request completes.
+    pub(crate) async fn acquire_exclusive_gpu_handoff(
+        self: &Arc<Self>,
+    ) -> Result<ExclusiveGpuHandoffLease> {
+        tokio::time::timeout(LOAD_TIMEOUT, async {
+            let mut gates = Vec::with_capacity(self.models.len());
+            for (model, residency) in &self.models {
+                let operation = residency.operation.clone().lock_owned().await;
+                let gate = residency.gate.clone().write_owned().await;
+                let instance = residency
+                    .instance
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let Some((instance_id, _, _)) = instance {
+                    let (completion, result) = tokio::sync::oneshot::channel();
+                    let intent = ModelIntent::Unload {
+                        intent_id: None,
+                        canonical_model_ref: Some(model.clone()),
+                        target: UnloadTarget::Instance(instance_id),
+                        options: UnloadOptions {
+                            force: false,
+                            ..Default::default()
+                        },
+                        source: IntentSource::NativeLifecycle,
+                        completion: Some(completion),
+                    };
+                    self.intents
+                        .send(intent)
+                        .await
+                        .context("native model lifecycle unavailable for plugin GPU handoff")?;
+                    result
+                        .await
+                        .context("native model unload interrupted during plugin GPU handoff")?
+                        .with_context(|| {
+                            format!(
+                                "failed to unload native model '{model}' for exclusive_gpu plugin handoff"
+                            )
+                        })?;
+                    *residency.instance.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+                drop(operation);
+                gates.push(gate);
+            }
+            Ok(ExclusiveGpuHandoffLease { _gates: gates })
+        })
+        .await
+        .context("exclusive GPU handoff wait timed out")?
     }
 
     /// Spawn only the real load; cancelled callers leave no queued acquisition jobs.
