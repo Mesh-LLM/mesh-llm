@@ -33,7 +33,7 @@ built-in runtime default.
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
 | `MESH_LLM_NO_UPDATE_CHECK` | Overrides `updates.check`; `1` turns the release checks off, `0` on |
 | `MESH_LLM_NO_RUNTIME_DOWNLOAD` | Overrides `runtime.native_runtime.download`; `1` turns runtime downloads at startup off, `0` on |
-| `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
+| `MESH_LLM_JOIN` | Join token for a published or unpublished mesh; equivalent to one `--join` |
 | `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 | `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` | Whole seconds the local proxy waits for the first byte of a local model response; `0` removes this local deadline. Defaults to 600. The frontend independently applies `MESH_OPENAI_BACKEND_TIMEOUT_SECS` (also 600 by default), so raising only the proxy timeout does not extend the frontend deadline. A non-streaming request's first byte is its whole completion. For long prefills, raise the backend timeout to the required duration; with this local setting unset, a longer configured backend timeout gets a one-second margin. If setting the local timeout explicitly, set it longer than the backend timeout |
 

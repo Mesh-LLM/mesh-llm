@@ -9,7 +9,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Field-by-field `config.toml` reference | [Canonical configuration reference](https://meshllm.cloud/docs/pages/config-reference/) |
 | PR8 host-integration source/sink evidence | [CONFIGURATION_PR8_CLOSEOUT_AUDIT.md](CONFIGURATION_PR8_CLOSEOUT_AUDIT.md) |
 | Install, run, service mode, model storage | [USAGE.md](USAGE.md) |
-| Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
+| Private meshes, published meshes, public joining | [MESHES.md](MESHES.md#ownership-and-admission-control) |
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | Pin an API request to a provider, inspect prices, or exclude peers | [PROVIDER_SELECTION.md](PROVIDER_SELECTION.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |

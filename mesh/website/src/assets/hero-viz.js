@@ -13,7 +13,7 @@
   var PANEL_COLLAPSE_DELAY = 860;
   var RIM_TRACE_START = 7200;
   var RIM_TRACE_DURATION = 640;
-  var TITLE_FINAL_PREFIX = 'Run any model across nodes ';
+  var TITLE_FINAL_PREFIX = 'Run models across machines ';
   var TITLE_PHRASES = ['in your business', 'in your homelab', 'on the internet'];
   var SUBTITLE_DOT_REST = 'rgba(212,212,216,0.88)';
   var SUBTITLE_DOT_HOT = '#ff4b4b';
