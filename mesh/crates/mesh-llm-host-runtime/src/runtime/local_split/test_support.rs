@@ -97,6 +97,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         load_mode,
         upstream: None,
         downstream: None,
+        max_request_tier: None,
     }
 }
 

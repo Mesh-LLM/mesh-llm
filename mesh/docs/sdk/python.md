@@ -20,7 +20,7 @@ async with Node.create(mode="client", auto_join=True) as node:
     })
 ```
 
-For a private mesh, use `join_tokens=(token,)` instead of `auto_join=True`.
+To join a mesh by token, use `join_tokens=(token,)` instead of `auto_join=True`.
 To serve, use `mode="serve"` or `mode="combined"` and pass
 `models=("publisher/model:quant",)`. Serving requires an installed matching
 native runtime. Set `owner_key_path` to a Mesh LLM owner keystore path when
@@ -30,6 +30,9 @@ owner identity is required. The old in-memory keypair hex constructor and
 Streaming is available through `node.inference.stream_chat_completions(...)`
 and `stream_responses(...)`; each event carries the original SSE data and raw
 frame. See [native runtime guidance](../SDK.md#native-runtime-artifacts).
+
+Join tokens locate a mesh; private membership requires enforced
+[admission control](../MESHES.md#ownership-and-admission-control).
 
 ## Local runtime capacity
 

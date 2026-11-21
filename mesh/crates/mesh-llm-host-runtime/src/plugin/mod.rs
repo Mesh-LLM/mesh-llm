@@ -44,6 +44,7 @@ mod startup;
 mod startup_tests;
 mod supervision;
 mod support;
+pub(crate) mod tiered_invocations;
 mod transport;
 mod types;
 mod web_ui;
@@ -153,6 +154,7 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     pub(in crate::plugin) shutting_down: AtomicBool,
     pub(in crate::plugin) private_invocations: private_invocations::PrivateInvocations,
+    pub(in crate::plugin) tiered_invocations: tiered_invocations::TieredInvocations,
     #[cfg(test)]
     pub(in crate::plugin) bridged_plugins: BTreeSet<String>,
     #[cfg(test)]
@@ -252,6 +254,7 @@ impl PluginManager {
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
                 private_invocations: Default::default(),
+                tiered_invocations: Default::default(),
                 #[cfg(test)]
                 bridged_plugins: BTreeSet::new(),
                 #[cfg(test)]
@@ -481,6 +484,7 @@ impl PluginManager {
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
                 private_invocations: Default::default(),
+                tiered_invocations: Default::default(),
                 bridged_plugins: plugin_names
                     .iter()
                     .map(|name| (*name).to_string())
@@ -513,6 +517,7 @@ impl PluginManager {
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
                 private_invocations: Default::default(),
+                tiered_invocations: Default::default(),
                 bridged_plugins: BTreeSet::new(),
                 test_endpoints: Arc::new(Mutex::new(Vec::new())),
                 test_inference_endpoints: Arc::new(Mutex::new(Vec::new())),
@@ -967,6 +972,24 @@ impl PluginManager {
         nodes: Option<crate::mesh::PrivateScope>,
     ) -> private_invocations::PrivateInvocationGuard {
         self.inner.private_invocations.begin(plugin_name, nodes)
+    }
+
+    /// Mark `plugin_name` as handling a request at `tier` until the guard
+    /// drops; `None` for a `local` request. See [`tiered_invocations`].
+    pub(crate) fn begin_tiered_invocation(
+        &self,
+        plugin_name: &str,
+        tier: skippy_inference_api::InferenceRequestTier,
+    ) -> Option<tiered_invocations::TieredInvocationGuard> {
+        self.inner.tiered_invocations.begin(plugin_name, tier)
+    }
+
+    /// The tier nested inference from `plugin_name` runs at.
+    pub(crate) fn nested_request_tier(
+        &self,
+        plugin_name: &str,
+    ) -> skippy_inference_api::InferenceRequestTier {
+        self.inner.tiered_invocations.nested_tier(plugin_name)
     }
 
     /// How nested inference from `plugin_name` must be scoped, if private.

@@ -4373,6 +4373,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-config",
  "skippy-gpu-bench",
+ "skippy-hardware-profile",
  "skippy-native-runtime",
  "skippy-runtime",
  "skippy-runtime-install",

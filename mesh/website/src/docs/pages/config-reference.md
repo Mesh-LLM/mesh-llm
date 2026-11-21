@@ -33,7 +33,7 @@ built-in runtime default.
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
 | `MESH_LLM_NO_UPDATE_CHECK` | Overrides `updates.check`; `1` turns the release checks off, `0` on |
 | `MESH_LLM_NO_RUNTIME_DOWNLOAD` | Overrides `runtime.native_runtime.download`; `1` turns runtime downloads at startup off, `0` on |
-| `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
+| `MESH_LLM_JOIN` | Join token for a published or unpublished mesh; equivalent to one `--join` |
 | `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 | `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` | Whole seconds the local proxy waits for the first byte of a local model response; `0` removes this local deadline. Defaults to 600. The frontend independently applies `MESH_OPENAI_BACKEND_TIMEOUT_SECS` (also 600 by default), so raising only the proxy timeout does not extend the frontend deadline. A non-streaming request's first byte is its whole completion. For long prefills, raise the backend timeout to the required duration; with this local setting unset, a longer configured backend timeout gets a one-second margin. If setting the local timeout explicitly, set it longer than the backend timeout |
 
@@ -87,6 +87,8 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.require_signed_gossip` | boolean | `false`; require origin signatures for relayed node/cache records; changing this creates a new mesh and requires upgraded participants | node-level | process restart | wired | `--require-signed-gossip` |
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `private.nodes` | array of string | `[]` (private requests stay on this node); node ids of 64 hex characters. See [Private routing](/docs/pages/config-toml/#private-nodes) | node-level | applies dynamically | wired | `mesh-llm private add` / `remove` |
+| `request_tiers.owners` | object (string map) | `{}`; owner id (64 hex characters) to `local`, `trusted` or `mesh`, overriding the tier that owner's nodes are served at. See [Request tiers](/docs/pages/config-toml/#request-tiers) | node-level | applies dynamically | wired | none |
+| `request_tiers.local_kv_reserve_percent` | integer | `0` (no reserve); 0 to 100, the share of each model's KV token budget only `local` requests may use | node-level | model reload | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |

@@ -43,8 +43,12 @@ do {
 }
 ```
 
-Use `joinTokens: [token]` for a private mesh and `ownerKeyPath` for an existing
+Use `joinTokens: [token]` to join a mesh by token and `ownerKeyPath` for an existing
 Mesh LLM owner keystore. Client mode needs no serving runtime.
+
+Join tokens locate a mesh; they do not make membership private. Configure
+[admission control](/docs/pages/private-meshes/#restrict-membership) separately
+when participation must be restricted.
 
 ## Read local runtime capacity
 

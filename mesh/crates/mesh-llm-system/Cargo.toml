@@ -20,6 +20,7 @@ mesh-llm-events = { path = "../mesh-llm-events", version = "0.80.0" }
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.80.0" }
 skippy-gpu-bench = { workspace = true }
 skippy-native-runtime = { workspace = true }
+skippy-hardware-profile = { workspace = true }
 mesh-llm-release-footer.workspace = true
 skippy-runtime-install = { workspace = true }
 reqwest = { version = "0.13", features = ["stream", "json", "query"] }

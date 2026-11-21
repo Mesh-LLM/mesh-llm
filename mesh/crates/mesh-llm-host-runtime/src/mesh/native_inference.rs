@@ -170,7 +170,7 @@ impl Node {
             .context("invalid native inference provider ID")?;
         tokio::time::timeout(NATIVE_CHAT_TIMEOUT, async {
             if provider == self.endpoint.id() {
-                return self.execute_native_chat(call, false).await;
+                return self.execute_native_chat(call).await;
             }
             let (mut send, mut recv) = self.open_native_chat(provider, &call).await?;
             let response = read_native_frame(&mut recv).await?;
@@ -209,17 +209,18 @@ impl Node {
         Ok((send, recv))
     }
 
+    /// `requester` is the peer that asked, `None` for a call made on this node.
     async fn prepare_native_chat(
         &self,
         mut call: NativeChatRequest,
-        remote: bool,
+        requester: Option<EndpointId>,
     ) -> Result<PreparedNativeChat> {
         normalize_target(&mut call)?;
         anyhow::ensure!(
             call.target.provider_node_id == self.endpoint.id().to_string(),
             "native inference target names a different provider"
         );
-        let ingress = if remote {
+        let ingress = if requester.is_some() {
             IngressType::RemoteQuicHttp
         } else {
             IngressType::LocalOpenAi
@@ -264,7 +265,14 @@ impl Node {
                 continue;
             }
             drop(current);
-            let context = InferenceRequestContext::new();
+            let tier = match requester {
+                Some(peer) => self.peer_request_tier(peer).await,
+                None => super::request_tier::current_request_tier(),
+            };
+            let private = super::current_private_scope().is_some();
+            let context = InferenceRequestContext::new().with_request_class(
+                skippy_inference_api::InferenceRequestClass::new(tier, private),
+            );
             return Ok(PreparedNativeChat {
                 backend: candidate.backend.clone(),
                 request: call.request.into(),
@@ -280,12 +288,8 @@ impl Node {
         )
     }
 
-    async fn execute_native_chat(
-        &self,
-        call: NativeChatRequest,
-        remote: bool,
-    ) -> Result<serde_json::Value> {
-        let mut prepared = self.prepare_native_chat(call, remote).await?;
+    async fn execute_native_chat(&self, call: NativeChatRequest) -> Result<serde_json::Value> {
+        let mut prepared = self.prepare_native_chat(call, None).await?;
         let request = std::mem::take(&mut prepared.request);
         let response = prepared
             .backend
@@ -329,7 +333,13 @@ impl Node {
                     // an unary response has no progress signal of its own, so it
                     // keeps the whole-request bound.
                     let streaming = call.request.stream;
-                    let serving = node.serve_native_chat(call, &mut send);
+                    // Hooks and plugin calls made while serving read the tier
+                    // from the task, so serve the peer at its own tier.
+                    let tier = node.peer_request_tier(remote).await;
+                    let serving = super::request_tier::with_request_tier(
+                        tier,
+                        node.serve_native_chat(call, remote, &mut send),
+                    );
                     if streaming {
                         serving.await
                     } else {

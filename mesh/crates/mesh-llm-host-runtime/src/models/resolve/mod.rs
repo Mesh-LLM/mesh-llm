@@ -243,11 +243,11 @@ pub async fn resolve_model_spec(input: &Path) -> Result<PathBuf> {
 }
 
 pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> Result<PathBuf> {
-    use skippy_commands::models::lifecycle::StartupModelSource;
+    use skippy_model_resolver::startup::StartupModelSource;
 
     let mut err = mesh_llm_events::console_err();
     let raw = input.to_string_lossy();
-    match skippy_commands::models::lifecycle::resolve_startup_model_source(input).await? {
+    match skippy_model_hf::startup::resolve_startup_model_source(input).await? {
         StartupModelSource::Passthrough(path) => Ok(path),
         StartupModelSource::Existing(path) => {
             // Multipart Hugging Face GGUFs keep their snapshot filename until

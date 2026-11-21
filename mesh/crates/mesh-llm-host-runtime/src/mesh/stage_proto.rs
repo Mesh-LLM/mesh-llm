@@ -581,6 +581,7 @@ pub(super) fn stage_load_from_proto(
         load_mode: stage_load_mode_from_proto(load.load_mode)?,
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
+        max_request_tier: None,
     })
 }
 

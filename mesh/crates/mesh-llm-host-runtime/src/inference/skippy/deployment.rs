@@ -99,6 +99,7 @@ pub(crate) fn remote_stage_load_request(
         load_mode: LoadMode::LayerPackage,
         upstream: None,
         downstream,
+        max_request_tier: None,
     }
 }
 
@@ -189,6 +190,7 @@ pub(crate) fn stage0_config(
         load_mode: LoadMode::LayerPackage,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
+        max_request_tier: None,
         downstream: Some(PeerConfig {
             persistent_lane_marker: false,
             stage_id: downstream_stage.stage_id.clone(),

@@ -12,7 +12,7 @@ Capture a doctor archive:
 mesh-llm doctor
 ```
 
-Open a [new GitHub issue](https://github.com/Mesh-LLM/mesh-llm/issues/new) and attach the archive created by `mesh-llm doctor`. Include the command you ran, your OS, GPU/backend flavor, model ref, whether you used a private mesh or `--auto`, and what you expected to happen.
+Open a [new GitHub issue](https://github.com/Mesh-LLM/mesh-llm/issues/new) and attach the archive created by `mesh-llm doctor`. Include the command you ran, your OS, GPU/backend flavor, model ref, your discovery mode and admission policy, and what you expected to happen.
 
 ## Is Mesh running?
 
@@ -23,7 +23,7 @@ curl -s http://localhost:3131/api/status | jq .
 If this fails, start a node:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Runtime lifecycle
@@ -66,7 +66,7 @@ inspect intents and daemon state. For a local load failure, try a smaller model:
 
 ```sh
 mesh-llm stop
-mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 If you expected an external endpoint, check both layers:
@@ -107,10 +107,10 @@ mesh-llm goose
 
 ## Public mesh connection issues
 
-For first-run testing, prefer a private mesh:
+For first-run testing, follow the [Quickstart](/docs/pages/quickstart/). To use named public discovery:
 
 ```sh
-mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 Then move back to `mesh-llm serve --auto` once the local install and model path work.

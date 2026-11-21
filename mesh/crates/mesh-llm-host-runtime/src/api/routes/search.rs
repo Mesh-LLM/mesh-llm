@@ -1,5 +1,5 @@
 use super::super::http::{respond_error, respond_json};
-use crate::models::search::model_context;
+use crate::models::search::fit_budget_bytes;
 use crate::models::{
     SearchArtifactFilter, SearchSort, remote_catalog, search_catalog_json_payload,
     search_catalog_models, search_huggingface, search_huggingface_json_payload,
@@ -44,14 +44,13 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
         return respond_json(stream, 200, &response).await;
     }
 
-    let context = tokio::task::spawn_blocking(model_context).await?;
+    let fit_budget = tokio::task::spawn_blocking(fit_budget_bytes).await?;
     match search_huggingface(
         &request.query,
         request.limit,
         request.artifact,
         request.sort,
         |_| {},
-        context.clone(),
     )
     .await
     {
@@ -61,7 +60,7 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
                 request.artifact,
                 request.sort,
                 &results,
-                context,
+                fit_budget,
             );
             respond_json(stream, 200, &response).await
         }
@@ -165,6 +164,63 @@ fn catalog_model_matches_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn catalog_search_http_preserves_fields_hints_and_errors() {
+        use tokio::io::AsyncReadExt;
+        let entry = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"source_repo":"owner/demo","variants":{
+                "FixtureSearch-Q4_K_M":{"source":{"repo":"owner/demo","file":"demo-Q4_K_M.gguf"},"curated":{"name":"FixtureSearch-Q4_K_M","size":"4GB","description":"Fixture model"}}
+            }
+        })).unwrap();
+        let _catalog = remote_catalog::set_catalog_entries_for_test(vec![entry]);
+        for (path, status) in [
+            (
+                "/api/search?q=FixtureSearch&catalog=true&limit=1",
+                "HTTP/1.1 200 OK",
+            ),
+            ("/api/search?catalog=true", "HTTP/1.1 400 Bad Request"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let (mut server, _) = listener.accept().await.unwrap();
+            let handler = async {
+                handle(&mut server, path).await.unwrap();
+                drop(server);
+            };
+            let reader = async {
+                let mut response = Vec::new();
+                client.read_to_end(&mut response).await.unwrap();
+                response
+            };
+            let (_, response) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                tokio::join!(handler, reader)
+            })
+            .await
+            .unwrap();
+            assert!(String::from_utf8_lossy(&response).starts_with(status));
+            let body: serde_json::Value =
+                serde_json::from_str(crate::api::http::http_body_text(&response)).unwrap();
+            if path.contains("q=") {
+                assert_eq!(body["source"], "catalog");
+                assert_eq!(body["results"].as_array().unwrap().len(), 1);
+                let model = &body["results"][0];
+                assert_eq!(model["ref"], "owner/demo:Q4_K_M");
+                assert_eq!(model["show"], "mesh-llm models show owner/demo:Q4_K_M");
+                assert_eq!(
+                    model["download"],
+                    "mesh-llm models download owner/demo:Q4_K_M"
+                );
+                assert_eq!(model["size"], "4GB");
+                assert_eq!(model["capabilities"]["text"], true);
+            } else {
+                assert_eq!(body["error"], "Missing required 'q' query parameter");
+            }
+        }
+    }
 
     #[test]
     fn parse_request_requires_non_empty_query() {

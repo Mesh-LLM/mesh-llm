@@ -1,29 +1,16 @@
 //! Mesh presentation adapter for Skippy-owned model search.
-
 use anyhow::Result;
 use serde_json::Value;
-use skippy_commands::models::{ModelCommandContext, lifecycle};
-use skippy_model_hf::remote_catalog;
+pub use skippy_model_hf::search::{SearchArtifactFilter, SearchHit, SearchProgress, SearchSort};
+use skippy_model_hf::{remote_catalog, search};
+use std::io::Write;
 
-pub use lifecycle::{SearchArtifactFilter, SearchHit, SearchProgress, SearchSort};
-
-pub(crate) fn model_context() -> ModelCommandContext {
-    ModelCommandContext {
-        program: "mesh-llm",
-        cache_root: skippy_model_hf::application_cache_dir(),
-        fit_budget_bytes: mesh_llm_system::capacity::local_fit_budget_bytes(
-            &crate::system::hardware::survey(),
-        ),
-        terminal_progress: false,
-        byte_progress: None,
-        console_out: || Box::new(mesh_llm_events::console_out()),
-        console_err: || Box::new(mesh_llm_events::console_err()),
-        machine_out: || Box::new(mesh_llm_events::machine_out()),
-    }
+pub(crate) fn fit_budget_bytes() -> u64 {
+    mesh_llm_system::capacity::local_fit_budget_bytes(&crate::system::hardware::survey())
 }
 
 pub fn search_catalog_models(query: &str) -> Result<Vec<remote_catalog::RemoteCatalogModel>> {
-    lifecycle::search_catalog_models(query)
+    search::search_catalog_models(query)
 }
 
 pub fn search_catalog_json_payload(
@@ -33,7 +20,16 @@ pub fn search_catalog_json_payload(
     results: &[remote_catalog::RemoteCatalogModel],
     limit: usize,
 ) -> Value {
-    lifecycle::search_catalog_json_payload(query, filter, sort, results, limit, model_context())
+    let mut payload = search::projection::search_catalog_json_payload(
+        query,
+        filter,
+        sort,
+        results,
+        limit,
+        fit_budget_bytes(),
+    );
+    add_command_hints(&mut payload);
+    payload
 }
 
 pub fn search_huggingface_json_payload(
@@ -41,9 +37,31 @@ pub fn search_huggingface_json_payload(
     filter: SearchArtifactFilter,
     sort: SearchSort,
     results: &[SearchHit],
-    context: ModelCommandContext,
+    fit_budget_bytes: u64,
 ) -> Value {
-    lifecycle::search_huggingface_json_payload(query, filter, sort, results, context)
+    let mut payload = search::projection::search_huggingface_json_payload(
+        query,
+        filter,
+        sort,
+        results,
+        fit_budget_bytes,
+    );
+    add_command_hints(&mut payload);
+    payload
+}
+
+struct MeshSearchObserver<F>(F);
+impl<F: FnMut(SearchProgress) + Send> search::SearchObserver for MeshSearchObserver<F> {
+    fn progress(&mut self, progress: SearchProgress) {
+        (self.0)(progress);
+    }
+    fn inspection_warning(&mut self, error: &anyhow::Error) -> Result<()> {
+        writeln!(
+            mesh_llm_events::console_err(),
+            "⚠️  Failed to inspect Hugging Face repo: {error:#}"
+        )?;
+        Ok(())
+    }
 }
 
 pub async fn search_huggingface<F>(
@@ -52,10 +70,24 @@ pub async fn search_huggingface<F>(
     filter: SearchArtifactFilter,
     sort: SearchSort,
     progress: F,
-    context: ModelCommandContext,
 ) -> Result<Vec<SearchHit>>
 where
     F: FnMut(SearchProgress) + Send,
 {
-    lifecycle::search_huggingface(query, limit, filter, sort, progress, context).await
+    search::search_huggingface(
+        query,
+        limit,
+        filter,
+        sort,
+        &mut MeshSearchObserver(progress),
+    )
+    .await
+}
+
+fn add_command_hints(payload: &mut Value) {
+    for result in payload["results"].as_array_mut().into_iter().flatten() {
+        let model_ref = result["ref"].as_str().unwrap_or_default().to_string();
+        result["show"] = format!("mesh-llm models show {model_ref}").into();
+        result["download"] = format!("mesh-llm models download {model_ref}").into();
+    }
 }

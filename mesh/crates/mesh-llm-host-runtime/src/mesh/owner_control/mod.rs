@@ -173,8 +173,9 @@ where
 
 impl Node {
     /// Put back what an applied snapshot does not carry: redacted telemetry
-    /// headers, and the `[private]` list a legacy snapshot has no field for.
-    async fn restore_unsent_settings(
+    /// headers, and the `[private]` list and `[request_tiers]` a legacy
+    /// snapshot has no field for.
+    pub(super) async fn restore_unsent_settings(
         &self,
         mesh_config: &mut crate::plugin::MeshConfig,
         snapshot: &crate::proto::node::NodeConfigSnapshot,
@@ -186,6 +187,7 @@ impl Node {
         );
         if snapshot.config_toml.is_none() {
             mesh_config.private = state.config().private.clone();
+            mesh_config.request_tiers = state.config().request_tiers.clone();
         }
     }
 }
@@ -858,8 +860,10 @@ impl Node {
                 || runtime.block_on(node.plugin_manager()),
                 runtime.clone(),
             );
-            // The written `[private]` list is live before the reply says so.
+            // The written `[private]` list and tier overrides are live before the
+            // reply says so.
             node.private_nodes.reload_now();
+            node.request_tier_owners.reload_now();
             Ok(applied)
         })
         .await
@@ -1008,6 +1012,14 @@ impl Node {
         };
         let execution_shape = command.execution_shape();
         let deadline = command.deadline();
+        // Config semantics tests must not race the production command watchdog.
+        #[cfg(test)]
+        let deadline = match (&command, self.test_apply_config_deadline.get()) {
+            (OwnedNodeCommand::ApplyConfig { .. }, Some(duration)) => {
+                commands::OwnedNodeCommandDeadline::Unary(*duration)
+            }
+            _ => deadline,
+        };
         let command_request_id = command.request_id();
         let is_model_lifecycle = command.is_model_lifecycle();
         if let Some(result) = self

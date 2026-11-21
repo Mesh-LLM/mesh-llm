@@ -150,6 +150,11 @@ async fn chat_completion_inner(
 
     let mut raw = http_request.into_bytes();
     raw.extend_from_slice(&body_bytes);
+    // The peer serves a consultation no higher than the request it is for.
+    mesh::request_tier::insert_request_tier_header(
+        &mut raw,
+        mesh::request_tier::current_request_tier(),
+    );
 
     let (mut send, mut recv) = node.open_http_tunnel(peer_id).await?;
     send.write_all(&raw).await?;
@@ -429,13 +434,18 @@ fn spawn_second_opinion_call(
     let msgs = messages.to_vec();
     let id = peer.0;
     let model = peer.1.clone();
-    // A spawned task does not inherit the request's private scope; carry it.
+    // A spawned task does not inherit the request's private scope or tier;
+    // carry them.
     let scope = mesh::current_private_scope();
-    set.spawn(mesh::with_private_scope(scope, async move {
-        second_opinion(&node, id, &model, &msgs, timeout)
-            .await
-            .map(|text| (text, id, model))
-    }));
+    let tier = mesh::request_tier::current_request_tier();
+    set.spawn(mesh::with_private_scope(
+        scope,
+        mesh::request_tier::with_request_tier(tier, async move {
+            second_opinion(&node, id, &model, &msgs, timeout)
+                .await
+                .map(|text| (text, id, model))
+        }),
+    ));
 }
 
 async fn await_first_second_opinion(
