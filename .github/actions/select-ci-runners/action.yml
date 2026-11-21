@@ -93,6 +93,9 @@ outputs:
   runner_windows:
     description: Windows runner label selected by the centralized provider policy.
     value: ${{ steps.select.outputs.runner_windows }}
+  decision_record:
+    description: One non-secret line of the trust inputs and selected placement, also written to the step summary.
+    value: ${{ steps.record.outputs.decision_record }}
 
 runs:
   using: composite
@@ -287,3 +290,30 @@ runs:
           echo "runner_macos=$runner_macos"
           echo "runner_windows=$runner_windows"
         } >> "$GITHUB_OUTPUT"
+
+    - name: Record the placement decision
+      id: record
+      shell: bash
+      env:
+        RECORD_EVENT: ${{ inputs.event_name }}
+        RECORD_REF: ${{ inputs.ref }}
+        RECORD_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
+        RECORD_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
+        RECORD_FORCE_HOSTED: ${{ inputs.force_hosted }}
+        RECORD_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
+        RECORD_DEPOT_ENABLED: ${{ steps.select.outputs.depot_enabled }}
+        RECORD_ALLOW_NATIVE_GITHUB_CACHE: ${{ steps.select.outputs.allow_native_github_cache }}
+        RECORD_ALLOW_DEPOT_REMOTE_CACHE: ${{ steps.select.outputs.allow_depot_remote_cache }}
+        RECORD_RUNNER: ${{ steps.select.outputs.runner }}
+      run: |
+        set -euo pipefail
+        # RUNNER_ENVIRONMENT describes the runner executing this selector, not
+        # the selected label; jobs that consume the label may run elsewhere.
+        record="event=$RECORD_EVENT ref=$RECORD_REF"
+        record+=" depot_main_enabled=$RECORD_DEPOT_MAIN_ENABLED depot_pr_enabled=$RECORD_DEPOT_PR_ENABLED"
+        record+=" force_hosted=$RECORD_FORCE_HOSTED manual_use_depot=$RECORD_MANUAL_USE_DEPOT"
+        record+=" depot_enabled=$RECORD_DEPOT_ENABLED allow_native_github_cache=$RECORD_ALLOW_NATIVE_GITHUB_CACHE"
+        record+=" allow_depot_remote_cache=$RECORD_ALLOW_DEPOT_REMOTE_CACHE runner=$RECORD_RUNNER"
+        record+=" selector_runner_environment=${RUNNER_ENVIRONMENT:-unknown}"
+        echo "decision_record=$record" >> "$GITHUB_OUTPUT"
+        echo "Runner placement: $record" >> "$GITHUB_STEP_SUMMARY"

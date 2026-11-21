@@ -513,13 +513,15 @@ retired parser behavior, and source review still owns semantic emulation.
   `select-ci-runners` step and every job whose `runs-on` uses a selector
   output, a non-GitHub-hosted label or a dynamic label belongs to a row, and
   the row's selector decisions must match the workflow inputs. A new
-  provider-capable caller is not complete until it declares its row. A
-  reachable provider/preparation combination that the preparation action does
-  not support (for example Depot or a non-Linux OS with `hosted-bare`) fails
-  the contract whatever the row's hosted fallback. Each row is decided on its
-  own evidence: no row becomes eligible because another row passed, and a
-  matrix edit never changes placement by itself; the workflow inputs do, and
-  both change together.
+  provider-capable caller is not complete until it declares its row and the
+  `composed_routing` contract reaches its selector from the real planner
+  output of a lane, so every trust case resolves it to the provider its row
+  allows. A reachable provider/preparation combination that the preparation
+  action does not support (for example Depot or a non-Linux OS with
+  `hosted-bare`) fails the contract whatever the row's hosted fallback. Each
+  row is decided on its own evidence: no row becomes eligible because another
+  row passed, and a matrix edit never changes placement by itself; the
+  workflow inputs do, and both change together.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
