@@ -118,6 +118,7 @@ mesh-llm serve --auto --headless
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
 | Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/plugins/virtual-models.md](mesh/docs/plugins/virtual-models.md) |
 | Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
+| Earn by serving paid inference | `mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/lexe-wallet-plugin` | [earnings.md](earnings.md) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## How the mesh works
