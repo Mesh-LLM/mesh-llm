@@ -1534,10 +1534,13 @@ Manual-full compares the controller's resolved first-parent base and immutable
 source, retaining hosted fallback when the comparison cannot be completed.
 Its profile still selects every diagnostic slice and matrix row.
 
-This only restores reachability under existing gates. An administrator's later
-#2789 rollout may set `DEPOT_RUNNERS_ENABLED` to the exact string `true` for the
-existing trusted-main allowlist, or explicitly select `use_depot=true` on the
-manual controller for its existing supported calls. Unset/false gates with no
+This restores reachability under existing gates. When `DEPOT_RUNNERS_ENABLED`
+is already the exact string `true`, eligible trusted-main jobs select Depot as
+soon as this change reaches main, with no further administrator action. When
+the gate is unset or false, an administrator enables it, or explicitly selects
+`use_depot=true` on the manual controller for its existing supported calls.
+Activation is separate from #2789's live qualification, which measures each
+role against hosted and verifies the rollback. Unset/false gates with no
 manual opt-in remain hosted. No repository variable, runner group, Depot setting,
 PR exception deadline, cache permission or provider allowlist changes here.
 The Linux CPU runtime cache producer remains hosted even when other eligible

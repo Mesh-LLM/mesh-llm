@@ -1027,7 +1027,8 @@ source commit.
   signal and force hosted unless it is explicitly boolean false. Manual-full
   retains its resolved base/source diff; unavailable history stays hosted.
   Existing provider gates, allowlists and the hosted CPU runtime producer are
-  unchanged. This source change does not activate Depot.
+  unchanged. This change does not alter provider gates; a gate that is already
+  enabled lets eligible runs resume Depot execution without a separate step.
 - `tools/ci-controller/src/plan` owns routing, and xtask delegates `ci plan` to
   it; the legacy Python planner and its identity/test import closure are
   deleted.
