@@ -17,7 +17,6 @@
 /mesh/crates/mesh-llm-ui/ @ndizazzo @i386 @iamthesvn
 /mesh/docs/ @ndizazzo
 /mesh/website/ @ndizazzo
-/skippy/ @i386 @danielwinterw
 
 # SDK packages, public Rust interfaces, embedding, and language bridges.
 /mesh/sdk/ @michaelneale @ndizazzo @i386
