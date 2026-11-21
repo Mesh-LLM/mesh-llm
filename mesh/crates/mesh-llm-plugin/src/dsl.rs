@@ -26,6 +26,7 @@ fn ensure_description(current: Option<String>, fallback: &str) -> String {
 
 fn normalize_http_operation_name(method: &str, path: &str) -> String {
     let normalized_path: String = path
+        .trim_matches('/')
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() {
@@ -35,11 +36,10 @@ fn normalize_http_operation_name(method: &str, path: &str) -> String {
             }
         })
         .collect();
-    let trimmed = normalized_path.trim_matches('_');
-    if trimmed.is_empty() {
+    if normalized_path.is_empty() {
         format!("__http_{}", method.to_ascii_lowercase())
     } else {
-        format!("__http_{}_{}", method.to_ascii_lowercase(), trimmed)
+        format!("__http_{}_{}", method.to_ascii_lowercase(), normalized_path)
     }
 }
 
