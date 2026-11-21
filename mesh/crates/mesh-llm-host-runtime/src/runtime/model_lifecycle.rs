@@ -150,6 +150,23 @@ pub(super) fn run_auto_record_model_target_manual_unload(
     let Ok(response) = result else {
         return;
     };
+    if let Some(candidate) = resolved_unload {
+        let model_unloaded = !runtime_unload_candidates(ctx.runtime_models, ctx.managed_models)
+            .iter()
+            .any(|remaining| {
+                super::model_reconciliation::model_identity_matches(
+                    &remaining.model_name,
+                    &candidate.model_name,
+                ) && remaining.profile == candidate.profile
+            });
+        ctx.model_target_reconciliation_state
+            .clear_resolved_unload_errors(
+                &candidate.model_name,
+                &candidate.profile,
+                &response.instance_id,
+                model_unloaded,
+            );
+    }
     let now_secs = runtime_unix_secs();
     let requested_profile = resolved_unload
         .filter(|candidate| {

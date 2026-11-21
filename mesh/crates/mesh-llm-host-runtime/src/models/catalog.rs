@@ -1,6 +1,7 @@
 //! Managed model acquisition helpers.
 
 use super::download_parts::MultipartDownloadProgress;
+use super::download_status::HfDownloadProgress;
 use super::download_transfer::{DownloadTransferStats, DownloadTransferTracker};
 use super::track_managed_model_usage;
 use anyhow::{Context, Result};
@@ -304,25 +305,6 @@ pub struct HfDownload {
     pub transfer_stats: Option<DownloadTransferStats>,
 }
 
-struct HfDownloadProgress {
-    visible: Option<Arc<MeshDownloadProgress>>,
-    transfer: Arc<Mutex<DownloadTransferTracker>>,
-}
-
-impl ProgressHandler for HfDownloadProgress {
-    fn on_progress(&self, event: &ProgressEvent) {
-        if let Some(visible) = &self.visible {
-            visible.on_progress(event);
-        }
-        let ProgressEvent::Download(event) = event else {
-            return;
-        };
-        if let Ok(mut transfer) = self.transfer.lock() {
-            transfer.apply_download_event(event);
-        }
-    }
-}
-
 struct MeshDownloadProgressState {
     filename: String,
     total: u64,
@@ -332,7 +314,7 @@ struct MeshDownloadProgressState {
     last_draw: Option<std::time::Instant>,
 }
 
-struct MeshDownloadProgress {
+pub(super) struct MeshDownloadProgress {
     preflight_spinner: Mutex<Option<SpinnerHandle>>,
     state: Mutex<MeshDownloadProgressState>,
 }
@@ -644,6 +626,7 @@ async fn download_hf_assets_async(
             required.then(|| Arc::new(Mutex::new(DownloadTransferTracker::default())));
         let progress_handler: Option<Progress> = transfer_tracker.as_ref().map(|tracker| {
             Arc::new(HfDownloadProgress {
+                native: super::download_status::DownloadObserver::current(),
                 visible: visible_tracker.clone(),
                 transfer: Arc::clone(tracker),
             })
@@ -1367,6 +1350,7 @@ mod tests {
     fn silent_download_progress_records_transfer_stats() {
         let transfer = Arc::new(Mutex::new(DownloadTransferTracker::default()));
         let progress = HfDownloadProgress {
+            native: Default::default(),
             visible: None,
             transfer: Arc::clone(&transfer),
         };

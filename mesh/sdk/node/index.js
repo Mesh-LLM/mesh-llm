@@ -5,6 +5,7 @@ const nativeRuntime = require('./native-runtime')
 const { Inference, OpenAIRequestError } = require('./inference')
 const { LiveTranscription, startLiveTranscription } = require('./live-transcription')
 const { Models } = require('./models')
+const { decodeStatus, StatusEvents } = require('./status')
 const { Memberships } = require('./memberships')
 const nativeModuleCache = new Map()
 
@@ -96,6 +97,14 @@ class Node {
     return parse(await this._handle.statusJson())
   }
 
+  async nativeStatus() {
+    return decodeStatus(await this._handle.nativeStatusJson())
+  }
+
+  async statusEvents() {
+    return new StatusEvents(await this._handle.statusEvents())
+  }
+
   /** Fresh local observation; null means unavailable or incomplete. */
   async runtimeCapacity(model) {
     return await this._handle.runtimeCapacity(model) ?? null
@@ -121,6 +130,7 @@ function parse(json) {
 }
 
 module.exports = {
+  StatusEvents,
   LiveTranscription,
   Inference,
   Models,

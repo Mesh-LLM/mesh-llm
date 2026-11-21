@@ -5,6 +5,7 @@ pub mod delete;
 pub mod discovery;
 pub use delete::DeleteResult;
 mod download_parts;
+pub(crate) mod download_status;
 mod download_transfer;
 mod external_inference;
 pub mod gguf;
