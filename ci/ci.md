@@ -1852,6 +1852,28 @@ immutable PR SHA. Control-plane planning/required summaries, credential-
 bearing smokes, `gpu-nvidia` hardware work, and any Intel macOS row without a
 Depot-equivalent remain on their approved providers.
 
+### Cache authority table
+
+| Event and trust class | Provider | Native GHA cache | Depot remote cache | Trusted sccache seed |
+|---|---|---|---|---|
+| `pull_request`, same-repository merge ref, exception active (gate `true`, date before 2027-09-14), not forced hosted | Depot | true (repository-wide Depot proxy) | false | false |
+| `pull_request`, exact `DEPOT_PR_CANARY_REF`, base and head repository `Mesh-LLM/mesh-llm`, exception inactive, not forced hosted | Depot | false | false | false |
+| `pull_request` fork, non-merge ref, forced hosted, or gate off or expired without a matching `DEPOT_PR_CANARY_REF` | hosted | true (ref-scoped; sccache disk-only) | false | true |
+| `pull_request_target` | hosted, never Depot | true | false | true |
+| `push` to `refs/heads/main` of `Mesh-LLM/mesh-llm`, role main gate `true`, not forced hosted | Depot | true only while the exception is active | false | false |
+| `workflow_dispatch` on main of `Mesh-LLM/mesh-llm`, source `push`, role main gate `true` (`manual_use_depot` ignored), not forced hosted | Depot | true only while the exception is active | false | false |
+| `workflow_dispatch` on main of `Mesh-LLM/mesh-llm`, manual source, main gate or `manual_use_depot`, not forced hosted | Depot | true only while the exception is active | false | false |
+| `workflow_dispatch` declaring a `pull_request(_target)` source | hosted | true (sccache disk-only) | false | true |
+| Other pushes, tags, schedules, forced hosted, gates off | hosted | true | false | true |
+
+Every sccache startup (`mozilla-actions/sccache-action`, `setup-macos-lld`, a
+custom start) in a job placed by `select-ci-runners` applies these outputs
+through `configure-sccache-gha` before compilation. Hosted-literal jobs that take no selector outputs, such as release `build_linux_arm64` on `ubuntu-24.04-arm`, are listed as exemptions in `sccache_startup_policy` with the guard that owns their compiler-cache policy. macOS host/runtime slices pass their `runner_policy` outputs and
+keep the job-local disk cache. The release ARM64 smoke passes the release
+`metadata` outputs. PRs keep the bounded exception without expansion.
+Trusted-main Depot keeps the caches the selector grants. Historical shared
+Depot cache contents are untrusted inputs; nothing is promoted to trusted input.
+
 ### PR cache audit and rerun behavior
 
 GitHub-hosted PR runs may restore caches from their PR merge ref and the base

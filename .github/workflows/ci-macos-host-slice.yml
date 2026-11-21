@@ -75,7 +75,9 @@ env:
   CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
-  SCCACHE_GHA_ENABLED: "true"
+  # macOS compiler caching stays job-local disk; configure-sccache-gha still
+  # applies the selector's denial and clears ambient remote endpoints.
+  SCCACHE_GHA_ENABLED: "false"
 
 jobs:
   runner_policy:
@@ -156,6 +158,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
       - name: Install host linker
         uses: ./.github/actions/setup-macos-lld
+      - name: Apply runner cache policy to the macOS compiler cache
+        uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - name: Download immutable UI distribution
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
