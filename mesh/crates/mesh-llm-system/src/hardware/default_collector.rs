@@ -171,8 +171,12 @@ impl Collector for DefaultCollector {
                                 let Ok(out) = skippy_hardware_profile::probe::output(
                                     std::process::Command::new("xpu-smi").args(args),
                                 ) else {
-                                    // A timed-out or missing form may still
-                                    // succeed with the other flag spelling.
+                                    // A stopped survey must not start the
+                                    // other form; a timed-out or missing form
+                                    // may still succeed with the other one.
+                                    if skippy_hardware_profile::probe::is_cancelled() {
+                                        return None;
+                                    }
                                     continue;
                                 };
                                 if !out.status.success() {

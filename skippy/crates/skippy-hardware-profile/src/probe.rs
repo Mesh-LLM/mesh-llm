@@ -70,13 +70,11 @@ impl ProbeScope {
     fn output(&self, command: &mut Command, first_line: bool) -> io::Result<Output> {
         // Files avoid pipe-reader threads that can outlive the probe, and allow
         // cancellation even when a tool closes stdout before it stops running.
-        let (mut stdout, mut stderr) = match (tempfile::tempfile(), tempfile::tempfile()) {
-            (Ok(stdout), Ok(stderr)) => (stdout, stderr),
-            // shortcut: without a usable temp directory the probe runs as before
-            // this scope existed (uncancellable), so the survey still reports
-            // hardware; a missing TMPDIR is rare on hosts that serve models.
-            _ => return command.stdin(Stdio::null()).output(),
-        };
+        // Without a usable temp directory the probe cannot run under this
+        // scope's ownership, so it fails; the caller treats that tool as
+        // unavailable rather than starting a process shutdown cannot stop.
+        let mut stdout = tempfile::tempfile()?;
+        let mut stderr = tempfile::tempfile()?;
         command.stdin(Stdio::null());
         command.stdout(stdout.try_clone()?);
         command.stderr(stderr.try_clone()?);
@@ -106,7 +104,18 @@ impl ProbeScope {
                 ));
             }
             let sampled = if first_line {
-                sample(&stdout)?.contains(&b'\n')
+                match sample(&stdout) {
+                    Ok(bytes) => bytes.contains(&b'\n'),
+                    Err(error) => {
+                        // Stop the tool before reporting; keep it owned if
+                        // cleanup fails so cancellation can retry.
+                        if let Some(child) = state.child.as_mut() {
+                            child.stop()?;
+                            state.child = None;
+                        }
+                        return Err(error);
+                    }
+                }
             } else {
                 false
             };
