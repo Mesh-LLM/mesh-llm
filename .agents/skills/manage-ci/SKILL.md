@@ -138,6 +138,28 @@ always compiled in-run. SDK and smoke consumers restore before source admission,
 `authority-automation` exactly for the `protected-clean` source profile, and
 only full xtask may use the hosted executable cache.
 
+Automation producers have two roles; never let one stand in for the other.
+Authority producers (`authority_source` plus `authority_<platform>` through
+`protected-automation-artifact.yml`, and Quality's in-job `runner_policy`
+upload) are hosted, compile the frozen protected default-branch source with the
+`protected-clean` profile, and are independently verified by source, artifact
+ID, digest and OS/architecture before their bytes run. Product producers
+(`product_automation_<platform>` through `product-automation-artifact.yml`)
+compile the selected product source with `product-clean`; their bytes are
+product inputs and never admit runner or cache authority. Product producers are
+deliberately retained GitHub-hosted (`RUNNER_ENVIRONMENT=github-hosted` is
+required); moving them needs a qualified provider profile, runner-group
+admission and cross-provider artifact transport evidence (#2789) first, never
+only a `runs-on` change. Each consumer role owns one staging directory under
+`$RUNNER_TEMP`, created with plain `mkdir` so reuse fails:
+`immutable-authority-audit` for `audit-pr-authority-verified`,
+`immutable-authority-sentinel` for Quality's no-checkout sentinel, and
+`immutable-automation-restored` for `restore-automation` (the manual-only
+`depot-canary.yml` marker jobs, which never restore product bytes, keep their
+own copy of that name). A job runs protected
+admission/download and the audit, then checkout, then product restore, then
+execution; the directories stay disjoint so both restores can share a job.
+
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
 parity. Do not commit differential oracle tests that invoke Python. Legacy

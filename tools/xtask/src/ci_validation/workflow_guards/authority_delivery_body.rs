@@ -76,7 +76,7 @@ pub(super) fn origin(
 }
 
 const QUALITY_ORIGIN: &str = "set -euo pipefail\n[[ \"$AUTOMATION_SOURCE_SHA\" =~ ^[0-9a-f]{40}$ ]] || exit 1\ntest \"$AUTOMATION_SOURCE_SHA\" = \"$(git rev-parse HEAD)\" || exit 1\ncase \"${ACTIONS_RESULTS_URL:-}\" in\n  https://results-receiver.actions.githubusercontent.com|https://results-receiver.actions.githubusercontent.com/) ;;\n  *) echo \"Unexpected trusted artifact service origin\" >&2; exit 1 ;;\nesac\nprintf 'origin=https://results-receiver.actions.githubusercontent.com\\n' >> \"$GITHUB_OUTPUT\"\n";
-const QUALITY_ADMISSION: &str = "set -euo pipefail\ntest \"$RUNNER_OS\" = Linux || exit 1\ntest \"$RUNNER_ARCH\" = X64 || exit 1\n[[ \"$AUTOMATION_SOURCE_SHA\" =~ ^[0-9a-f]{40}$ ]] || exit 1\n[[ \"$AUTOMATION_ARTIFACT_ID\" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1\n[[ \"$AUTOMATION_BINARY_SHA256\" =~ ^[0-9a-f]{64}$ ]] || exit 1\ntest \"$AUTOMATION_RESULTS_ORIGIN\" = 'https://results-receiver.actions.githubusercontent.com' || exit 1\nmkdir \"$RUNNER_TEMP/immutable-automation-restored\"\n";
+const QUALITY_ADMISSION: &str = "set -euo pipefail\ntest \"$RUNNER_OS\" = Linux || exit 1\ntest \"$RUNNER_ARCH\" = X64 || exit 1\n[[ \"$AUTOMATION_SOURCE_SHA\" =~ ^[0-9a-f]{40}$ ]] || exit 1\n[[ \"$AUTOMATION_ARTIFACT_ID\" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1\n[[ \"$AUTOMATION_BINARY_SHA256\" =~ ^[0-9a-f]{64}$ ]] || exit 1\ntest \"$AUTOMATION_RESULTS_ORIGIN\" = 'https://results-receiver.actions.githubusercontent.com' || exit 1\nmkdir \"$RUNNER_TEMP/immutable-authority-sentinel\"\n";
 pub(super) fn quality_producer(
     job: &Node,
     steps: &[Node],

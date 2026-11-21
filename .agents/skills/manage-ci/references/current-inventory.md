@@ -2169,6 +2169,27 @@ cleanup.
 No runner placement, cache authority, permissions or external dataset/model
 operations change. Existing model-backed and platform gates remain required.
 
+### Automation producer and consumer roster
+
+| Producer | Role | Placement | Consumers | Staging directory |
+|---|---|---|---|---|
+| `authority_source` + `authority_<platform>` (`protected-automation-artifact.yml`, `protected-clean`) | Authority: frozen protected default-branch source, independently verified source/artifact ID/digest/OS/architecture | Fixed GitHub-hosted | `audit-pr-authority-verified` before checkout (prepared; callers still use the pinned `audit-depot-pr-isolation`); Quality `skippy_cpp_api` model resolution after checkout through `restore-automation` without a product claim | `immutable-authority-audit` (audit); `immutable-automation-restored` (restore) |
+| Quality `runner_policy` in-job upload (`protected-clean`) | Authority | GitHub-hosted | Quality `authority_sentinel` (no checkout) | `immutable-authority-sentinel` |
+| `product_automation_<platform>` (`product-automation-artifact.yml`, `product-clean`) | Product bytes for the selected source; never runner or cache authority | Retained GitHub-hosted (`RUNNER_ENVIRONMENT=github-hosted` required) | `restore-automation` after checkout in host, runtime, product, Rust-test, static-ABI, SDK and smoke jobs | `immutable-automation-restored` |
+
+Each admission step creates its directory with plain `mkdir`, so a second role
+reusing a name fails instead of mixing bytes. A job that holds both roles runs
+protected admission/download, the audit, checkout, product restore, then
+execution. The manual-only `depot-canary.yml` marker jobs keep their own
+`immutable-automation-restored` copy; they never restore product bytes.
+Product producers stay hosted by decision: moving them to Depot needs a
+qualified provider profile and runner-group admission for the producer, plus
+same-run artifact transport evidence across both providers with exact
+source/artifact/digest/platform identities (#2789). Changing only `runs-on`
+fails the hosted-environment admission. `automation_staging_sequence` in
+`ci_runner_cache_contract` checks the disjoint stages, the job ordering and
+cross-role substitution.
+
 The `audit-pr-authority-verified` composite is prepared for a future protected
 pre-checkout caller cutover. It downloads only the declared same-run artifact ID,
 requires protected producer source SHA and independent binary digest, checks

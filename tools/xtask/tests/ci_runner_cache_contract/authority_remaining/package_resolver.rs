@@ -2,7 +2,7 @@
 use super::*;
 const LEGACY: &str = "Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94";
 const AUDIT: &str = "Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16";
-const EXECUTABLE: &str = "${{ runner.temp }}/immutable-automation-restored/${{ runner.os == 'Windows' && 'xtask.exe' || 'xtask' }}";
+const EXECUTABLE: &str = "${{ runner.temp }}/immutable-authority-audit/${{ runner.os == 'Windows' && 'xtask.exe' || 'xtask' }}";
 const CALLERS: &[(&str, &str, &str)] = &[
     ("ci-rust-tests-slice.yml", "rust_tests", "packages"),
     ("ci-quality-slice.yml", "rust_clippy", "packages"),
