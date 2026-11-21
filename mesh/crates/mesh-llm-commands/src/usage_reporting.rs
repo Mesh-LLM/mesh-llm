@@ -220,14 +220,50 @@ pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
             Event::HardwareProfile,
             hardware_properties(&survey, flavors),
         );
-        // Skippy's engine events carry the machine class and report the
-        // machine to Skippy's own project, from the same probe.
-        skippy_analytics::set_serving_hardware(serving_hardware(&survey, flavors));
+        // Skippy's engine events carry the machine class, and Skippy's
+        // project gets `host_profile`, both from this one survey.
+        let hardware = serving_hardware(&survey, flavors);
         skippy_analytics::capture(
             skippy_analytics::Event::HostProfile,
-            skippy_analytics::host_profile::properties(&profile, survey.system_ram_bytes),
+            skippy_host_profile(&profile, &survey, &hardware),
         );
+        skippy_analytics::set_serving_hardware(hardware);
     })
+}
+
+/// Skippy's `host_profile`, with every GPU field taken from mesh's survey.
+///
+/// Skippy's own probe sees less than the survey on some machines: on a
+/// Windows iGPU it finds the name but no device, no memory, and no unified
+/// memory, and falls back to ranking ROCm first. Overwriting those fields with
+/// the survey's keeps `host_profile` and `generation` describing the machine
+/// the same way. Backend availability and system RAM still come from the
+/// probe and survey as before.
+fn skippy_host_profile(
+    profile: &skippy_native_runtime::HostRuntimeProfile,
+    survey: &mesh_llm_system::hardware::HardwareSurvey,
+    hardware: &skippy_analytics::ServingHardware,
+) -> skippy_analytics::Properties {
+    let gpu_model = match gpu_model(survey) {
+        mesh_llm_analytics::Value::Text(label) => {
+            skippy_analytics::Label::sanitize_or_redact(label.as_str()).into()
+        }
+        mesh_llm_analytics::Value::Static(text) => skippy_analytics::Value::from(text),
+        _ => skippy_analytics::Value::from("unreported"),
+    };
+    let properties = skippy_analytics::host_profile::properties(profile, survey.system_ram_bytes)
+        .with("gpu_model", gpu_model)
+        .with("gpu_family", hardware.gpu_family.clone())
+        .with(
+            "gpu_count",
+            skippy_analytics::bucket_count(u64::from(survey.gpu_count)),
+        )
+        .with("unified_memory", survey.is_soc)
+        .with("backend", hardware.backend);
+    match hardware.vram_gb {
+        Some(vram_gb) => properties.with("vram_gb", vram_gb),
+        None => properties,
+    }
 }
 
 /// Build hardware properties from a survey and the detected backends.
@@ -525,6 +561,61 @@ mod tests {
 
     fn metal_only() -> std::collections::BTreeSet<skippy_native_runtime::NativeRuntimeBackendKind> {
         std::collections::BTreeSet::from([skippy_native_runtime::NativeRuntimeBackendKind::Metal])
+    }
+
+    /// A Windows laptop iGPU served on Vulkan: Skippy's probe finds the name
+    /// but no device or memory, and would rank ROCm first. `host_profile`
+    /// must describe it as `generation` does, from the survey.
+    #[test]
+    fn skippy_host_profile_takes_the_machine_class_from_the_survey() {
+        use skippy_native_runtime::{HostGpuProfile, HostRuntimeProfile, NativeRuntimeBackendKind};
+
+        let mut survey = survey(Some("AMD Radeon 780M Graphics"), 1, 8 << 30, true);
+        survey.gpus = vec![mesh_llm_system::hardware::GpuFacts {
+            backend_device: Some("Vulkan0".to_string()),
+            ..Default::default()
+        }];
+        let profile = HostRuntimeProfile {
+            os: "windows".to_owned(),
+            arch: "x86_64".to_owned(),
+            target_triple: None,
+            glibc_version: None,
+            available_flavors: [
+                NativeRuntimeBackendKind::Cpu,
+                NativeRuntimeBackendKind::Rocm,
+                NativeRuntimeBackendKind::Vulkan,
+            ]
+            .into_iter()
+            .collect(),
+            gpus: vec![HostGpuProfile {
+                display_name: "AMD Radeon 780M Graphics".to_owned(),
+                backend_device: None,
+                stable_id: None,
+                vram_bytes: None,
+                unified_memory: false,
+                probe: None,
+                cuda_sm: None,
+                rocm_gfx: None,
+            }],
+            cuda: None,
+            rocm: None,
+            vulkan: None,
+        };
+        let hardware = serving_hardware(&survey, &profile.available_flavors);
+        let properties = skippy_host_profile(&profile, &survey, &hardware);
+
+        assert_eq!(
+            properties.get("backend"),
+            Some(&skippy_analytics::Value::Static("vulkan"))
+        );
+        assert_eq!(
+            properties.get("vram_gb"),
+            Some(&skippy_analytics::Value::Int(8))
+        );
+        assert_eq!(
+            properties.get("unified_memory"),
+            Some(&skippy_analytics::Value::Bool(true))
+        );
     }
 
     #[test]
