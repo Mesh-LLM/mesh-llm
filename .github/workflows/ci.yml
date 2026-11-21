@@ -166,6 +166,9 @@ jobs:
       - name: Run inference
         run: just smoke skippy-runtime smoke-model.gguf
 
+      - name: Run the tests that need a runtime
+        run: just test-with-runtime skippy-runtime
+
       - name: Record what was tested
         if: always()
         env:

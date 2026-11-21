@@ -26,5 +26,11 @@ test-ui:
 smoke runtime model:
     @scripts/ci-smoke-test.sh "{{ runtime }}" "{{ model }}"
 
+# The tests that call into a native runtime, which `test-rust` leaves ignored.
+# `runtime` is a directory of packaged Skippy runtimes.
+[unix]
+test-with-runtime runtime:
+    SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR="$(cd "{{ runtime }}" && pwd -P)" cargo test -p mesh-llm-system --features dynamic-native-runtime --lib test_skippy_backend -- --ignored
+
 # Everything a pull request must pass, except the smoke (it needs a runtime and a model).
 test-all: lint test-rust test-ui

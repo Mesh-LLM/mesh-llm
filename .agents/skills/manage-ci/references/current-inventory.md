@@ -23,7 +23,7 @@ runners.
 | Lint | `ubuntu-24.04` | `just lint` |
 | Test | `ubuntu-24.04`, `macos-15`, `windows-2022` | `just test-rust --locked` |
 | Console | `ubuntu-24.04` | `just test-ui` |
-| Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/ci-skippy-runtime.sh`, `just build`, `just smoke` |
+| Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/ci-skippy-runtime.sh`, `just build`, `just smoke`, `just test-with-runtime` |
 
 `just lint` is `cargo fmt --all -- --check`, Clippy on the workspace with
 warnings denied, ShellCheck on `scripts/*.sh`, `scripts/tests/*.sh` and

@@ -226,7 +226,7 @@ Pull requests run [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 | Lint | `just lint` |
 | Test, per platform | `just test-rust --locked` |
 | Console | `just test-ui` |
-| Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>` |
+| Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>`, then `just test-with-runtime <runtime-dir>` |
 
 `just test-all` runs the first three. The smoke job builds Skippy's CPU runtime
 from the pinned Skippy commit, builds MeshLLM, and requires a real completion.
