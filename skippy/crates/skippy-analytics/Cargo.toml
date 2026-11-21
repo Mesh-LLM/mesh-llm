@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 version.workspace = true
 description = "Anonymous, opt-out product analytics for Skippy"
-repository = "https://github.com/general-inference/skippy"
+repository = "https://github.com/Mesh-LLM/skippy"
 build = "build.rs"
 
 [lints]
