@@ -37,13 +37,16 @@ const response = await node.inference.chatCompletions({
 await node.stop()
 ```
 
-Use `joinTokens: [token]` for a private mesh. To serve local models, choose
+Use `joinTokens: [token]` to join a mesh by token. To serve local models, choose
 `mode: 'serve'` or `'combined'` and set `models: [modelRef]`. Serving requires a
 matching native runtime. `ownerKeyPath` accepts a Mesh LLM keystore path. The
 old `Client` and owner keypair hex constructor are removed.
 
 Stream with `node.inference.streamChatCompletions(body)` or
 `streamResponses(body)`. See [runtime artifacts](../SDK.md#native-runtime-artifacts).
+
+Join tokens locate a mesh; private membership requires enforced
+[admission control](../MESHES.md#ownership-and-admission-control).
 
 ## Thinking effort levels
 

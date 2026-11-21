@@ -1,0 +1,112 @@
+From ab4663bec3a9a8b26539ae83fd67201d8389a7b9 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sat, 7 Nov 2026 21:19:15 +1100
+Subject: [PATCH 22/32] ggml-metal: read consecutive row-list blocks like dense
+ attention
+
+The flash-attention vec kernel serves K/V row lists through the sparse
+path: one dependent load per row behind an index. A block whose 32 indices
+are consecutive now takes the dense path from its first row, so a shared
+prefix and any contiguous run stream at dense speed; only a block with
+gaps or padding gathers row by row.
+
+The row lists are strictly ascending, so a 32-row block is consecutive
+exactly when its first and last entries are 31 apart. Two uniform loads
+decide it, with no index staging, simdgroup barrier or vote; only a
+gathered block stages its indices.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ .../ggml-metal/kernels/fa_vec_common.metal    | 33 ++++++++++++++-----
+ 1 file changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/kernels/fa_vec_common.metal b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+index c81e4d09b..965216ae7 100644
+--- a/ggml/src/ggml-metal/kernels/fa_vec_common.metal
++++ b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+@@ -230,8 +230,23 @@ kernel void kernel_flash_attn_ext_vec(
+                 ic = 0;
+             }
+ 
+-            // load the KV row indices for the current block into shared memory
+-            if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_rows) {
++            // a block whose row list is consecutive reads K/V like the dense path, from its first row;
++            // only a block with gaps or padding gathers row by row. the lists are strictly ascending
++            // (llama_kv_cells::get_seq_cells), so a block is consecutive iff its ends are C-1 apart:
++            // two uniform loads decide it, without staging the indices
++            int rows_base = -1;
++            if (FC_flash_attn_ext_vec_has_rows) {
++                const int first = rows_list[ic];
++                const int last  = rows_list[ic + C - 1];
++
++                rows_base = (first >= 0 && last == first + C - 1) ? first : -1;
++            }
++
++            const bool gather = FC_flash_attn_ext_vec_has_sparse || (FC_flash_attn_ext_vec_has_rows && rows_base < 0);
++            const int  icr    = rows_base >= 0 ? rows_base : ic;
++
++            // load the KV row indices of a gathered block into shared memory
++            if (gather) {
+                 FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
+                     const short i = ii*NW + tiisg;
+ 
+@@ -293,8 +308,8 @@ kernel void kernel_flash_attn_ext_vec(
+             {
+                 device      const k4_t * pk4 = nullptr;
+ 
+-                if (!FC_flash_attn_ext_vec_has_sparse && !FC_flash_attn_ext_vec_has_rows) {
+-                    pk4 = (device const k4_t *) (k + ic*args.nb11);
++                if (!gather) {
++                    pk4 = (device const k4_t *) (k + icr*args.nb11);
+ 
+                     pk4 += ty*NS10/4 + tx;
+                 }
+@@ -308,7 +323,7 @@ kernel void kernel_flash_attn_ext_vec(
+ 
+                 // each simdgroup processes Q queries and NE (NW/NL) cache elements
+                 FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+-                    if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_rows) {
++                    if (gather) {
+                         // the KV rows are gathered from the index list; -1 entries are padding
+                         const int i11 = spidx[NE*cc + ty];
+                         if (i11 >= 0) {
+@@ -344,7 +359,7 @@ kernel void kernel_flash_attn_ext_vec(
+                             }
+                         }
+                     } else {
+-                        device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
++                        device const kd4_t * pk = (device const kd4_t *) (k + ((icr + NE*cc + ty)*args.nb11));
+ 
+                         k4_t mk;
+ 
+@@ -451,7 +466,7 @@ kernel void kernel_flash_attn_ext_vec(
+                     }
+                 }
+ 
+-                if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_rows) {
++                if (gather) {
+                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+                         // the KV rows are gathered from the index list; -1 entries are padding
+                         const int i11 = spidx[NE*cc + ty];
+@@ -485,7 +500,7 @@ kernel void kernel_flash_attn_ext_vec(
+                         }
+                     }
+                 } else if (is_same<vd4_t, v4_t>::value) {
+-                    device const v4_t * pv4 = (device const v4_t *) (v + ic*args.nb21);
++                    device const v4_t * pv4 = (device const v4_t *) (v + icr*args.nb21);
+ 
+                     pv4 += ty*NS20/4 + tx;
+ 
+@@ -499,7 +514,7 @@ kernel void kernel_flash_attn_ext_vec(
+                     }
+                 } else {
+                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+-                        device const vd4_t * pv4 = (device const vd4_t *) (v + ((ic + NE*cc + ty)*args.nb21));
++                        device const vd4_t * pv4 = (device const vd4_t *) (v + ((icr + NE*cc + ty)*args.nb21));
+ 
+                         FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                             const short i = ii*NL + tx;
+-- 
+2.43.0
+

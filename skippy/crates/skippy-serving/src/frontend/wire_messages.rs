@@ -1,4 +1,5 @@
 use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceRequestClass;
 use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::LLAMA_TOKEN_NULL;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
@@ -16,6 +17,8 @@ pub(super) struct DecodeMessageArgs {
     pub(super) sampling: Option<WireSamplingConfig>,
     /// Native MTP drafts the final stage should propose; zero asks for none.
     pub(super) native_mtp_draft_tokens: usize,
+    /// The tier and cache partition of the request this decode serves.
+    pub(super) request_class: InferenceRequestClass,
 }
 
 pub(super) fn embedded_decode_message(
@@ -29,6 +32,7 @@ pub(super) fn embedded_decode_message(
         sampling: args.sampling,
         sideband_capacity: 1,
         native_mtp_draft_tokens: args.native_mtp_draft_tokens,
+        request_class: args.request_class,
     })?;
     message.update_at_pos(
         args.decode_step,
@@ -47,6 +51,9 @@ pub(super) struct ReusableDecodeMessageArgs {
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) sideband_capacity: usize,
     pub(super) native_mtp_draft_tokens: usize,
+    /// Stamped on every decode, since a downstream stage records the prompt
+    /// on the first one.
+    pub(super) request_class: InferenceRequestClass,
 }
 
 pub(super) struct ReusableDecodeMessage {
@@ -63,6 +70,7 @@ impl ReusableDecodeMessage {
         state.prompt_token_count = i32::try_from(args.prompt_token_count)
             .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
         state.source_stage_index = -1;
+        crate::stage_request_class::stamp_request_class(&mut state, args.request_class);
         Ok(Self {
             message: StageWireMessage {
                 kind: WireMessageKind::DecodeEmbd,
@@ -143,6 +151,7 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) tokens: &'a [i32],
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) native_mtp_draft_tokens: usize,
+    pub(super) request_class: InferenceRequestClass,
 }
 
 /// Construct a verification-window request with coordinator-owned identity.
@@ -166,6 +175,7 @@ pub(super) fn embedded_verify_window_message(
         .map_err(|_| InferenceError::backend("decode step exceeds i32"))?;
     state.current_token = args.tokens[0];
     state.source_stage_index = -1;
+    crate::stage_request_class::stamp_request_class(&mut state, args.request_class);
     Ok(StageWireMessage {
         kind: WireMessageKind::VerifyWindow,
         pos_start: i32::try_from(args.pos_start)
@@ -183,6 +193,18 @@ pub(super) fn embedded_verify_window_message(
         readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
+}
+
+/// Ends a request's stage session. It carries the request's class because a
+/// downstream stage records the prompt it accumulated when the session stops.
+pub(super) fn stop_message(
+    request_id: u64,
+    session_id: u64,
+    request_class: InferenceRequestClass,
+) -> StageWireMessage {
+    let mut message = StageWireMessage::stop_with_identity(request_id, session_id);
+    crate::stage_request_class::stamp_request_class(&mut message.state, request_class);
+    message
 }
 
 /// Invalidates verify windows `min_window_id..=max_window_id` for a request
@@ -270,6 +292,7 @@ pub(super) struct OpenAiPrefillChunk<'a> {
     pub(super) tokens: &'a [i32],
     pub(super) request_id: u64,
     pub(super) session_id: u64,
+    pub(super) request_class: InferenceRequestClass,
 }
 
 /// Construct a prefill request with its prompt, activation and sampling metadata.
@@ -286,6 +309,7 @@ pub(super) fn embedded_prefill_message(
         .last()
         .ok_or_else(|| InferenceError::backend("prefill chunk is empty"))?;
     state.source_stage_index = -1;
+    crate::stage_request_class::stamp_request_class(&mut state, chunk.request_class);
     Ok(StageWireMessage {
         kind: WireMessageKind::PrefillEmbd,
         pos_start: i32::try_from(chunk.pos_start)
@@ -311,12 +335,14 @@ pub(super) fn embedded_prefix_cache_message(
     tokens: &[i32],
     request_id: u64,
     session_id: u64,
+    request_class: InferenceRequestClass,
 ) -> InferenceResult<StageWireMessage> {
     let mut state = StageStateHeader::new(kind);
     state.prompt_token_count = i32::try_from(tokens.len())
         .map_err(|_| InferenceError::backend("prefix token count exceeds i32"))?;
     state.current_token = tokens.last().copied().unwrap_or(LLAMA_TOKEN_NULL);
     state.source_stage_index = -1;
+    crate::stage_request_class::stamp_request_class(&mut state, request_class);
     Ok(StageWireMessage {
         kind,
         pos_start: 0,
@@ -346,6 +372,7 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) chat_sampling_metadata: Option<&'a str>,
     pub(super) native_mtp_draft_tokens: usize,
+    pub(super) request_class: InferenceRequestClass,
 }
 
 /// Construct a fused restore/prefill/decode request preserving generation metadata.
@@ -364,6 +391,7 @@ pub(super) fn embedded_restore_prefill_decode_message(
     let mut tokens = Vec::with_capacity(args.prefix_tokens.len().saturating_add(1));
     tokens.extend_from_slice(args.prefix_tokens);
     tokens.push(args.current);
+    crate::stage_request_class::stamp_request_class(&mut state, args.request_class);
     Ok(StageWireMessage {
         kind: WireMessageKind::TryRestorePrefillDecode,
         pos_start: i32::try_from(args.pos_start)
@@ -400,6 +428,7 @@ pub(super) struct MultimodalPrefillArgs {
     pub(super) positions: Vec<i32>,
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) final_chunk: bool,
+    pub(super) request_class: InferenceRequestClass,
 }
 
 /// Construct a prefill request carrying multimodal positions and activation data.
@@ -417,6 +446,7 @@ pub(super) fn multimodal_prefill_message(
         .map_err(|_| InferenceError::backend("multimodal prefill token count exceeds i32"))?;
     state.current_token = LLAMA_TOKEN_NULL;
     state.source_stage_index = -1;
+    crate::stage_request_class::stamp_request_class(&mut state, args.request_class);
     Ok(StageWireMessage {
         kind,
         pos_start: i32::try_from(args.pos_start)

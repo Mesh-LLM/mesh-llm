@@ -24,6 +24,14 @@ Guardrail/compaction wrapping uses the serving library implementation, including
 an optional caller-owned telemetry sink. `ModelOpenEvents` preserves the native
 load-with-events choice independently of whether an observer is supplied.
 
+Before opening the target, model loading derives recurrent rollback retention
+from enabled speculative proposals and preserves any larger caller-supplied
+depth. In native ABI 0.1.81, an explicit zero disables recurrent snapshots for
+ordinary decoding; direct runtime users must request positive retention for
+in-place verification. Windows outside native retention continue through the
+existing checkpoint/replay fallback. The C configuration factory and a null C
+configuration retain their explicit legacy depth of two.
+
 `native_runtime` selects and loads an explicitly supplied runtime bundle/cache.
 It performs no product discovery and does not download implicitly. The dependency
 direction is API → serving; the serving library does not depend on this API.

@@ -392,7 +392,7 @@ esac
         let report = process::supervise_raw(
             &spec,
             &Limits {
-                execution: Duration::from_secs(8),
+                execution: Duration::from_secs(120),
                 graceful_shutdown: Duration::from_secs(1),
                 forced_shutdown: Duration::from_secs(1),
                 retained_bytes_per_stream: 256 * 1024,

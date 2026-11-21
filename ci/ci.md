@@ -1,5 +1,19 @@
 # MeshLLM CI topology
 
+`automation kv-validation` is an explicit manual diagnostic surface, separate
+from the five required PR/main lanes. One backend producer prepares matching
+tools and the external indexed-attention model harness once; four model jobs
+reuse the immutable prepared image. The Linux JY adapter emits CPU/CUDA custom
+jobs without dispatching them. Native Metal uses the local worker command.
+No automatic GPU/model fan-out or required-check topology changes accompany
+this foundation. See `skippy/evals/kv-validation/README.md` for its bounded scope.
+
+The optional AgentX comparison uses a separately prepared, pinned upstream
+client environment. Its manifest, lock, wheel identity and setup invocation are
+admitted by `ci/python-tooling-policy.json` under the November 6 maintainer
+decision. Setup requires installed Python 3.12; workers remain offline. The
+allowance changes no required-check topology or generic Python tooling policy.
+
 All workflows disable Rust debug information with workflow- or job-level
 `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
 `CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
@@ -12,6 +26,7 @@ Cache epoch `v5` starts a fresh namespace. Batch jobs record filesystem space
 before each package and retained target/compiler-cache sizes even when tests fail.
 The upstream canary sets the environment in each executing job and its reusable
 family-pass workflow separately.
+
 
 ## Standalone C++ API qualification
 
@@ -237,6 +252,7 @@ part of this workspace or its publish chain.
 | `ci.yml` | `workflow_call` only | Temporary inert compatibility for the former main ingress filename, pending the protected-main runner-contract update |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
+| `windows-warm-caches.yml` | daily schedule, `workflow_dispatch` | Verify existing Windows ABI entries and run bounded retention; Main Windows runtimes own publication |
 | `nightly-stability.yml` / `nightly-stability-run.yml` | manual dispatch / reusable; daily schedule paused pending setup qualification | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | manual dispatch; daily schedule paused | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
 | `agentic-replay-nightly.yml` | trusted-main dispatch; schedule paused for qualification | Coding-agent replay benchmark on the persistent macOS `micstudio` runner. The fixed `[self-hosted, X64, macOS, family-certify, agentic-replay]` selector is backed by a fail-closed `RUNNER_NAME=micstudio` check; scheduled and manual execution is restricted to trusted `main`. It resolves exact model and trajectory revisions from the pre-warmed Hugging Face cache, verifies their SHA-256 digests, cross-checks the trajectory pin against the canonical harness before download, derives replay shape from `ci/agentic-replay-nightly/matrix.json`, fails closed on history lookup errors, writes the summary even when the regression gate fails, confines the write-capable HF token to the publish step, uploads immutable evidence, and keeps persistent-runner repair credential-free: the repair loop emits a patch, body and status artifact for its run/attempt, while a separate canonical-main, failed-run GitHub-hosted job validates the artifact, applies the patch with hooks disabled, and uses `CANARY_REPAIR_TOKEN` only to publish a deterministic run/attempt branch and PR. |
@@ -1516,12 +1532,36 @@ well as the Rust toolchain, and include the common linker driver. Runtime
 version 2 keys include packaging policy and the packaged Rust tool's local
 dependency closure. Key lookup remains compilation-free; a miss follows the
 existing build path and a hit retains its existing verification.
-The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`, and
-`windows-warm-caches.yml` is the only job that saves it on `main`, so the
-contract gate also checks that the warmer's `push` paths cover every input of
-that key, by equality or a literal `<dir>/**`, and refuses `!` exclusions there:
-an input it does not watch would move the key on `main` with no warmed entry,
-and the next Windows runtime run of each PR would build cold.
+The Windows ABI key is the same inventory's `CACHE_INPUT_HASH`. Main Windows
+runtime jobs own publication on trusted main pushes, after successful package
+verification and before artifact upload. Each miss saves the exact restore key
+with the pinned `actions/cache/save`, the same way the Linux CPU runtime
+publishes, so the PR-reused lane needs no Actions API permission. Consumers
+verify restored ABI bytes before use, and the next main run with a miss
+retries the save without waiting for another key-input edit. Jobs populate the actual
+hosted image cohort they use. PR-scoped publication remains isolated.
+`windows-warm-caches.yml` runs daily and on manual dispatch. It only restores
+and verifies existing ABI entries and runs bounded retention. It has no push
+trigger, ABI build or save, so it cannot duplicate the runtime producer.
+Retention runs once the current CPU identity resolves, so a missing entry does
+not stop pruning. Missing entries fail verification; rerun the failed Main
+Windows runtime job to repair them. The workflow guard
+pins these producer boundaries without adding a runtime dependency or changing
+the Windows matrix budget, product verification, or Skippy probe coverage.
+
+The manual `linux-cache-measurement.yml` diagnostic measures the Linux CPU
+runtime package, hosted xtask and hosted controller caches without publishing.
+Nothing calls it. One hosted `ubuntu-24.04` job per cohort computes the same
+production key, restores it only for exact-warm and unrelated-edit arms, and
+then runs the production verification or preparation path. A missing trusted
+entry records BLOCKED rather than a cold sample, and an unrelated edit that
+moves the key is refused. An admitted sample still writes a refused receipt when
+preparation fails. It builds its own receipt tool outside the measured
+roots, never reaches `prepare-automation` or `prepare-ci-controller`, and
+uploads only its receipts for 14 days. Runtime slice, warmer and hosted action
+behavior is unchanged. Merging a change to its receipt code moves the CPU
+runtime and hosted xtask keys, so their warm samples wait for a trusted `main`
+run that saves the new key. Each sample has its own concurrency group.
 
 Windows ABI retention runs in the existing warmer maintenance job. Rust derives
 the active compatibility roster from CI, release and warmer consumers and
@@ -1536,6 +1576,21 @@ the inventory, policy, plan and deletion receipt for 14 days. Other namespaces
 and refs are outside the plan. This change adds no cache authority and performs
 no operator purge. Candidate execution and post-merge qualification remain
 separate from local contract checks.
+
+The manual `windows-abi-measurement.yml` diagnostic measures one Windows
+runtime row cold or exact-warm without publishing. Nothing calls it: it has
+only a `workflow_dispatch` trigger, compiles automation once through
+`product-automation-artifact.yml`, and runs one hosted `windows-2022` job with a
+read-only token. Both conditions compute the same exact key through
+`restore-windows-abi-cache`. Only exact-warm retrieves it, and only that
+read-only restore has cache authority. A warm miss, a different restored key, a
+rebuild during canonical runtime preparation, a failed preparation or
+out-of-order phase timestamps refuse the sample; nothing relabels it cold. The job uploads phase timestamps and the admission or refusal
+receipt for 14 days. It does not change the runtime slice, the warmer, release
+or retention. A restore may still update an entry's access time. Merging a
+change to its `ci-ops` receipt code moves all four keys, so exact-warm samples
+wait for the main runtime jobs on that merge commit. Primary time excludes the
+uncached toolkit installs, and each sample has its own concurrency group.
 
 The Windows host slice uploads Cargo HTML timings from its existing standalone
 Skippy and Mesh compilations as a separate one-day architecture/attempt
@@ -1567,13 +1622,14 @@ remain reusable across runs within that compatibility cohort. Timing artifacts
 retain Cargo HTML and linker traces.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
-publish and verify an exact-key ABI cache miss under the current ref. These
+publish and verify an exact-key ABI cache miss under the current ref, except
+main-ref CPU and Vulkan keys owned by Main Windows runtime jobs. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
 the scoped runtime cache token. Failed/cancelled packaging never saves a
 partial ABI build. Publication verification is idempotent: an exact key/ref,
-non-empty entry counts even when a concurrent writer (the main cache warmer)
+non-empty entry counts even when a concurrent main runtime publisher
 published the immutable key first, and the lookup-only restore still fails
-closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. Hosted placement, architecture matrices, and PR cache policy
+closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. `actions/cache/restore` reports a cache-service rate limit (HTTP 429) as a miss, so when that probe misses, the final lookup runs after one 60-second cooldown instead of failing in the same throttle window. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during
 native runtime preparation. Hosted CUDA 13 evidence and exact ABI-cache reuse
 are recorded in PR #2662; cache compatibility remains tied to the runner image.
@@ -1801,8 +1857,17 @@ zero reuse in run `34272984200/1`.
 The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
-and the isolated default-feature `xtask` Clippy graph with all targets. The
-workflow-level debug-information overrides apply to every seed profile and its
+and the isolated default-feature `xtask` Clippy graph with all targets, then
+appends `just skippy-cli-release-build` for the standalone Skippy default-feature
+release graph with `dynamic-native-runtime`. Three paired runs in
+[44228295870](https://github.com/Mesh-LLM/mesh-llm/actions/runs/44228295870)
+at `83a16398df` measured a median 204.3 s (59.5%) standalone saving, 296-331 s
+extra seed work, and about 291 MB more data (1.52 GB total, no observed eviction).
+The observed main-host mean of 7.38 reuses per saved key exceeds the conservative
+1.82-reuse compute break-even; incremental archive transfer remains unmeasured.
+The experiment harness remains on its qualification branch; production adopts
+only its additional build. Native-runtime seed restoration remains excluded.
+The workflow-level debug-information overrides apply to every seed profile and its
 consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.
@@ -2044,7 +2109,10 @@ not a handle.
 The gate checks Cargo metadata on every invocation and rejects an exempt crate
 that becomes a transitive normal dependency of `mesh-llm`, including optional
 and platform-specific dependencies. Tests cover that guard and the scope rules.
-The Quality workflow still invokes the same `just no-console-print` gate.
+The Quality workflow no longer runs this gate. Its candidate source consistency
+job runs the crate-list, publish crate-chain, release-target and process
+environment mutation checks, and `repo-consistency no-console-print` now only
+reports that the gate is retired.
 
 The CPU native runtime-event gate selects `family-qwen3-dense` from the
 `skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The

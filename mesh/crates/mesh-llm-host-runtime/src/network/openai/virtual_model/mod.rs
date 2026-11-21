@@ -84,6 +84,13 @@ impl InferenceRpcBridge {
                 capability.request_id().as_uuid().to_string(),
             );
         }
+        let tier = self.plugins.nested_request_tier(plugin_name);
+        if tier != skippy_inference_api::InferenceRequestTier::Local {
+            request_builder = request_builder.header(
+                crate::mesh::request_tier::REQUEST_TIER_HEADER,
+                tier.as_str(),
+            );
+        }
         if let Some(scope) = self.plugins.private_nested_scope(plugin_name) {
             request_builder = request_builder.header(
                 super::routing_scope::MESH_SCOPE_HEADER,
@@ -341,13 +348,21 @@ fn invoke_in_scope<'a>(
 ) -> impl std::future::Future<Output = anyhow::Result<mesh_llm_plugin::VirtualModelResponse>> + 'a {
     let private_turn = mesh::current_private_scope()
         .map(|scope| plugins.begin_private_invocation(&route.plugin_name, Some(scope)));
+    // Its nested calls run no higher than the request's tier.
+    let tiered_turn = plugins.begin_tiered_invocation(
+        &route.plugin_name,
+        mesh::request_tier::current_request_tier(),
+    );
     let (manager, owned_route, input_json) =
         (plugins.clone(), route.clone(), input_json.to_string());
-    // A private turn runs to the plugin's reply even if the client leaves,
-    // and lingers unless the plugin replied: a timed-out turn may still run.
-    // Any reply ends it, an error or invalid output included.
-    async move {
-        let response = crate::plugin::private_invocations::run_to_reply(private_turn, async move {
+    // A private or lowered turn runs to the plugin's reply even if the
+    // client leaves, and lingers unless the plugin replied: a timed-out turn
+    // may still run. Any reply ends it, an error or invalid output included.
+    // Boxed: the turn's future is copied through several progress layers,
+    // and the call would otherwise be held twice inside each copy.
+    let call = Box::pin(crate::plugin::private_invocations::run_to_reply(
+        private_turn,
+        async move {
             manager
                 .invoke_virtual_model_service(
                     &owned_route,
@@ -355,8 +370,10 @@ fn invoke_in_scope<'a>(
                     Some(std::time::Duration::from_secs(300)),
                 )
                 .await
-        })
-        .await?;
+        },
+    ));
+    async move {
+        let response = crate::plugin::tiered_invocations::run_to_reply(tiered_turn, call).await?;
         PluginManager::virtual_model_response(route, response)
     }
 }

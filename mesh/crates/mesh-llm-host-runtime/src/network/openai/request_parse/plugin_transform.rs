@@ -136,6 +136,92 @@ mod tests {
         }
     }
 
+    /// Records the tier its own nested inference would run at while it
+    /// transforms a request, and leaves the request unchanged.
+    #[derive(Default)]
+    struct TierProbe {
+        manager: std::sync::OnceLock<plugin::PluginManager>,
+        seen: std::sync::Mutex<Vec<skippy_inference_api::InferenceRequestTier>>,
+    }
+
+    impl PluginRpcBridge for Arc<TierProbe> {
+        fn handle_request(
+            &self,
+            plugin_name: String,
+            _method: String,
+            params_json: String,
+        ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+            let probe = Arc::clone(self);
+            Box::pin(async move {
+                let tier = probe
+                    .manager
+                    .get()
+                    .unwrap()
+                    .nested_request_tier(&plugin_name);
+                probe.seen.lock().unwrap().push(tier);
+                let input: RequestTransformInput = serde_json::from_str(&params_json).unwrap();
+                Ok(RpcResult {
+                    result_json: serde_json::to_string(&RequestTransformOutput::replaced(
+                        input.body,
+                    ))
+                    .unwrap(),
+                })
+            })
+        }
+
+        fn handle_notification(&self, _: String, _: String, _: String) -> BridgeFuture<()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transform_runs_at_the_tier_the_client_lowered_its_request_to() {
+        let probe = Arc::new(TierProbe::default());
+        let manager = plugin::PluginManager::for_test_bridge(&["probe"], Arc::new(probe.clone()));
+        manager
+            .set_test_manifests(
+                [(
+                    "probe".to_string(),
+                    mesh_llm_plugin::plugin_manifest![
+                        mesh_llm_plugin::request_transform::request_transform()
+                    ],
+                )]
+                .into(),
+            )
+            .await;
+        assert!(probe.manager.set(manager.clone()).is_ok());
+        let body =
+            json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}).to_string();
+        for (header, expected) in [
+            ("", skippy_inference_api::InferenceRequestTier::Local),
+            (
+                "x-mesh-request-tier: mesh\r\n",
+                skippy_inference_api::InferenceRequestTier::Mesh,
+            ),
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+            let request = format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            client.write_all(request.as_bytes()).await.unwrap();
+            super::super::read_http_request_with_limits_with_context(
+                &mut server,
+                super::super::HTTP_READ_LIMITS,
+                Some(&manager),
+                RequestTransforms::Apply,
+            )
+            .await
+            .map_err(super::super::OpenAiRequestReadError::into_error)
+            .unwrap();
+            assert_eq!(probe.seen.lock().unwrap().pop(), Some(expected));
+        }
+        assert_eq!(
+            manager.nested_request_tier("probe"),
+            skippy_inference_api::InferenceRequestTier::Local
+        );
+    }
+
     async fn stamping_manager() -> plugin::PluginManager {
         let manager = plugin::PluginManager::for_test_bridge(&["stamp"], Arc::new(PathStamp));
         manager

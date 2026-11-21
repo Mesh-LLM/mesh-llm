@@ -100,6 +100,19 @@ impl OwnedChild {
     }
 
     pub(super) fn exited(&mut self) -> Result<bool, Failure> {
+        self.leader_state()
+            .map(|state| matches!(state, super::LeaderState::Exited(_)))
+    }
+
+    pub(super) fn pre_force(&mut self) -> super::PreForceObservation {
+        super::PreForceObservation {
+            leader: self.leader_state(),
+            members: None,
+        }
+    }
+
+    fn leader_state(&mut self) -> Result<super::LeaderState, Failure> {
+        use std::os::unix::process::ExitStatusExt;
         // SAFETY: siginfo_t is a C POD; zeroing initializes its no-event state.
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         // SAFETY: info is writable and sized correctly. WNOWAIT preserves our
@@ -116,7 +129,17 @@ impl OwnedChild {
             return Err(Failure::io("observe exit", io::Error::last_os_error()));
         }
         // SAFETY: waitid initialized the SIGCHLD union for this wait operation.
-        Ok(unsafe { info.si_pid() } != 0)
+        if unsafe { info.si_pid() } == 0 {
+            return Ok(super::LeaderState::Alive);
+        }
+        // SAFETY: a reported child event initializes the SIGCHLD status union.
+        let status = unsafe { info.si_status() };
+        let raw = match info.si_code {
+            libc::CLD_EXITED => status << 8,
+            libc::CLD_DUMPED => status | 0x80,
+            _ => status,
+        };
+        Ok(super::LeaderState::Exited(ExitStatus::from_raw(raw)))
     }
 
     pub(super) fn active(&mut self) -> Result<bool, Failure> {

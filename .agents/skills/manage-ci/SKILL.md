@@ -170,7 +170,12 @@ replacement passes.
 Retained external Python dependencies have bounded owners: llama.cpp's upstream
 Jinja and FP8 conversion tests using the trusted controller's
 `ci/llama-canary/jinja/uv.lock`, the optional llama-benchy wrapper with an
-immutable default source commit, and the separate Python research project.
+immutable default source commit, the separate Python research project, and the
+pinned external AgentX client environment under `skippy/evals/agentx/`. AgentX
+setup uses an installed Python 3.12 interpreter without interpreter downloads;
+prepared campaign workers remain offline. Its exact dependency inputs,
+upstream wheel identity, and setup invocation belong to the typed policy below.
+See [the November 6 AgentX maintainer decision](references/maintainer-decisions.md).
 These interfaces do not authorize new repository Python implementations. The
 canary Jinja environment belongs to its run's state directory and must use a
 preinstalled interpreter; dependency restoration must not download an
@@ -573,6 +578,16 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Main Windows runtime jobs own shared Windows ABI publication after successful
+  package verification, on trusted main pushes only. Every subsequent main
+  miss retries publication, so recovery does not depend on another recipe edit.
+  The Windows warmer runs daily and on manual dispatch. It only restores,
+  verifies and maintains existing entries; it never builds or publishes ABI
+  trees and has no push trigger. Retention needs only the current CPU identity,
+  so a missing or unverifiable entry does not stop pruning.
+  Release jobs publish their distinct GPU families, but leave shared main-ref
+  CPU and Vulkan keys to Main Windows.
+  Preserve exact keys, restored-byte verification and isolated PR cache policy.
 - Disable Rust debug information in every CI workflow with workflow- or job-level
   `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
   `CARGO_PROFILE_RELEASE_DEBUG=0`, and `CARGO_PROFILE_BENCH_DEBUG=0`.
@@ -583,7 +598,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   Keep compiler-seed publishers and consumers aligned, and change the cache
   epoch with this policy.
 - The trusted seed also builds the isolated default-feature `xtask` Clippy
-  graph with `--all-targets`, independently of the product graph. All seed
+  graph with `--all-targets`, independently of the product graph, then appends
+  `just skippy-cli-release-build` to seed the standalone Skippy default-feature
+  release graph with `dynamic-native-runtime`. Keep this after the existing
+  seed builds, matching the measured extended recipe. This does not qualify
+  native-runtime seed restoration; keep its recorded exclusion. All seed
   builds use the same debug-information settings as their consumers.
   Seed compatibility keys include the root and workspace
   package Cargo manifests and the warmer workflow's build configuration as well
@@ -694,10 +713,56 @@ checked-in expiry are the maintainer-controlled approval boundary.
   and an insufficient budget before deletion. Unknown keys and other refs are
   outside its authority. Retain the plan as evidence; a source change does not
   authorize an operator to purge live caches.
+- Windows ABI cold versus exact-warm measurement uses only the manual
+  `windows-abi-measurement.yml` diagnostic. It has no push, PR, schedule,
+  `workflow_run` or `workflow_call` trigger, a read-only token, no secrets, no
+  OIDC and fixed hosted `windows-2022` placement, and it never passes or
+  fabricates `original_event_name`. Typed `ci-ops windows-abi-measurement`
+  plans closed rows from the Windows `ci/slices.yml` runtime rows, at most five
+  samples per condition. Both arms compute the same exact key through the
+  canonical restore action. Cold skips retrieval and requires an empty build
+  directory. Exact-warm requires an exact hit whose key equals the computed
+  identity, plus an unchanged build stamp after canonical preparation, so a
+  rebuild is refused rather than relabelled. An admitted sample always writes a
+  receipt: a failed preparation or missing or out-of-order phase timestamps make
+  it `admitted=false`. Every compiler, SDK, automation and
+  ABI cache authority is literal `false` except that exact-warm read-only
+  restore, and no job reaches a cache save, save-and-verify, retention or
+  publisher. The workflow is a registered retention consumer that adds no
+  family. It is deliberately outside `CACHE_INPUT_HASH`, so editing it cannot
+  move the key it measures, but its `ci-ops` receipt code is in that key, so
+  exact-warm samples wait until the Main Windows runtime jobs on the merge
+  commit have published the new key. Primary time
+  is lookup plus preparation, excluding uncached toolkit installs. Restores may
+  update cache access metadata. Receipts are evidence artifacts only.
 - A workflow that is the only `main` producer of a key must wake on every input
-  of that key. `windows-warm-caches.yml` push paths cover each Windows ABI
-  `CACHE_INPUT_HASH` input by equality or a literal `<dir>/**`; the contract
-  gate refuses an uncovered input and any `!` exclusion in those paths.
+  of that key. Main Windows runtime jobs, the only Windows ABI producer, run on
+  every main push without path filters, so every `CACHE_INPUT_HASH` input change
+  reaches them.
+- Linux CPU runtime package, hosted full xtask and hosted controller cache
+  qualification uses only the manual `linux-cache-measurement.yml` diagnostic.
+  It has only a `workflow_dispatch` trigger, hosted `ubuntu-24.04` jobs, a
+  `contents: read` token (plus `packages: read` to pull the pinned CPU image),
+  no secrets and no Depot. Each cohort job restores its unchanged production
+  key, the `ci-ops cache-inputs` expression, through one exact
+  `actions/cache/restore` in warm arms only. Cold computes and records the same
+  key without retrieval. Exact-warm and unrelated-edit without an exact trusted
+  entry are recorded BLOCKED, never relabelled cold, and no entry is
+  manufactured. Unrelated-edit applies the cohort's first admitted Rust edit
+  from the identity-preservation fixture and refuses the sample unless the full
+  key is unchanged. Each arm uses fresh output and native build roots, and the
+  measurement automation builds outside them. The `linux_cache_measurement`
+  workflow guard refuses any reached `actions/cache` or `actions/cache/save`,
+  save-and-verify, `prepare-automation`, `prepare-ci-controller`, cache prune,
+  release or non-evidence artifact upload, including through local actions,
+  and any other trigger. An admitted sample always reaches its receipt: a failed
+  preparation, missing or out-of-order phase timestamps, or an unreadable output
+  make it `admitted=false`. Typed `ci-ops linux-cache-measurement` receipts are
+  evidence artifacts only. Production keys, the compiler-seed exclusion and the
+  existing save clauses are unchanged; restores may update access metadata.
+  The receipt code is in the CPU runtime and hosted xtask keys, so warm samples
+  of those cohorts wait for a trusted `main` save of the new key. Primary time
+  is lookup plus preparation only.
 - Treat restored cache contents as untrusted. Verify native build stamps,
   manifests, checksums, target/backend identity, and required link closure
   before reuse. Never store credentials or private endpoints in a cache.

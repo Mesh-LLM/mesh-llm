@@ -138,12 +138,14 @@ upgrade them, your older nodes simply don't serve private requests.
 On the node itself, requests marked private turn off peer consultation
 (Mesh hooks for images, uncertainty and drift), which would pick peers
 outside the scope, and run its exchange hooks in the request's scope.
+Its prompt cache keeps private requests apart: a private request neither
+reuses nor leaves behind cache entries a non-private request can see (see
+[Request tiers](request-tiers.md)).
 
 ## Not yet
 
 - The startup (bootstrap) proxy refuses private requests (503) until the node
   is ready.
-- A separate prompt-cache namespace, console and launcher (`--private`)
-  support.
+- Console and launcher (`--private`) support.
 - Per-turn private scope for MoA nested requests.
 - Peer consultation for private requests.

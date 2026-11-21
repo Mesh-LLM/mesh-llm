@@ -273,7 +273,13 @@ async fn relay_local(
 ) -> anyhow::Result<SessionEnd> {
     let mut upstream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
     upstream.set_nodelay(true)?;
-    upstream.write_all(opening).await?;
+    let classified = mesh::request_tier::mark_class_for_local_server(
+        opening,
+        mesh::current_private_scope().is_some(),
+    );
+    upstream
+        .write_all(classified.as_deref().unwrap_or(opening))
+        .await?;
     relay_bytes(client, upstream, REALTIME_IDLE_TIMEOUT).await
 }
 
@@ -284,7 +290,13 @@ async fn relay_remote(
     peer: iroh::EndpointId,
 ) -> anyhow::Result<SessionEnd> {
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
-    send.write_all(opening).await?;
+    // The peer serves the session no higher than this node's client.
+    let mut opening = opening.to_vec();
+    mesh::request_tier::insert_request_tier_header(
+        &mut opening,
+        mesh::request_tier::current_request_tier(),
+    );
+    send.write_all(&opening).await?;
     let upstream = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
     relay_bytes(client, upstream, REALTIME_IDLE_TIMEOUT).await
 }

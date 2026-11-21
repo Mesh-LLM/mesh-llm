@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-For a private mesh, replace `.auto_join_public_mesh()` with `.join_token(token)`.
+To join a mesh by token, replace `.auto_join_public_mesh()` with `.join_token(token)`.
 Use `.owner_key(path)` when an owner keystore is required. Client mode does not
 load a native model-serving runtime. To serve local models, install a matching
 runtime explicitly, choose `.serve_only()` or `.serve()`, and add
@@ -68,6 +68,10 @@ implicitly. See [SDK overview](/docs/pages/sdk/).
 
 The former thin client facade, `ClientBuilder`, and `client`/`node` feature split
 have been removed from this SDK. Migrate callers to the embedded `MeshNode`.
+
+Join tokens locate a mesh; they do not make membership private. Configure
+[admission control](/docs/pages/private-meshes/#restrict-membership) separately
+when participation must be restricted.
 
 ## Read local runtime capacity
 

@@ -323,7 +323,16 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
-            recurrent_rollback_tokens: 0,
+            recurrent_rollback_tokens: self.speculative.decode.recurrent_rollback_tokens(
+                self.speculative
+                    .native_mtp_enabled
+                    .then_some(self.speculative.draft_max_tokens as usize),
+                self.speculative
+                    .draft_model_path
+                    .as_ref()
+                    .filter(|_| !self.speculative.native_mtp_enabled)
+                    .map(|_| self.speculative.draft_max_tokens as usize),
+            ),
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
@@ -358,6 +367,7 @@ impl ResolvedSkippyConfig {
             ),
             generation_admission_timeout_secs:
                 skippy_serving::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
+            local_kv_reserve_percent: self.throughput.local_kv_reserve_percent,
             prefill_chunk_size: self.skippy.prefill_chunk_size,
             prefill_chunk_policy: resolve_prefill_chunk_policy(&self.skippy.prefill_chunking),
             prefill_chunk_schedule: self.skippy.prefill_chunk_schedule.clone(),
@@ -451,6 +461,8 @@ impl ResolvedSkippyConfig {
                 shared_prefix_record_limit: 0,
                 l2_max_bytes: 0,
                 codec: skippy_protocol::StageKvCacheCodec::Native,
+                prefill_admission: Default::default(),
+                retention: Default::default(),
             }),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
@@ -463,6 +475,8 @@ impl ResolvedSkippyConfig {
                     shared_prefix_record_limit: 2,
                     l2_max_bytes: 0,
                     codec: skippy_protocol::StageKvCacheCodec::Native,
+                    prefill_admission: Default::default(),
+                    retention: Default::default(),
                 });
                 cache.mode = template.mode.clone();
                 if let Some(value) = template.max_entries {

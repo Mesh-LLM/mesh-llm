@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::path::Path;
 use std::ptr;
 
@@ -114,7 +115,7 @@ impl LayaModel {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_laya_model_open(
+            native_call!(skippy_laya_model_open(
                 c_path.as_ptr(),
                 threads,
                 c_device
@@ -122,7 +123,7 @@ impl LayaModel {
                     .map_or(ptr::null(), |device| device.as_ptr()),
                 &mut raw,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error).with_context(|| format!("open Laya model {}", path.display()))?;
         if raw.is_null() {
@@ -221,7 +222,7 @@ impl LayaModel {
         let mut count = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_laya_tokenize(
+            native_call!(skippy_laya_tokenize(
                 self.raw,
                 text.as_ptr().cast(),
                 text.len(),
@@ -229,7 +230,7 @@ impl LayaModel {
                 tokens.len(),
                 &mut count,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error).with_context(|| {
             format!(
@@ -275,7 +276,7 @@ impl LayaModel {
         let mut act_logits = vec![0.0_f32; sequences.len() * action_classes];
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_laya_read(
+            native_call!(skippy_laya_read(
                 self.raw,
                 tokens.as_ptr(),
                 tokens.len(),
@@ -288,7 +289,7 @@ impl LayaModel {
                 act_logits.as_mut_ptr(),
                 act_logits.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
 
@@ -308,7 +309,7 @@ impl LayaModel {
 impl Drop for LayaModel {
     fn drop(&mut self) {
         if !self.raw.is_null() {
-            unsafe { skippy_ffi::skippy_laya_model_free(self.raw) };
+            unsafe { native_call!(skippy_laya_model_free(self.raw)) };
         }
     }
 }

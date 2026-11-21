@@ -132,6 +132,47 @@ pub fn file_basename(input: &str) -> &str {
         .unwrap_or(input)
 }
 
+pub fn split_bare_name_selector(input: &str) -> (&str, Option<&str>) {
+    match input.split_once(':') {
+        Some((name, selector))
+            if !name.is_empty()
+                && !selector.is_empty()
+                && !name.contains('/')
+                && !name.contains('@')
+                && !name.contains("://") =>
+        {
+            (name, Some(selector))
+        }
+        _ => (input, None),
+    }
+}
+
+fn normalize_repo_leaf_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+pub fn select_strong_repo_hit(query: &str, repo_ids: &[String]) -> Option<String> {
+    let query_norm = normalize_repo_leaf_name(query);
+    if query_norm.is_empty() {
+        return None;
+    }
+    let mut exact = Vec::new();
+    for repo_id in repo_ids {
+        let leaf = repo_id.rsplit('/').next().unwrap_or(repo_id);
+        if normalize_repo_leaf_name(leaf) == query_norm {
+            exact.push(repo_id.clone());
+        }
+    }
+    if let Some(first) = exact.into_iter().next() {
+        return Some(first);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

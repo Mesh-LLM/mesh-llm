@@ -66,7 +66,7 @@ entries also work with `mesh-llm serve --config /path/to/config.toml`.
 Explicit `--model` or `--gguf` arguments replace the configured startup model list.
 
 Add `--join <invite>` to serve them on an existing mesh, or `--publish` to
-advertise your mesh for discovery; see [mesh setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md).
+advertise your mesh for discovery; see [mesh setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/MESHES.md).
 Only call `/v1/systemone` through a client after its own `/v1/models` response
 advertises `system_one` for the selected model; seeing a model name alone is
 not sufficient. The chat model uses `/v1/chat/completions`. Loading both does

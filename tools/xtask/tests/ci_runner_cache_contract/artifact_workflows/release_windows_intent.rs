@@ -208,7 +208,11 @@ fn graph_windows_release_abi_cache_is_saved_only_after_package_verification() {
         let save = action(j, "./.github/actions/save-and-verify-actions-cache");
         assert_eq!(
             text(save, "if"),
-            Some("steps.llama_cache.outputs.cache-hit != 'true'")
+            Some(if name == "build_native_runtime_windows_cpu" {
+                "github.ref != 'refs/heads/main' && steps.llama_cache.outputs.cache-hit != 'true'"
+            } else {
+                "(github.ref != 'refs/heads/main' || matrix.backend != 'vulkan') && steps.llama_cache.outputs.cache-hit != 'true'"
+            })
         );
         for (key, value) in [
             ("path", "${{ steps.llama_cache.outputs.cache-path }}"),

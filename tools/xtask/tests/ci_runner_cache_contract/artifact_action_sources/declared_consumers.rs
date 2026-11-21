@@ -180,8 +180,8 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
 #[test]
 fn windows_native_cache_callers_declare_fail_closed_defaults_and_exact_opt_in() {
     for (action, expected) in [
-        ("restore-windows-abi-cache", [1, 2, 2]),
-        ("setup-windows-rocm-sdk", [1, 1, 1]),
+        ("restore-windows-abi-cache", [1, 2, 2, 1]),
+        ("setup-windows-rocm-sdk", [1, 1, 0, 1]),
     ] {
         let document = doc(&format!(".github/actions/{action}/action.yml"));
         let flag = document
@@ -196,20 +196,31 @@ fn windows_native_cache_callers_declare_fail_closed_defaults_and_exact_opt_in() 
             "ci-windows-runtime-slice.yml",
             "release.yml",
             "windows-warm-caches.yml",
+            "windows-abi-measurement.yml",
         ];
-        assert_eq!(calls.len(), names.len());
+        assert_eq!(
+            calls.len(),
+            expected.iter().filter(|count| **count != 0).count()
+        );
         for (name, count) in names.into_iter().zip(expected) {
+            if count == 0 {
+                assert!(!calls.contains_key(name), "{name} {action}");
+                continue;
+            }
             let observed = calls.get(name).unwrap();
             assert_eq!(observed.len(), count, "{name} {action}");
             for call in observed {
-                assert_eq!(
-                    input(call, "allow-native-github-cache"),
-                    Some(if name == "ci-windows-runtime-slice.yml" {
+                let expected = match (name, action) {
+                    ("ci-windows-runtime-slice.yml", _) => {
                         "${{ needs.runner_policy.outputs.allow_native_github_cache }}"
-                    } else {
-                        "true"
-                    })
-                );
+                    }
+                    ("windows-abi-measurement.yml", "restore-windows-abi-cache") => {
+                        "${{ inputs.condition == 'exact-warm' && 'true' || 'false' }}"
+                    }
+                    ("windows-abi-measurement.yml", _) => "false",
+                    _ => "true",
+                };
+                assert_eq!(input(call, "allow-native-github-cache"), Some(expected));
             }
         }
     }

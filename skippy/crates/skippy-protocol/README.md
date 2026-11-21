@@ -62,10 +62,17 @@ DFlash status lists the encodings it reads (`bf16`, `q8`, `q4`), and the
 DFlash plan sent to every earlier stage names the one they send. A final
 stage that lists none attaches no split DFlash.
 
-Current generation 16 raises the stage frame budget from 8 MiB to 64 MiB, so a
+Generation 16 raised the stage frame budget from 8 MiB to 64 MiB, so a
 prefill chunk of a wide boundary crosses as one frame; a chunk whose output
-still exceeds the budget is sent as consecutive prefill frames. All
-participants must advertise `stage-generation-16`; older peers fail closed.
+still exceeds the budget is sent as consecutive prefill frames.
+
+Current generation 17 (wire header version 18) carries each request's tier
+and private cache partition in the state header flags of every
+cache-bearing message (bits 17-18: how many tiers below `local`; bit 19:
+private). A stage lowers that claim to the highest tier its host assigned
+the stage at load (`StageConfig.max_request_tier`), then partitions and
+evicts its caches by the result. All participants must advertise
+`stage-generation-17`; older peers fail closed.
 
 Admission requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, canonical stage-admission descriptors, and stale

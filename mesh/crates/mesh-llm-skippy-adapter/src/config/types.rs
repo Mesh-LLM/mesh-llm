@@ -123,6 +123,8 @@ pub struct ResolvedThroughputConfig {
     pub threads: Option<usize>,
     pub threads_batch: Option<usize>,
     pub tuning_profile: String,
+    /// Share of the admission token budget only `local` requests may use.
+    pub local_kv_reserve_percent: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -203,6 +203,13 @@ pub fn single_stage_config(
         kv_offload: options.kv_offload,
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
+        sample_threads: None,
+        prefill_coalesce_max_ms: None,
+        batch: Default::default(),
         cache_idle_slots: options.cache_idle_slots,
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
@@ -223,6 +230,7 @@ pub fn single_stage_config(
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        max_request_tier: None,
     };
     config.kv_cache = options
         .kv_cache

@@ -69,37 +69,41 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) async fn serve_system_one(
         &self,
         request: SystemOneRequest,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> InferenceResult<SystemOneResponse> {
         super::validate_request_fields(&request, &self.model_id)?;
         let decision = super::decision_request(&request)?;
         let scheduler = self.iteration_scheduler.clone();
-        let plan = tokio::task::spawn_blocking(move || {
-            let reader = scheduler.execute_runtime("decision-plan", |runtime| {
-                Ok(runtime
-                    .model
-                    .supports_causal_readout()
-                    .then(|| runtime.model.reader()))
-            })?;
-            let Some(reader) = reader else {
-                return Ok(None);
-            };
-            // Vocabulary reads must not occupy the scheduler worker or runtime
-            // lock: a request may tokenize up to 64 prompts and 1,664 labels.
-            DecisionPlan::for_reader(&reader, &decision)
-                .map(Some)
-                .map_err(|error| InferenceError::invalid_request(error.to_string()))
-        })
-        .await
-        .map_err(|error| openai_backend_error(error.into()))??;
+        let plan =
+            tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
+                let reader = scheduler.execute_runtime("decision-plan", |runtime| {
+                    Ok(runtime
+                        .model
+                        .supports_causal_readout()
+                        .then(|| runtime.model.reader()))
+                })?;
+                let Some(reader) = reader else {
+                    return Ok(None);
+                };
+                // Vocabulary reads must not occupy the scheduler worker or runtime
+                // lock: a request may tokenize up to 64 prompts and 1,664 labels.
+                DecisionPlan::for_reader(&reader, &decision)
+                    .map(Some)
+                    .map_err(|error| InferenceError::invalid_request(error.to_string()))
+            }))
+            .await
+            .map_err(|error| openai_backend_error(error.into()))??;
         let Some(plan) = plan else {
             let backend = self.clone();
-            return tokio::task::spawn_blocking(move || backend.run_system_one(request))
-                .await
-                .map_err(|error| openai_backend_error(error.into()))?;
+            return tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(
+                move || backend.run_system_one(request),
+            ))
+            .await
+            .map_err(|error| openai_backend_error(error.into()))?;
         };
         validate_context(&plan, self.ctx_size)?;
         let guard = CancelOnDrop(CancellationToken::new());
-        let preparation = self.warm_decision_prefixes(&plan, &guard.0).await?;
+        let preparation = self.warm_decision_prefixes(&plan, &guard.0, class).await?;
         let jobs = decision_jobs(&plan);
         let mut executor = self.clone();
         if !preparation.reuse_cache {
@@ -107,7 +111,7 @@ impl StageOpenAiBackend {
             // This affects only this request, not the shared backend or other users.
             executor.kv = None;
         }
-        let results = executor.run_readout_jobs(jobs, &guard.0).await?;
+        let results = executor.run_readout_jobs(jobs, &guard.0, class).await?;
         decision_response(request, &plan, results, preparation.usage)
     }
 
@@ -116,10 +120,11 @@ impl StageOpenAiBackend {
         &self,
         jobs: Vec<ReadoutJob>,
         cancellation: &CancellationToken,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> InferenceResult<Vec<(ReadoutJob, ReadoutResult)>> {
         let width = self.generation_limit.current_limit().clamp(1, 64);
         let mut running = stream::iter(jobs.into_iter().map(|job| async move {
-            let result = self.run_readout_job(job.clone(), cancellation).await;
+            let result = self.run_readout_job(job.clone(), cancellation, class).await;
             (job, result)
         }))
         .buffer_unordered(width);
@@ -142,6 +147,7 @@ impl StageOpenAiBackend {
         &self,
         job: ReadoutJob,
         cancellation: &CancellationToken,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> Result<ReadoutResult, ReadoutFailure> {
         job.validate()?;
         let ids = InferenceGenerationIds::new_with_trust(
@@ -149,7 +155,8 @@ impl StageOpenAiBackend {
             None,
             false,
             None,
-        );
+        )
+        .with_request_class(class);
         let continuation = job.candidates.iter().map(Vec::len).max().unwrap_or(0);
         let work =
             GenerationAdmissionWork::new(job.prompt.len() + continuation.saturating_sub(1), 0);
@@ -163,10 +170,10 @@ impl StageOpenAiBackend {
             .await?;
         let backend = self.clone();
         let cancellation = cancellation.clone();
-        tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let _permit = permit;
             sequence::execute(&backend, &job, &ids, &cancellation)
-        })
+        }))
         .await
         .map_err(|error| ReadoutFailure::from(openai_backend_error(error.into())))?
     }

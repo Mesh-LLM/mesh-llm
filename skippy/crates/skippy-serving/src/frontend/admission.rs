@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use skippy_inference_api::InferenceError;
 #[cfg(test)]
 use skippy_inference_api::InferenceErrorKind;
+use skippy_inference_api::InferenceRequestTier;
 use skippy_inference_api::InferenceResult;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -30,8 +31,10 @@ use std::time::Instant;
 pub const DECODE_BATCH_HEADROOM_TOKENS: usize = 512;
 
 #[derive(Debug)]
-pub(super) struct GenerationTokenBudget {
+pub(crate) struct GenerationTokenBudget {
     capacity_tokens: usize,
+    /// Tokens only `local` requests may reserve. Lower tiers share the rest.
+    local_reserve_tokens: usize,
     state: Mutex<GenerationTokenBudgetState>,
     #[cfg(test)]
     released: Condvar,
@@ -47,6 +50,7 @@ struct GenerationTokenBudgetState {
 pub(super) struct GenerationTokenBudgetRequest {
     prompt_tokens: usize,
     max_tokens: u32,
+    tier: InferenceRequestTier,
 }
 
 #[derive(Debug)]
@@ -57,13 +61,71 @@ pub(super) struct GenerationTokenReservation {
 }
 
 impl GenerationTokenBudget {
+    /// All frontends sharing a runtime reserve against one aggregate pool.
+    /// The first frontend sets the pool's `local` reserve.
+    pub(crate) fn shared_for_runtime(
+        runtime: &mut crate::runtime_state::RuntimeState,
+        configured_tokens: usize,
+        local_reserve_percent: u8,
+    ) -> Arc<Self> {
+        if let Some(budget) = runtime.generation_token_budget.as_ref() {
+            return Arc::clone(budget);
+        }
+        let budget = Arc::new(
+            Self::for_runtime(runtime, configured_tokens)
+                .with_local_reserve_percent(local_reserve_percent),
+        );
+        runtime.generation_token_budget = Some(Arc::clone(&budget));
+        budget
+    }
+
+    /// Admission shares the loaded context's aggregate pool across its lanes.
+    /// Modelless runtimes may leave capacity unknown; retain the caller's
+    /// configured budget in that case without inferring a native allocation.
+    pub(super) fn for_runtime(
+        runtime: &crate::runtime_state::RuntimeState,
+        configured_tokens: usize,
+    ) -> Self {
+        let pool_tokens = runtime.kv_pool_tokens();
+        Self::new(if pool_tokens == 0 {
+            configured_tokens
+        } else {
+            usize::try_from(pool_tokens).unwrap_or(usize::MAX)
+        })
+    }
+
     pub(super) fn new(ctx_size: usize) -> Self {
         Self {
             capacity_tokens: ctx_size.max(1),
+            local_reserve_tokens: 0,
             state: Mutex::new(GenerationTokenBudgetState::default()),
             #[cfg(test)]
             released: Condvar::new(),
             released_async: Notify::new(),
+        }
+    }
+
+    /// Hold back `percent` of the pool for `local` requests. Lower tiers
+    /// cannot reserve into that share; `local` requests can use all of it.
+    /// The reserve rounds up, so lower tiers never get more than the rest.
+    pub(super) fn with_local_reserve_percent(mut self, percent: u8) -> Self {
+        let percent = usize::from(percent.min(100));
+        self.local_reserve_tokens = self
+            .capacity_tokens
+            .saturating_mul(percent)
+            .div_ceil(100)
+            .min(self.capacity_tokens);
+        self
+    }
+
+    /// The share of the pool a request at `tier` may occupy together with
+    /// everything already reserved.
+    fn capacity_for(&self, tier: InferenceRequestTier) -> usize {
+        match tier {
+            InferenceRequestTier::Local => self.capacity_tokens,
+            InferenceRequestTier::Trusted | InferenceRequestTier::Mesh => self
+                .capacity_tokens
+                .saturating_sub(self.local_reserve_tokens),
         }
     }
 
@@ -72,12 +134,12 @@ impl GenerationTokenBudget {
         request: GenerationTokenBudgetRequest,
     ) -> InferenceResult<Option<GenerationTokenReservation>> {
         let tokens = request.reservation_tokens();
-        self.ensure_request_fits(tokens)?;
+        self.ensure_request_fits(tokens, request.tier)?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
-        if state.active_tokens.saturating_add(tokens) > self.capacity_tokens {
+        if state.active_tokens.saturating_add(tokens) > self.capacity_for(request.tier) {
             return Ok(None);
         }
         state.active_tokens = state.active_tokens.saturating_add(tokens);
@@ -93,12 +155,12 @@ impl GenerationTokenBudget {
         request: GenerationTokenBudgetRequest,
     ) -> InferenceResult<bool> {
         let tokens = request.reservation_tokens();
-        self.ensure_request_fits(tokens)?;
+        self.ensure_request_fits(tokens, request.tier)?;
         let state = self
             .state
             .lock()
             .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
-        Ok(state.active_tokens.saturating_add(tokens) <= self.capacity_tokens)
+        Ok(state.active_tokens.saturating_add(tokens) <= self.capacity_for(request.tier))
     }
 
     pub(super) fn release_notification(&self) -> &Notify {
@@ -122,7 +184,7 @@ impl GenerationTokenBudget {
         cancellation: Option<&skippy_inference_api::CancellationToken>,
     ) -> InferenceResult<GenerationTokenReservation> {
         let tokens = request.reservation_tokens();
-        self.ensure_request_fits(tokens)?;
+        self.ensure_request_fits(tokens, request.tier)?;
         let deadline = Instant::now() + admission_timeout;
         let mut state = self
             .state
@@ -132,7 +194,7 @@ impl GenerationTokenBudget {
             if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
                 return Err(InferenceError::backend("request cancelled"));
             }
-            if state.active_tokens.saturating_add(tokens) <= self.capacity_tokens {
+            if state.active_tokens.saturating_add(tokens) <= self.capacity_for(request.tier) {
                 state.active_tokens = state.active_tokens.saturating_add(tokens);
                 return Ok(GenerationTokenReservation {
                     budget: self.clone(),
@@ -176,12 +238,26 @@ impl GenerationTokenBudget {
         self.capacity_tokens
     }
 
-    fn ensure_request_fits(&self, requested_tokens: usize) -> InferenceResult<()> {
-        if requested_tokens <= self.capacity_tokens {
+    fn ensure_request_fits(
+        &self,
+        requested_tokens: usize,
+        tier: InferenceRequestTier,
+    ) -> InferenceResult<()> {
+        let capacity = self.capacity_for(tier);
+        if requested_tokens <= capacity {
             return Ok(());
         }
+        if capacity == self.capacity_tokens {
+            return Err(InferenceError::context_length_exceeded(format!(
+                "request requires {requested_tokens} KV tokens but the runtime pool holds {}",
+                self.capacity_tokens
+            )));
+        }
+        // Worded as an overflow, so a mesh router retries it on another node.
         Err(InferenceError::context_length_exceeded(format!(
-            "request requires {requested_tokens} KV tokens but the runtime pool holds {}",
+            "request requires {requested_tokens} KV tokens, which exceeds the {capacity} of the \
+             {}-token runtime pool that {tier} requests may use; the rest is reserved for local \
+             requests",
             self.capacity_tokens
         )))
     }
@@ -200,7 +276,14 @@ impl GenerationTokenBudgetRequest {
         Self {
             prompt_tokens,
             max_tokens,
+            tier: InferenceRequestTier::default(),
         }
+    }
+
+    /// Reserve as a request at `tier`.
+    pub(super) fn with_tier(mut self, tier: InferenceRequestTier) -> Self {
+        self.tier = tier;
+        self
     }
 
     pub(super) fn reservation_tokens(self) -> usize {
@@ -262,6 +345,94 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn frontend_admission_uses_loaded_aggregate_pool() {
+        use crate::runtime_state::RuntimeState;
+        use std::sync::Arc;
+
+        let runtime = RuntimeState::new_modelless_with_capacity_for_test(4, 524_288);
+        let budget = Arc::new(GenerationTokenBudget::for_runtime(&runtime, 131_072));
+        let requests = (0..4)
+            .map(|_| {
+                budget
+                    .try_reserve(GenerationTokenBudgetRequest::new(94_000, 512))
+                    .unwrap()
+                    .expect("four long requests fit the loaded four-lane pool")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(budget.active_tokens(), 378_048);
+        drop(requests);
+
+        let _requests = (0..4)
+            .map(|_| {
+                budget
+                    .try_reserve(GenerationTokenBudgetRequest::new(120_000, 512))
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            budget
+                .try_reserve(GenerationTokenBudgetRequest::new(94_000, 512))
+                .unwrap()
+                .is_none(),
+            "aggregate admission must still stop requests that exceed the native pool"
+        );
+    }
+
+    #[test]
+    fn frontend_admission_keeps_modelless_capacity_and_unknown_fallback() {
+        use crate::runtime_state::RuntimeState;
+        use std::sync::Arc;
+
+        let runtime = RuntimeState::new_modelless_for_test(4);
+        let fallback = Arc::new(GenerationTokenBudget::for_runtime(&runtime, 128));
+        assert!(
+            fallback
+                .try_reserve(GenerationTokenBudgetRequest::new(129, 0))
+                .is_err()
+        );
+        let runtime = RuntimeState::new_modelless_with_capacity_for_test(4, 256);
+        let explicit = Arc::new(GenerationTokenBudget::for_runtime(&runtime, 128));
+        assert!(
+            explicit
+                .try_reserve(GenerationTokenBudgetRequest::new(256, 0))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            explicit
+                .try_reserve(GenerationTokenBudgetRequest::new(257, 0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn multiple_frontends_share_one_runtime_token_reservation_pool() {
+        let mut runtime =
+            crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(2, 1024);
+        let first = GenerationTokenBudget::shared_for_runtime(&mut runtime, 512, 0);
+        let second = GenerationTokenBudget::shared_for_runtime(&mut runtime, 512, 0);
+        assert!(Arc::ptr_eq(&first, &second));
+        let reservation = first
+            .try_reserve(GenerationTokenBudgetRequest::new(768, 0))
+            .unwrap()
+            .unwrap();
+        assert!(
+            second
+                .try_reserve(GenerationTokenBudgetRequest::new(512, 0))
+                .unwrap()
+                .is_none()
+        );
+        drop(reservation);
+        assert!(
+            second
+                .try_reserve(GenerationTokenBudgetRequest::new(512, 0))
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[test]
     fn generation_token_budget_reserves_and_releases_tokens() {
@@ -351,5 +522,14 @@ mod tests {
         );
         assert!(error.to_string().contains("KV token budget"));
         assert_eq!(budget.active_tokens(), 800);
+    }
+
+    #[test]
+    fn the_local_reserve_rounds_up() {
+        let budget = GenerationTokenBudget::new(10).with_local_reserve_percent(25);
+        assert_eq!(budget.capacity_for(InferenceRequestTier::Mesh), 7);
+        assert_eq!(budget.capacity_for(InferenceRequestTier::Local), 10);
+        let all = GenerationTokenBudget::new(10).with_local_reserve_percent(100);
+        assert_eq!(all.capacity_for(InferenceRequestTier::Trusted), 0);
     }
 }

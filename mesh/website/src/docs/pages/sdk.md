@@ -18,7 +18,7 @@ model workloads, filters, metadata, pagination and operation behavior match.
 
 The old separate thin `Client` has been removed. Use `MeshNode` in Rust and
 `Node` in the other SDKs. Supply an owner keystore path when owner identity is
-required. A node accepts invite tokens for a private mesh or public-mesh
+required. A node accepts join tokens for published or unpublished meshes, or public-mesh
 auto-join. Keep API and console ports isolated when embedding multiple nodes.
 
 A normal lifecycle is:

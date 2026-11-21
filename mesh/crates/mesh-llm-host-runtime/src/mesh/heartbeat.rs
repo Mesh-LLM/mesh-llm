@@ -319,6 +319,9 @@ impl Node {
         match displaced {
             Ok(displaced) => {
                 state.connections.insert(peer_id, new_conn.clone());
+                state
+                    .redial_backoff
+                    .connected(peer_id, std::time::Instant::now());
                 Ok(displaced)
             }
             Err((endpoint,)) => {
@@ -599,11 +602,13 @@ impl Node {
         ));
         self.capture_selected_connection_path(peer_id, &new_conn, "heartbeat_reconnect_path");
         self.capture_heartbeat_reconnect_opened(peer_id, &new_conn);
-        self.state
-            .lock()
-            .await
-            .connections
-            .insert(peer_id, new_conn.clone());
+        {
+            let mut state = self.state.lock().await;
+            state.connections.insert(peer_id, new_conn.clone());
+            state
+                .redial_backoff
+                .connected(peer_id, std::time::Instant::now());
+        }
         self.spawn_heartbeat_reconnect_dispatch(peer_id, new_conn.clone());
         self.gossip_heartbeat_reconnect(peer_id, new_conn).await
     }

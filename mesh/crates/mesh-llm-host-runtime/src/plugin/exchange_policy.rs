@@ -126,7 +126,13 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
-        self.admit_typed_request(
+        // The backend stamps the request's class from its context; a hook
+        // never runs above it even on a task that carries no tier.
+        let tier = request
+            .request_class
+            .tier()
+            .min(crate::mesh::request_tier::current_request_tier());
+        let admission = self.admit_typed_request(
             || {
                 serde_json::to_vec(
                     &skippy_inference_api::chat::request_view::ChatCompletionRequestRef(request),
@@ -136,8 +142,8 @@ impl InferenceHookPolicy for NodeExchangePolicy {
             "chat_completions",
             "/v1/chat/completions",
             &route.exchange_id,
-        )
-        .await
+        );
+        crate::mesh::request_tier::with_request_tier(tier, admission).await
     }
     async fn admit_effective_completion(
         &self,
@@ -275,8 +281,19 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         event["dispatch_path"] = json!("typed_frontend");
         // A private request's hooks run in its scope here too.
         let scope = crate::network::openai::routing_scope::local_server_scope(headers);
-        let (session, result) =
-            crate::mesh::with_private_scope(scope, ExchangeSession::begin(&manager, event)).await;
+        // And at its tier, which this node named on the loopback hop.
+        let tier = skippy_inference_api::InferenceRequestTier::from_headers(
+            headers,
+            skippy_inference_api::REQUEST_TIER_HEADER,
+        );
+        let (session, result) = crate::mesh::with_private_scope(
+            scope,
+            crate::mesh::request_tier::with_request_tier(
+                tier,
+                ExchangeSession::begin(&manager, event),
+            ),
+        )
+        .await;
         let denial = result.error_status().map(|status| match status {
             402 | 403 => policy_denial(status, "OpenAI plugin policy denied the exchange"),
             _ => hook_unavailable("required OpenAI plugin admission unavailable"),
