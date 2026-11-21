@@ -26,8 +26,13 @@ fn credit(
     best_effort: &Arc<AtomicUsize>,
     class: CaptureAdmission,
 ) -> ExactStateAdmissionCredit {
-    ExactStateAdmissionCredit::acquire(total, best_effort, class)
-        .expect("a fresh budget must admit")
+    ExactStateAdmissionCredit::acquire(
+        total,
+        best_effort,
+        crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
+        class,
+    )
+    .expect("a fresh budget must admit")
 }
 
 struct RecordingObserver(Arc<Mutex<Vec<KvLifecycleEvent>>>);

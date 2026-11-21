@@ -20,12 +20,13 @@ pub(super) fn exact_state_byte_limits(
     configured_exact_max_bytes: Option<u64>,
     override_max_bytes: Option<&str>,
 ) -> ExactStateByteLimits {
-    let hard_bytes = configured_exact_max_bytes
-        .or_else(|| override_max_bytes.and_then(|value| value.trim().parse::<u64>().ok()))
-        .unwrap_or_else(|| configured_max_bytes.saturating_mul(EXACT_STATE_HARD_CAP_MULTIPLE));
+    let explicit = configured_exact_max_bytes
+        .or_else(|| override_max_bytes.and_then(|value| value.trim().parse::<u64>().ok()));
     ExactStateByteLimits {
         soft_bytes: configured_max_bytes,
-        hard_bytes,
+        hard_bytes: explicit
+            .unwrap_or_else(|| configured_max_bytes.saturating_mul(EXACT_STATE_HARD_CAP_MULTIPLE)),
+        hard_is_explicit: explicit.is_some(),
     }
 }
 
@@ -36,6 +37,13 @@ mod tests {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            hard_is_explicit: false,
+        }
+    }
+    fn explicit(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
+        ExactStateByteLimits {
+            hard_is_explicit: true,
+            ..limits(soft_bytes, hard_bytes)
         }
     }
     #[test]
@@ -52,11 +60,11 @@ mod tests {
     fn exact_state_byte_limits_honour_the_operator_override() {
         assert_eq!(
             exact_state_byte_limits(1_024, None, Some(" 4096 ")),
-            limits(1_024, 4_096)
+            explicit(1_024, 4_096)
         );
         assert_eq!(
             exact_state_byte_limits(1_024, None, Some("0")),
-            limits(1_024, 0)
+            explicit(1_024, 0)
         );
         // A malformed override must not silently disable the ceiling.
         assert_eq!(
@@ -69,11 +77,11 @@ mod tests {
     fn configured_limit_overrides_the_legacy_environment_including_unbounded() {
         assert_eq!(
             exact_state_byte_limits(1024, Some(2048), Some("4096")),
-            limits(1024, 2048)
+            explicit(1024, 2048)
         );
         assert_eq!(
             exact_state_byte_limits(1024, Some(0), Some("4096")),
-            limits(1024, 0)
+            explicit(1024, 0)
         );
     }
 }

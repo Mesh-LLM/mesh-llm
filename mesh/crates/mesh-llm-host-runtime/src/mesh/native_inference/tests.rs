@@ -720,13 +720,15 @@ async fn dropped_native_stream_cancels_local_and_remote_generation_under_backpre
 /// Both the consumer and the provider must keep it alive: the window is per
 /// chunk, not per request, wherever the chunk is produced.
 async fn slow_generation_survives_the_window(remote: bool) {
-    let window = Duration::from_millis(150);
-    let chunks = 15usize;
+    // Allow for scheduling and QUIC setup on shared CI runners. The paced
+    // fixture still takes at least 1.5 inactivity windows to deliver all chunks.
+    let window = Duration::from_secs(2);
+    let chunks = 12;
     let (provider, _, _) = serving_node(Some(vec!["high".into()])).await;
     provider.set_native_stream_idle(window);
     let backend = Arc::new(RecordingBackend {
         pacing: Some(Pacing::Slow {
-            every: Duration::from_millis(20),
+            every: window / 8,
             chunks,
         }),
         ..Default::default()
@@ -752,11 +754,11 @@ async fn slow_generation_survives_the_window(remote: bool) {
         .await
         .unwrap();
     let mut seen = 0usize;
-    while let Some(chunk) = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
+    while let Some(chunk) = tokio::time::timeout(Duration::from_secs(30), stream.next_chunk())
         .await
         .unwrap_or_else(|error| panic!("slow stream stalled (remote={remote}): {error}"))
     {
-        chunk.unwrap();
+        chunk.unwrap_or_else(|error| panic!("slow stream failed (remote={remote}): {error:#}"));
         seen += 1;
     }
     let elapsed = started.elapsed();

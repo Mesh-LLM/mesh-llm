@@ -19,30 +19,25 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
-use super::cache_payload::{durable_cache_payload, effective_cache_payload};
+use super::{
+    cache_payload::{durable_cache_payload, effective_cache_payload},
+    exact_state::exact_state_admission_total_for_lanes,
+};
 
 pub(super) mod durable_spill;
 mod exact_state_limits;
+mod exact_state_retention;
 mod resident_policy;
 mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 use exact_state_limits::exact_state_byte_limits;
+use exact_state_retention::enforce_exact_state_limits;
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
 const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
-
-// Exact-state snapshots are indivisible and carry architecture-specific state
-// (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
-// cannot see, because that estimate is derived from attention KV metadata
-// alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
-// many snapshots (subject to the configured entry limit) before the soft cap
-// evicts anything: falling to one entry
-// turns the catalog into a single-entry cache, where two concurrent sessions
-// on the same stage evict each other on every request.
-const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
 
 // Operator override for the limit above, in bytes, for workers whose memory
 // headroom does not match the attention-derived estimate. The last indivisible
@@ -221,8 +216,11 @@ impl KvStageIntegration {
         );
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
+        let admission_total_cap = exact_state_admission_total_for_lanes(config.lane_count);
+        // All admitted captures can reach the queue before the recorder receives one.
+        let record_queue_capacity = EXACT_STATE_RECORD_CAPACITY.max(admission_total_cap);
         let (exact_state_record_tx, exact_state_record_rx) =
-            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
+            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(record_queue_capacity);
         let worker_radix = radix.clone();
         let worker_exact_blobs = exact_blobs.clone();
         let worker_l3 = l3.clone();
@@ -391,6 +389,7 @@ impl KvStageIntegration {
             exact_state_records_pending,
             admission_outstanding,
             admission_best_effort_outstanding,
+            admission_total_cap,
             #[cfg(test)]
             exact_state_captures_outstanding: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -785,9 +784,9 @@ fn store_exact_radix_record_with_codec(
                     released.push(replaced.payload);
                 }
                 while radix.stats().recurrent_entries > max_entries {
-                    let Some(evicted) =
+                    let Some(evicted) = radix.evict_lru_superseded_recurrent().or_else(|| {
                         radix.evict_recurrent_by_retention(RadixExactEntry::retention_priority)
-                    else {
+                    }) else {
                         break;
                     };
                     released.push(evicted.value.payload);
@@ -812,22 +811,7 @@ fn store_exact_radix_record_with_codec(
             payload.release_from(&mut blobs)?;
         }
     }
-    // Exact snapshots are indivisible, and the soft cap is estimated from
-    // attention KV metadata that cannot include architecture-specific
-    // recurrent state, so one snapshot can legitimately exceed it. Hold a small
-    // working set past the soft cap (never more than the configured entry
-    // limit) so concurrent sessions on a stage stop evicting each other, then
-    // apply the hard limit so that allowance stays bounded apart from one
-    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
-    // self-evicts disables exact prefix caching for the stage entirely, which
-    // is the regression this retention policy exists to prevent.
-    evict_exact_entries_over(
-        radix,
-        blobs,
-        limits.soft_bytes,
-        EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
-    )?;
-    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
+    enforce_exact_state_limits(radix, blobs, limits, max_entries, logical_bytes)?;
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
 
@@ -901,50 +885,6 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
             | (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F16)
             | (skippy_runtime::GGML_TYPE_F16, skippy_runtime::GGML_TYPE_F32)
     )
-}
-
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
-fn evict_exact_entries_over(
-    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
-    blobs: &Mutex<CacheBlobStore>,
-    limit_bytes: u64,
-    min_retained_entries: usize,
-) -> Result<()> {
-    if limit_bytes == 0 {
-        return Ok(());
-    }
-    let floor = min_retained_entries.max(1);
-    loop {
-        let over_bytes = blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .physical_bytes()
-            > limit_bytes;
-        let above_floor = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .stats()
-            .recurrent_entries
-            > floor;
-        if !over_bytes || !above_floor {
-            break;
-        }
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_recurrent_by_retention(RadixExactEntry::retention_priority);
-        let Some(evicted) = evicted else {
-            break;
-        };
-        evicted.value.payload.release_from(
-            &mut blobs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
-    }
-    Ok(())
 }
 
 /// Either kill-switch variable resolving to `off` disables the cache, so an
@@ -1028,6 +968,7 @@ mod tests {
 
     mod cache_admission;
     mod durable_spill;
+    mod exact_state_retention;
     mod reserved_admission;
     mod runtime_admission;
 
@@ -1035,6 +976,7 @@ mod tests {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            hard_is_explicit: false,
         }
     }
 
@@ -1058,6 +1000,7 @@ mod tests {
             crate::kv_integration::exact_state::ExactStateAdmissionCredit::acquire(
                 &self.total,
                 &self.best_effort,
+                crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
                 crate::kv_integration::exact_state::CaptureAdmission::Continuation,
             )
             .expect("a fresh per-test budget must admit")
@@ -1553,15 +1496,21 @@ mod tests {
     }
 
     #[test]
-    fn exact_working_set_is_bounded_by_the_hard_ceiling() {
+    fn exact_working_set_is_bounded_by_the_retention_floor_not_the_ceiling() {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
         let budget = StorageBudget::new();
 
+        // Six sessions' snapshots against byte limits smaller than one
+        // snapshot, as happens when the attention-derived estimate cannot see
+        // hybrid recurrent state.
         for (page_id, tokens, bytes) in [
-            ("first", [1, 2], b"aaaabbbb"),
-            ("second", [1, 3], b"ccccdddd"),
-            ("third", [1, 4], b"eeeeffff"),
+            ("s1", [1, 2], b"aaaabbbb"),
+            ("s2", [1, 3], b"ccccdddd"),
+            ("s3", [1, 4], b"eeeeffff"),
+            ("s4", [1, 5], b"gggghhhh"),
+            ("s5", [1, 6], b"iiiijjjj"),
+            ("s6", [1, 7], b"kkkkllll"),
         ] {
             store_exact_radix_record(
                 &radix,
@@ -1575,14 +1524,21 @@ mod tests {
             .unwrap();
         }
 
-        // The retention floor yields to the ceiling, leaving the most recent
-        // snapshot rather than an unbounded working set.
+        // The ceiling still bounds the working set above the retention floor:
+        // the two least-recently-used snapshots go. At the floor the ceiling
+        // yields, because collapsing to a single entry made concurrent
+        // sessions evict each other on every request.
         let mut radix = radix.lock().unwrap();
-        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert_eq!(radix.stats().recurrent_entries, 4);
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
         assert!(radix.lookup_recurrent("model", &[1, 3]).is_none());
-        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
-        assert_eq!(blobs.lock().unwrap().physical_bytes(), 8);
+        for tokens in [[1, 4], [1, 5], [1, 6], [1, 7]] {
+            assert!(
+                radix.lookup_recurrent("model", &tokens).is_some(),
+                "the retention floor must keep the newest four sessions"
+            );
+        }
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 32);
     }
 
     #[test]

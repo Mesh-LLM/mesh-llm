@@ -405,6 +405,35 @@ impl<R, E> UnifiedRadixCache<R, E> {
         })
     }
 
+    /// Evict the least-recently-used unreferenced recurrent entry that is a
+    /// strict prefix of another recurrent entry in its namespace. A longer
+    /// entry already continues that conversation, so the shorter one is the
+    /// cheapest snapshot to lose.
+    pub fn evict_lru_superseded_recurrent(&mut self) -> Option<RadixEviction<E>> {
+        let mut victim = None;
+        for (namespace, root) in &self.roots {
+            collect_lru_superseded_recurrent(namespace, root, &mut Vec::new(), &mut victim);
+        }
+        let victim = victim?;
+        let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
+        self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
+        Some(RadixEviction {
+            namespace: victim.namespace,
+            tokens: victim.tokens,
+            logical_bytes: victim.logical_bytes,
+            value,
+        })
+    }
+
+    /// Recurrent entries with no longer recurrent entry below them: the latest
+    /// continuation of each distinct conversation.
+    pub fn recurrent_leaf_entries(&self) -> usize {
+        self.roots
+            .values()
+            .map(|root| count_recurrent_leaves(root).0)
+            .sum()
+    }
+
     pub fn stats(&self) -> UnifiedRadixCacheStats {
         let mut stats = UnifiedRadixCacheStats {
             namespaces: self.roots.len(),
@@ -933,6 +962,59 @@ fn collect_lru_victim<R, E>(
     path.truncate(original_len);
 }
 
+/// Returns (leaf recurrent entries, whether the subtree holds any recurrent entry).
+fn count_recurrent_leaves<R, E>(node: &RadixNode<R, E>) -> (usize, bool) {
+    let mut leaves = 0;
+    let mut below = false;
+    for child in node.children.values() {
+        let (child_leaves, child_any) = count_recurrent_leaves(child);
+        leaves += child_leaves;
+        below |= child_any;
+    }
+    let here = node.components.recurrent.is_some();
+    if here && !below {
+        leaves += 1;
+    }
+    (leaves, here || below)
+}
+
+/// Returns whether the subtree holds any recurrent entry.
+fn collect_lru_superseded_recurrent<R, E>(
+    namespace: &str,
+    node: &RadixNode<R, E>,
+    path: &mut Vec<i32>,
+    victim: &mut Option<Victim>,
+) -> bool {
+    let original_len = path.len();
+    path.extend_from_slice(&node.edge);
+    let mut below = false;
+    for child in node.children.values() {
+        below |= collect_lru_superseded_recurrent(namespace, child, path, victim);
+    }
+    let entry = node.components.recurrent.as_ref();
+    if below && let Some(entry) = entry.filter(|entry| entry.active_refs == 0) {
+        let replace = victim.as_ref().is_none_or(|current| {
+            (entry.last_used, namespace, path.as_slice())
+                < (
+                    current.last_used,
+                    current.namespace.as_str(),
+                    current.tokens.as_slice(),
+                )
+        });
+        if replace {
+            *victim = Some(Victim {
+                namespace: namespace.to_string(),
+                tokens: path.clone(),
+                logical_bytes: entry.logical_bytes,
+                last_used: entry.last_used,
+                retention: 0,
+            });
+        }
+    }
+    path.truncate(original_len);
+    below || entry.is_some()
+}
+
 fn collect_resident_eviction_candidates<R: Clone, E>(
     namespace: &str,
     node: &RadixNode<R, E>,
@@ -1368,6 +1450,27 @@ mod tests {
         assert_eq!(existing.value, "old");
         assert_eq!(existing.active_refs, 1);
         assert!(cache.release_resident("stage", &[1]));
+    }
+
+    #[test]
+    fn superseded_recurrent_eviction_keeps_each_conversations_latest_entry() {
+        let mut cache = UnifiedRadixCache::<(), &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 1, "a-prefill")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[7, 8], 1, "b-prefill")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3, 4], 1, "a-decode")
+            .unwrap();
+        assert_eq!(cache.recurrent_leaf_entries(), 2);
+        assert_eq!(
+            cache.evict_lru_superseded_recurrent().unwrap().value,
+            "a-prefill"
+        );
+        assert!(cache.evict_lru_superseded_recurrent().is_none());
+        assert_eq!(cache.recurrent_leaf_entries(), 2);
     }
 
     #[test]

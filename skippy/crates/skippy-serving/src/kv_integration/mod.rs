@@ -157,6 +157,9 @@ pub enum StageKvMode {
 pub(crate) struct ExactStateByteLimits {
     pub(crate) soft_bytes: u64,
     pub(crate) hard_bytes: u64,
+    /// The hard limit came from an operator budget rather than the
+    /// attention-derived estimate, so it is a strict ceiling.
+    pub(crate) hard_is_explicit: bool,
 }
 
 #[derive(Clone)]
@@ -204,6 +207,9 @@ pub struct KvStageIntegration {
     /// the worker. See `ExactStateAdmissionCredit`.
     pub(crate) admission_outstanding: Arc<AtomicUsize>,
     pub(crate) admission_best_effort_outstanding: Arc<AtomicUsize>,
+    /// Per-stage admission ceiling, scaled by lane count; see
+    /// `exact_state::exact_state_admission_total_for_lanes`.
+    pub(crate) admission_total_cap: usize,
     /// Test-only outstanding-capture tracking: incremented when a capture task
     /// is scheduled onto the iteration scheduler, released when that task
     /// reaches ANY terminal outcome (recorded, skipped, error, panic) via a
@@ -267,8 +273,7 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-/// Entry backstop on the record queue. The binding limit is
-/// [`EXACT_STATE_RECORD_QUEUE_BYTES`]; this only caps bookkeeping.
+/// Baseline serving recorder queue capacity and fixed durable spill queue capacity.
 pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
 
 /// Payload bytes the record queue may hold. A record that does not fit is

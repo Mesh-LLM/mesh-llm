@@ -528,6 +528,7 @@ if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
 fi
 if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
   BUILD_TARGETS+=(
+    skippy-async-state-test
     skippy-backend-sample-capacity
     skippy-graph-build-inputs
     skippy-hardware-application-probe

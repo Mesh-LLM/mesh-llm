@@ -15,6 +15,7 @@ fn harness_config() -> StageConfig {
     StageConfig {
         stage_id: "stage-0".to_string(),
         model_id: NAMESPACE.to_string(),
+        lane_count: 1,
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
@@ -88,6 +89,7 @@ fn acquire(kv: &KvStageIntegration, class: CaptureAdmission) -> Option<ExactStat
     ExactStateAdmissionCredit::acquire(
         &kv.admission_outstanding,
         &kv.admission_best_effort_outstanding,
+        kv.admission_total_cap,
         class,
     )
 }
@@ -107,6 +109,54 @@ fn stored(kv: &KvStageIntegration, token_ids: &[i32]) -> bool {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .recurrent_exact(NAMESPACE, token_ids)
         .is_some()
+}
+
+#[test]
+fn lane_scaled_recorder_can_queue_the_reserved_continuation() {
+    use std::sync::atomic::AtomicBool;
+
+    struct ResumeRecorder<'a>(&'a AtomicBool);
+    impl Drop for ResumeRecorder<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, AtomicOrdering::Release);
+        }
+    }
+
+    let lanes = 9;
+    let mut config = harness_config();
+    config.lane_count = lanes;
+    config.kv_cache.as_mut().unwrap().max_entries = 16;
+    let kv = KvStageIntegration::from_test_state(&config, ModelStateKind::Recurrent)
+        .unwrap()
+        .unwrap();
+    kv.exact_state_worker_pause
+        .store(true, AtomicOrdering::Release);
+    let resume = ResumeRecorder(&kv.exact_state_worker_pause);
+
+    for lane in 0..lanes {
+        let credit = acquire(&kv, CaptureAdmission::BestEffort).expect("lane capture admitted");
+        assert_eq!(
+            kv.enqueue_exact_state_record(record(
+                &format!("lane-{lane}"),
+                vec![i32::try_from(lane).unwrap()],
+                credit,
+            )),
+            ExactStateRecordAdmission::Queued,
+        );
+        if lane == 0 {
+            kv.wait_for_exact_state_worker_received(1, WAIT).unwrap();
+        }
+    }
+    let credit = acquire(&kv, CaptureAdmission::Continuation).expect("reserved capture admitted");
+    let continuation = vec![20];
+    assert_eq!(
+        kv.enqueue_exact_state_record(record("continuation", continuation.clone(), credit)),
+        ExactStateRecordAdmission::Queued,
+    );
+
+    drop(resume);
+    kv.wait_for_exact_state_recording(WAIT).unwrap();
+    assert!(stored(&kv, &continuation));
 }
 
 /// Reserved-credit delivery end-to-end under an EXPLICITLY paused
@@ -445,46 +495,4 @@ fn record_exact_state_releases_credit_when_export_fails() {
     assert!(result.is_err(), "exporting an unknown session must fail");
     assert_eq!(outstanding(&kv), 0, "credit released when the export fails");
     assert!(kv.inflight_records.lock().unwrap().is_empty());
-}
-
-/// Without L3, a snapshot that every stored entry outranks would be evicted
-/// as soon as it is stored, so it is not exported at all. A snapshot at the
-/// stored entries' tier still goes ahead (and here fails to export, as the
-/// session does not exist).
-#[test]
-fn a_crowded_out_snapshot_is_not_exported_without_l3() {
-    let (kv, config) = harness();
-    assert!(kv.l3.is_none());
-    for token in 0..kv.exact_max_entries {
-        let token = i32::try_from(token).unwrap() + 100;
-        seed_exact_state(&kv, &identity(&kv, &config, &[token]));
-    }
-    let mut runtime = RuntimeState::new_modelless_for_test(1);
-    let mut mesh = identity(&kv, &config, &[1, 2, 3]);
-    mesh.identity.chat_template_id = skippy_inference_api::InferenceRequestClass::new(
-        skippy_inference_api::InferenceRequestTier::Mesh,
-        false,
-    )
-    .cache_namespace(None)
-    .unwrap();
-    assert!(mesh.retention_priority() < identity(&kv, &config, &[1]).retention_priority());
-
-    let skipped = kv.record_exact_state(
-        &mut runtime,
-        "missing-session",
-        &mesh,
-        CaptureAdmission::BestEffort,
-    );
-    assert!(matches!(skipped, Ok(None)), "{skipped:?}");
-    assert_eq!(outstanding(&kv), 0);
-
-    let local = identity(&kv, &config, &[1, 2, 3]);
-    let exported = kv.record_exact_state(
-        &mut runtime,
-        "missing-session",
-        &local,
-        CaptureAdmission::BestEffort,
-    );
-    assert!(exported.is_err(), "a local snapshot is exported");
-    assert_eq!(outstanding(&kv), 0);
 }
