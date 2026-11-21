@@ -9,6 +9,7 @@ mod environment;
 mod gpu_discovery;
 pub mod model_capacity;
 mod platform;
+pub mod probe;
 mod rocm;
 
 use cuda::*;
