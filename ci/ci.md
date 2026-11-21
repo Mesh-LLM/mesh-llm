@@ -225,10 +225,13 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-moa-plugin` alongside its related workspace crates;
-`just ci-crate-lists` checks it against workspace membership. The publish
-chain publishes `mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and
-both before `mesh-llm-host-runtime`. The Lightning payment crates
+`skippy-ane` and `mesh-llm-moa-plugin` alongside their related workspace crates;
+`just ci-crate-lists` checks it against workspace membership. The planner
+routes `skippy-ane` sources through the existing `skippy/crates/**` Rust rule;
+the Windows cfg census marks its macOS Core ML runtime unverified on Windows.
+The publish chain orders `skippy-ane` before `skippy-runtime` and
+`mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, with the latter two
+before `mesh-llm-host-runtime`. The Lightning payment crates
 (`mesh-llm-wallet`, `mesh-llm-payments-types`, `mesh-llm-payments`,
 `mesh-llm-pay-lightning`) live in `Mesh-LLM/ln-payments-plugin` and are not
 part of this workspace or its publish chain.

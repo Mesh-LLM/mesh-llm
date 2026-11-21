@@ -1,0 +1,35 @@
+[package]
+name = "skippy-ane"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Apple Neural Engine integration for Skippy workloads"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[features]
+default = ["conversion"]
+conversion = ["dep:clap", "dep:mil_spec", "dep:runtimed_gguf", "dep:tempfile"]
+
+[[bin]]
+name = "skippy-ane-convert"
+path = "src/bin/skippy-ane-convert.rs"
+required-features = ["conversion"]
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, optional = true }
+half = "2"
+hex = "0.4"
+mil_spec = { version = "0.4.2", optional = true }
+runtimed_gguf = { package = "syntrop-runtimed-gguf", version = "0.5.2", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = { version = "3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-core-ml = { version = "0.3", default-features = false, features = ["block2", "MLModel", "MLModel_MLModelCompilation", "MLModel_MLState", "MLState", "MLModelDescription", "MLFeatureDescription", "MLMultiArrayConstraint", "MLMultiArray", "MLFeatureValue", "MLFeatureProvider", "MLDictionaryFeatureProvider", "MLComputePlan", "MLComputePlanDeviceUsage", "MLComputeDeviceProtocol", "MLNeuralEngineComputeDevice", "MLModelConfiguration", "MLModelStructure", "MLModelStructureProgram", "MLModelStructureProgramFunction", "MLModelStructureProgramBlock", "MLModelStructureProgramOperation"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSError", "NSProcessInfo", "NSString", "NSURL"] }

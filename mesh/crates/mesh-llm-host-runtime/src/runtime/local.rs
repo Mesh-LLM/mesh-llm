@@ -1135,6 +1135,11 @@ async fn start_local_skippy_model(
     }
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     crate::inference::skippy::materialize_default_dflash_draft(&mut resolved).await;
+    if resolved.speculative.decode.draft_device.as_deref() == Some("ANE")
+        && resolved.speculative.decode.dflash.is_none()
+    {
+        anyhow::bail!("ANE was requested for a DFlash draft, but no paired draft is available");
+    }
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -1247,6 +1252,7 @@ async fn load_direct_skippy_model_with_dflash_fallback(
     {
         Err(error)
             if resolved.speculative.default_dflash.is_some()
+                && resolved.speculative.decode.draft_device.as_deref() != Some("ANE")
                 && skippy_serving::DFlashDraftAttachFailed::caused(&error) =>
         {
             error
@@ -1361,6 +1367,9 @@ async fn start_local_package_v2_model(
     // Package loads are staged and never attach the default DFlash draft.
     resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
+    if resolved.speculative.decode.draft_device.as_deref() == Some("ANE") {
+        anyhow::bail!("ANE DFlash currently requires a direct target GGUF");
+    }
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",

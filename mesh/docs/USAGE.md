@@ -1196,8 +1196,8 @@ including the cataloged draft, unless a `strategy` is also set: any configured
 strategy, `"auto"` included, counts as explicit and re-enables the automatic
 defaults.
 
-To use a draft that is not in the catalog, set `strategy = "dflash"` and point
-`draft_model` at a GGUF whose architecture is `dflash`:
+To use a local draft that is not in the catalog, set `strategy = "dflash"` and
+point `draft_model_path` at a GGUF whose architecture is `dflash`:
 
 ```toml
 [[models]]
@@ -1205,8 +1205,17 @@ model = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
 
 [models.speculative]
 strategy = "dflash"
-draft_model = "/models/Qwen3-4B-DFlash.Q8_0.gguf"
+draft_model_path = "/models/Qwen3-4B-DFlash.Q8_0.gguf"
 ```
+
+On a Mac with Apple Neural Engine, set `draft_device = "ANE"` in the same
+`[models.speculative]` section to require ANE for a plain DFlash draft. Mesh
+converts the local paired draft and target GGUF when loading the model. The
+conversion uses up to 512 recent context positions and keeps its compiled
+package in a private temporary directory for the life of the model. If the
+pair cannot be converted, compiled, or placed on ANE, model loading fails.
+This mode currently needs a single-stage target GGUF; DFlash2 and DSpark
+drafts are unsupported.
 
 `draft_max_tokens` caps the block. Without it the cap is 6 on Metal and 15
 elsewhere, held to the draft's trained block. Block length adapts to the

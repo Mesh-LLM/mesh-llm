@@ -100,11 +100,14 @@ It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
-crates; `just ci-crate-lists` checks it against workspace membership. The
-publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
-`mesh-llm-payments`, including optional dependencies. It publishes
-`mesh-llm-config` before the plugin SDK, whose lifecycle grant negotiation
+`skippy-ane`, `mesh-llm-moa-plugin`, and `mesh-llm-wallet` alongside their
+related workspace crates; `just ci-crate-lists` checks it against workspace membership. The
+`skippy-ane` source paths are covered by the protected catalog's
+`skippy/crates/**` Rust rule. Its macOS Core ML runtime remains explicitly
+unverified on Windows in the cfg census. The publish chain orders
+`skippy-ane` before `skippy-runtime` and `mesh-llm-plugin` before
+`mesh-llm-wallet` and `mesh-llm-payments`, including optional dependencies.
+It publishes `mesh-llm-config` before the plugin SDK, whose lifecycle grant negotiation
 uses the operator configuration types. It also publishes
 `mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and both before
 `mesh-llm-host-runtime`.

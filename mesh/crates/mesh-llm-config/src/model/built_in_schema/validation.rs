@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn draft_device_schema_offers_ane_and_runtime_devices() {
+    for path in [
+        "defaults.speculative.draft_device",
+        "models.<model-ref>.speculative.draft_device",
+    ] {
+        let setting = schema_setting(path);
+        assert_eq!(
+            control_behavior(&setting).options_source,
+            Some(ConfigOptionsSource::RuntimeGpus),
+        );
+        assert!(schema_enum_values(path).contains(&"ANE".to_string()));
+    }
+}
+
+#[test]
 fn built_in_schema_preserves_union_typed_fields() {
     for path in [
         "models.<model-ref>.model_fit.kv_offload",

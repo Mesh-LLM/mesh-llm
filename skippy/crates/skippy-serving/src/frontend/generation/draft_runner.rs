@@ -257,6 +257,9 @@ pub(in crate::frontend) fn attach_dflash_draft(
     let Some(dflash) = &speculative.dflash else {
         return Ok(None);
     };
+    if speculative.draft_device.as_deref() == Some("ANE") && config.downstream.is_some() {
+        bail!("ANE DFlash currently requires a single-stage target GGUF");
+    }
     attach_planned_dflash_draft(runtime, config, n_gpu_layers, speculative, dflash)
         .context(crate::DFlashDraftAttachFailed)
 }
@@ -301,6 +304,9 @@ fn attach_planned_dflash_draft(
         max_draft_tokens: dflash.max_draft_tokens,
         n_gpu_layers,
         device: speculative.draft_device.clone(),
+        ane_target_path: (speculative.draft_device.as_deref() == Some("ANE"))
+            .then(|| config.model_path.as_ref().map(std::path::PathBuf::from))
+            .flatten(),
     };
     let mut runtime = lock_runtime(runtime);
     runtime
