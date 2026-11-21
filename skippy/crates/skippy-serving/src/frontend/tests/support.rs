@@ -53,6 +53,8 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
             min_tokens: 256,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,
+            prefill_admission: Default::default(),
+            retention: Default::default(),
         }),
         native_mtp_enabled: true,
         load_mode: LoadMode::RuntimeSlice,
@@ -112,6 +114,7 @@ pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKv
                 seq_id,
                 token_count,
                 recompute_cost: token_count,
+                retention_priority: 0,
             },
         )
         .expect("synthetic radix prefix should record");
@@ -136,8 +139,12 @@ pub(super) fn local_openai_backend(
     );
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
+    let model = LoadedModel::from_runtime(&runtime);
     Ok(StageOpenAiBackend {
         runtime,
+        model,
+        runtime_lane_admission,
         workload: Default::default(),
         telemetry,
         config,

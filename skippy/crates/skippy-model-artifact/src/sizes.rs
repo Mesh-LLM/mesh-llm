@@ -1,5 +1,13 @@
 //! Pure model-size label parsing shared by catalog and mesh selection code.
 
+pub fn format_size_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1}GB", bytes as f64 / 1e9)
+    } else {
+        format!("{:.0}MB", bytes as f64 / 1e6)
+    }
+}
+
 /// Parse catalog labels such as `20GB`, `4.4GB`, or `491MB` into GB.
 #[must_use]
 pub fn parse_size_gb(label: &str) -> f64 {

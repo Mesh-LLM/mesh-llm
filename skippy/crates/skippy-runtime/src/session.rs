@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::CString;
 use std::ptr;
 
@@ -78,12 +79,12 @@ impl StageSession {
         // SAFETY: the session is owned by self and the token slice remains valid
         // for the call; native code copies the tokens and checks its position.
         let status = unsafe {
-            skippy_ffi::skippy_session_restore_token_history(
+            native_call!(skippy_session_restore_token_history(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)
     }
@@ -144,7 +145,7 @@ impl StageSession {
             return Err(anyhow!("session has no native state to reset"));
         }
         let mut error = ptr::null_mut();
-        let status = unsafe { skippy_ffi::skippy_session_reset(self.raw, &mut error) };
+        let status = unsafe { native_call!(skippy_session_reset(self.raw, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = 0;
         self.dflash_after_replace();
@@ -160,7 +161,7 @@ impl StageSession {
         let mut actual_dimensions = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_embed(
+            native_call!(skippy_session_embed(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
@@ -168,7 +169,7 @@ impl StageSession {
                 output.len(),
                 &mut actual_dimensions,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         if actual_dimensions != dimensions {
@@ -189,14 +190,14 @@ impl StageSession {
         let mut token_count = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_rerank(
+            native_call!(skippy_session_rerank(
                 self.raw,
                 query.as_ptr(),
                 document.as_ptr(),
                 &mut score,
                 &mut token_count,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = u64::try_from(token_count).context("token count exceeds u64")?;
@@ -208,13 +209,13 @@ impl StageSession {
         let mut decoder_start_token = 0_i32;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_encode_prompt(
+            native_call!(skippy_session_encode_prompt(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
                 &mut decoder_start_token,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = 0;
@@ -239,13 +240,13 @@ impl StageSession {
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_configure_chat_sampling(
+            native_call!(skippy_session_configure_chat_sampling(
                 self.raw,
                 sampling_ptr,
                 metadata_json.as_ptr(),
                 prompt_token_count,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)
     }
@@ -254,12 +255,12 @@ impl StageSession {
     pub fn retire_verify_checkpoint(&mut self, token_start: u64, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_retire_verify_checkpoint(
+            native_call!(skippy_retire_verify_checkpoint(
                 self.raw,
                 token_start,
                 token_count,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)
     }
@@ -283,7 +284,8 @@ impl StageSession {
 
     pub fn trim_session(&mut self, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
-        let status = unsafe { skippy_ffi::skippy_trim_session(self.raw, token_count, &mut error) };
+        let status =
+            unsafe { native_call!(skippy_trim_session(self.raw, token_count, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = token_count;
         self.dflash_after_rewind();
@@ -294,17 +296,39 @@ impl StageSession {
         let n_past = i32::try_from(token_count).context("session position exceeds i32")?;
         let mut error = ptr::null_mut();
         let status =
-            unsafe { skippy_ffi::skippy_session_set_position(self.raw, n_past, &mut error) };
+            unsafe { native_call!(skippy_session_set_position(self.raw, n_past, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = token_count;
         self.dflash_after_rewind();
         Ok(())
     }
 
+    /// Host bytes owned by one native prefix, excluding shared attention cells.
+    pub fn resident_prefix_bytes(&mut self, cache_seq_id: i32) -> Result<u64> {
+        let mut bytes = 0;
+        let mut error = ptr::null_mut();
+        // SAFETY: The session is live and both output pointers are valid for this call.
+        let status = unsafe {
+            native_call!(skippy_session_resident_prefix_bytes(
+                self.raw,
+                cache_seq_id,
+                &mut bytes,
+                &mut error,
+            ))
+        };
+        ensure_ok(status, error)?;
+        Ok(bytes)
+    }
+
     pub fn save_prefix(&mut self, cache_seq_id: i32, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_save_prefix(self.raw, cache_seq_id, token_count, &mut error)
+            native_call!(skippy_session_save_prefix(
+                self.raw,
+                cache_seq_id,
+                token_count,
+                &mut error
+            ))
         };
         ensure_ok(status, error)
     }
@@ -312,13 +336,13 @@ impl StageSession {
     pub fn restore_prefix(&mut self, cache_seq_id: i32, token_ids: &[i32]) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_restore_prefix(
+            native_call!(skippy_session_restore_prefix(
                 self.raw,
                 cache_seq_id,
                 token_ids.as_ptr(),
                 token_ids.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = u64::try_from(token_ids.len()).context("token count exceeds u64")?;
@@ -329,7 +353,7 @@ impl StageSession {
     pub fn drop_sequence(&mut self, seq_id: i32) -> Result<()> {
         let mut error = ptr::null_mut();
         let status =
-            unsafe { skippy_ffi::skippy_session_drop_sequence(self.raw, seq_id, &mut error) };
+            unsafe { native_call!(skippy_session_drop_sequence(self.raw, seq_id, &mut error)) };
         ensure_ok(status, error)
     }
 
@@ -337,7 +361,11 @@ impl StageSession {
         let mut used_cells = 0u64;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_memory_used_cells(self.raw, &mut used_cells, &mut error)
+            native_call!(skippy_session_memory_used_cells(
+                self.raw,
+                &mut used_cells,
+                &mut error
+            ))
         };
         ensure_ok(status, error)?;
         Ok(used_cells)
@@ -347,7 +375,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_prefill_chunk(
+            native_call!(skippy_prefill_chunk(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
@@ -357,7 +385,7 @@ impl StageSession {
                 0,
                 &mut output_bytes,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -396,7 +424,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_sampled(
+            native_call!(skippy_decode_step_sampled(
                 self.raw,
                 token_id,
                 sampling_ptr,
@@ -407,7 +435,7 @@ impl StageSession {
                 &mut output_bytes,
                 &mut predicted_token,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -438,7 +466,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_sampled_mtp(
+            native_call!(skippy_decode_step_sampled_mtp(
                 self.raw,
                 token_id,
                 sampling_ptr,
@@ -446,7 +474,7 @@ impl StageSession {
                 max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
                 &mut mtp_draft,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -485,7 +513,7 @@ impl StageSession {
         let mut predicted_tokens = vec![0_i32; requests.len()];
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_decode_batch_sampled(
+            native_call!(skippy_decode_batch_sampled(
                 sessions.as_ptr(),
                 token_ids.as_ptr(),
                 sampling.as_ptr(),
@@ -493,7 +521,7 @@ impl StageSession {
                 predicted_tokens.as_mut_ptr(),
                 predicted_tokens.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         for (row, request) in requests.iter_mut().enumerate() {
@@ -513,7 +541,11 @@ impl StageSession {
         let mut signal = RawTokenSignal::default();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_last_token_signal(self.raw, &mut signal, &mut error)
+            native_call!(skippy_session_last_token_signal(
+                self.raw,
+                &mut signal,
+                &mut error
+            ))
         };
         ensure_ok(status, error)?;
         Ok(signal.into())
@@ -525,13 +557,13 @@ impl StageSession {
         let mut pending = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_take_token_logprobs(
+            native_call!(skippy_session_take_token_logprobs(
                 self.raw,
                 ptr::null_mut(),
                 0,
                 &mut pending,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         if pending == 0 {
@@ -541,13 +573,13 @@ impl StageSession {
         let mut taken = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_take_token_logprobs(
+            native_call!(skippy_session_take_token_logprobs(
                 self.raw,
                 raw.as_mut_ptr(),
                 raw.len(),
                 &mut taken,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         raw.truncate(taken);
@@ -558,12 +590,12 @@ impl StageSession {
         let mut window = RawGenerationSignalWindow::default();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_signal_window(
+            native_call!(skippy_session_signal_window(
                 self.raw,
                 window_tokens,
                 &mut window,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         Ok(window.into())
@@ -581,7 +613,7 @@ impl StageSession {
         let mut output_count = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_verify_tokens(
+            native_call!(skippy_verify_tokens(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
@@ -589,7 +621,7 @@ impl StageSession {
                 predicted.len(),
                 &mut output_count,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         self.token_count = self
@@ -632,7 +664,7 @@ impl Drop for StageSession {
     fn drop(&mut self) {
         if !self.raw.is_null() {
             unsafe {
-                let _ = skippy_ffi::skippy_session_free(self.raw, ptr::null_mut());
+                let _ = native_call!(skippy_session_free(self.raw, ptr::null_mut()));
             }
         }
     }

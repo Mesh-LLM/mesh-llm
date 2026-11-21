@@ -69,7 +69,7 @@ jobs:
         env:
           UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
-      - name: Compile the dominant host dependency graph
+      - name: Compile Mesh and standalone Skippy dependency graphs
         if: ${{ steps.restore.outputs.cache-hit != 'true' }}
         run: just ci-sccache-seed-build
       - name: Capture intentionally cold warmer evidence

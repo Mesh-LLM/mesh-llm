@@ -36,7 +36,7 @@ package-backed layer splits.
 | Architecture pattern | Event sourcing with Master (single writer), Worker, Runner (isolated process), API, Election systems; 5 topic channels | Decentralized mesh with gossip protocol, QUIC/iroh peer-to-peer connections, heartbeat-based peer state, Nostr published discovery |
 | Hardware emphasis | Apple Silicon/macOS Tier 1 (M3 Ultra, M4 Pro, M5); Linux CPU Tier 3; Linux GPU (CUDA, Vulkan) under development | Composed release flavors for macOS, Linux, Windows, CUDA, ROCm, Vulkan, Metal, and CPU; each product combines the same backend-neutral host for its platform with a selected native runtime |
 | RDMA support | RDMA over Thunderbolt 5, day-0; macOS 26.2+; 99% latency reduction between TB5-connected devices | Not applicable (no RDMA transport) |
-| Networking | libp2p, mDNS, bootstrap peers, `EXO_LIBP2P_NAMESPACE` for cluster isolation | QUIC/iroh mesh paths, Nostr discovery for published meshes, managed relays by default, public invite tokens for joining private meshes |
+| Networking | libp2p, mDNS, bootstrap peers, `EXO_LIBP2P_NAMESPACE` for cluster isolation | QUIC/iroh mesh paths, Nostr discovery for published meshes, managed relays by default, join tokens for published or unpublished meshes |
 | API compatibility | OpenAI Chat Completions, Claude Messages, OpenAI Responses, Ollama API | OpenAI-compatible `/v1/models`, chat completions, completions, and Responses through `skippy-inference-api` |
 | Dashboard & ports | Local API and dashboard at `http://localhost:52415`; macOS app available; built-in image gen UI | Web console and management API at `http://localhost:3131`; inference API at `http://localhost:9337/v1` |
 | Model artifact model | Full MLX models from HuggingFace; custom model cards with `trust_remote_code` toggle | Layer package repositories with `model-package.json` manifest, GGUF artifacts, validation, certification, HF Jobs publishing |
@@ -85,8 +85,11 @@ runtime error-handling overhead through type-level guarantees.
 Mesh LLM uses a **decentralized mesh** with no single master or event log.
 Nodes discover each other through:
 - **Nostr discovery** for published/public meshes
-- **Invite tokens** for private meshes
+- **Join tokens** for published or unpublished meshes
 - **QUIC/iroh** for peer-to-peer transport
+
+Private membership requires [admission control](MESHES.md#ownership-and-admission-control);
+neither discovery nor join tokens restrict participation.
 
 State is disseminated through **gossip protocol**: heartbeats carry peer state
 updates, capability advertisements (vision, audio, multimodal, reasoning,

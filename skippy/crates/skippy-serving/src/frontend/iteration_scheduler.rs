@@ -1,29 +1,42 @@
-mod cache_runtime;
+mod batch_policy;
+pub(super) mod cache_runtime;
+mod cache_wave;
+mod command_waits;
 mod detached_runtime;
 mod direct_batch;
 mod direct_execution;
 mod direct_reply;
 pub(crate) mod readout;
+mod step_telemetry;
 
+use self::batch_policy::{
+    BatchPlatform, BatchPolicy, BatchTuning, BatchView, Gather, batch_policy, take_batch,
+};
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
     should_coalesce_direct_iterations, should_fill_cache_runtime_wave, should_serve_cache_runtime,
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
-    pipeline_group_batch_size, resolve_pipeline_decode_groups, scheduler_safe_mode_from_value,
-    should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
+    PIPELINE_DECODE_GROUPS_ENV, effective_scheduler_lane_count, pipeline_group_batch_size,
+    resolve_pipeline_decode_groups, scheduler_safe_mode_from_value, should_serve_direct,
+    validate_direct_iteration,
 };
+#[cfg(test)]
+use self::direct_batch::{direct_coalesce_target, take_direct_iteration_batch};
 use self::direct_reply::DirectReply;
+use self::step_telemetry::{StepTiming, sample_kv_used_cells};
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
-use crate::kv_integration::StagePrefixCachePayload;
+use crate::kv_integration::scheduling::CacheSchedulingPolicy;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
+use crate::telemetry::active_span::{ActiveSpan, SpanLevel};
+use crate::telemetry::resource_metrics;
+use crate::telemetry::trace_context;
 use serde_json::json;
 use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::StageConfig;
@@ -50,10 +63,21 @@ const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// One planned iteration's native outputs and the pool occupancy observed
+/// under the same runtime lease.
+struct ExecutedPlan {
+    predicted: Vec<IterationPrediction>,
+    kv_used_cells: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct ScheduledGenerationStats {
     pub(super) prompt_ms: f64,
     pub(super) predicted_ms: f64,
+    /// Tokens the worker decoded after the caller said Stop. They were never
+    /// delivered, but to decode them the worker fed the session the Stop
+    /// token and every undelivered token except the last.
+    pub(super) undelivered_tokens: Vec<i32>,
 }
 
 pub(crate) struct IterationScheduler {
@@ -62,6 +86,8 @@ pub(crate) struct IterationScheduler {
 
 pub(super) struct ScheduledGenerationRequest<'a> {
     pub(super) id: &'a str,
+    /// Admission priority: the request tier's priority.
+    pub(super) priority: u64,
     pub(super) prompt_tokens: &'a [i32],
     pub(super) max_tokens: u32,
     pub(super) sampling: Option<&'a SamplingConfig>,
@@ -71,6 +97,7 @@ pub(super) struct ScheduledGenerationRequest<'a> {
 
 pub(super) struct ScheduledResumeRequest<'a> {
     pub(super) id: &'a str,
+    pub(super) priority: u64,
     pub(super) prompt_tokens: &'a [i32],
     pub(super) generated_tokens: &'a [i32],
     pub(super) max_tokens: u32,
@@ -103,16 +130,6 @@ pub(crate) struct DirectIterationChannel {
     result: std_mpsc::Receiver<InferenceResult<SchedulerIterationOutcome>>,
 }
 
-pub(crate) struct CacheAwareRuntimeRequest<'a> {
-    pub(crate) operation_id: String,
-    pub(crate) deadline: Instant,
-    pub(crate) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(crate) prompt_tokens: Arc<[i32]>,
-    pub(crate) priority: u64,
-    pub(crate) payload: StagePrefixCachePayload,
-    pub(crate) refresh_affinity: CacheAffinityRefresh,
-}
-
 struct IterationSchedulerShared {
     commands: std_mpsc::SyncSender<SchedulerCommand>,
     max_direct_iteration_tokens: usize,
@@ -122,6 +139,7 @@ struct IterationSchedulerShared {
 
 struct ScheduledRequest {
     id: String,
+    priority: u64,
     prompt_tokens: Vec<i32>,
     max_tokens: u32,
     sampling: Option<SamplingConfig>,
@@ -255,10 +273,12 @@ where
 {
     let (reply, result) = std_mpsc::sync_channel(1);
     let enqueued_at = Instant::now();
+    let origin = trace_context::current_frame();
     let operation = RuntimeOperation {
         label,
         control: None,
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
+            let _origin = origin.as_ref().map(trace_context::Frame::enter);
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
             // The compute meter covers lock-held work only: from guard
@@ -306,10 +326,12 @@ where
     let enqueued_at = Instant::now();
     let control = CacheRuntimeContext::new(operation_id, deadline, cancellation);
     let worker_control = control.clone();
+    let origin = trace_context::current_frame();
     let runtime_operation = RuntimeOperation {
         label,
         control: Some(control.clone()),
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
+            let _origin = origin.as_ref().map(trace_context::Frame::enter);
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
             // Compute meter: lock-held work only, as in `runtime_operation`.
@@ -348,7 +370,7 @@ enum SchedulerCommand {
         RuntimeOperation,
         Arc<[i32]>,
         u64,
-        StagePrefixCachePayload,
+        CacheSchedulingPolicy,
         CacheAffinityRefresh,
     ),
     Cancel(String),
@@ -387,10 +409,13 @@ struct SchedulerWorker {
     /// Decode batch cap per pipeline group; equals `max_direct_batch_size`
     /// unless `SKIPPY_PIPELINE_DECODE_GROUPS` splits waves into groups.
     direct_group_batch_size: usize,
+    /// The ceiling on how long a prefill waits for others to join its wave.
+    batch_policy: Box<dyn BatchPolicy>,
     max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
     active_runtime_sessions: usize,
+    cache_wave_sessions: usize,
     direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
@@ -421,6 +446,13 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
+        let batch_platform = BatchPlatform::detect();
+        let batch_tuning = BatchTuning::resolve(
+            batch_platform,
+            &config.batch,
+            config.prefill_coalesce_max_ms,
+        );
+        let batch_policy = batch_policy(config.batch.policy.unwrap_or_default(), batch_tuning);
         let pipeline_decode_groups = resolve_pipeline_decode_groups(
             env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref(),
             planned_pipeline_decode_groups,
@@ -479,15 +511,45 @@ impl IterationScheduler {
                     json!(mixed_prefill_decode),
                 ),
                 (
+                    "skippy.scheduler.batch_policy".to_string(),
+                    json!(batch_policy.kind().as_str()),
+                ),
+                (
+                    "skippy.scheduler.batch_platform".to_string(),
+                    json!(batch_platform.as_str()),
+                ),
+                (
+                    "skippy.scheduler.batch_decode_window_us".to_string(),
+                    json!(batch_tuning.decode_window.as_micros()),
+                ),
+                (
+                    "skippy.scheduler.batch_prefill_window_per_token_us".to_string(),
+                    json!(batch_tuning.prefill_window_per_token.as_micros()),
+                ),
+                (
+                    "skippy.scheduler.batch_prefill_window_max_ms".to_string(),
+                    json!(batch_tuning.prefill_window_max.as_millis()),
+                ),
+                (
                     "skippy.scheduler.cache_policy".to_string(),
                     json!("weighted_lpm_aging_dfs_waiting_prefix"),
                 ),
             ]),
         );
         let (commands, receiver) = std_mpsc::sync_channel(command_queue_capacity);
+        // The worker outlives whatever constructs it, so its span hangs off
+        // the process root rather than the setup section that starts it.
+        let scheduler_span = ActiveSpan::start_under_process(
+            Some(&telemetry),
+            "stage.scheduler",
+            SpanLevel::Summary,
+        );
         let worker = thread::Builder::new()
             .name("skippy-iteration-scheduler".to_string())
             .spawn(move || {
+                // Iterations and runtime work on this thread nest under the
+                // scheduler's span for its whole life.
+                let _scheduler = scheduler_span.enter();
                 SchedulerWorker {
                     runtime,
                     scheduler,
@@ -501,10 +563,12 @@ impl IterationScheduler {
                         scheduler_lane_count.max(1),
                         pipeline_decode_groups,
                     ),
+                    batch_policy,
                     max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     active_runtime_sessions: 0,
+                    cache_wave_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
                     compute_meter,
@@ -534,8 +598,10 @@ impl IterationScheduler {
     ) -> InferenceResult<ScheduledGenerationStats> {
         let started = Instant::now();
         let (reply, events) = std_mpsc::channel();
+        let _sequence = trace_context::bind_sequence(request.id);
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
             id: request.id.to_string(),
+            priority: request.priority,
             prompt_tokens: request.prompt_tokens.to_vec(),
             max_tokens: request.max_tokens,
             sampling: request.sampling.cloned(),
@@ -563,8 +629,10 @@ impl IterationScheduler {
     ) -> InferenceResult<ScheduledGenerationStats> {
         let started = Instant::now();
         let (reply, events) = std_mpsc::channel();
+        let _sequence = trace_context::bind_sequence(request.id);
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
             id: request.id.to_string(),
+            priority: request.priority,
             prompt_tokens: request.prompt_tokens.to_vec(),
             max_tokens: request.max_tokens,
             sampling: request.sampling.cloned(),
@@ -595,6 +663,11 @@ impl IterationScheduler {
         resumed: bool,
     ) -> InferenceResult<ScheduledGenerationStats> {
         let mut first_token_at = None;
+        // The worker does not wait for a token's acknowledgement before
+        // decoding the next one, so tokens can still arrive after the caller
+        // has said Stop. Those tokens are refused rather than delivered.
+        let mut stopped = false;
+        let mut undelivered_tokens = Vec::new();
         loop {
             if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
                 let _ = self
@@ -604,10 +677,15 @@ impl IterationScheduler {
                 return Err(InferenceError::backend("request cancelled"));
             }
             match events.recv_timeout(CANCELLATION_POLL_INTERVAL) {
+                Ok(SchedulerEvent::Token { token, ack }) if stopped => {
+                    undelivered_tokens.push(token);
+                    let _ = ack.send(TokenControl::Stop);
+                }
                 Ok(SchedulerEvent::Token { token, ack }) => {
                     first_token_at.get_or_insert_with(Instant::now);
                     match on_token(token) {
                         Ok(control) => {
+                            stopped = control == TokenControl::Stop;
                             let _ = ack.send(control);
                         }
                         Err(error) => {
@@ -632,6 +710,7 @@ impl IterationScheduler {
                     return Ok(ScheduledGenerationStats {
                         prompt_ms,
                         predicted_ms: (elapsed_ms - prompt_ms).max(0.0),
+                        undelivered_tokens,
                     });
                 }
                 Ok(SchedulerEvent::Error(error)) => return Err(error),
@@ -745,6 +824,7 @@ impl IterationScheduler {
             self.shared.max_direct_iteration_tokens,
         )?;
         ensure_direct_iteration_active(deadline, cancellation)?;
+        let _sequence = trace_context::bind_sequence(session_id);
         self.enqueue_command(SchedulerCommand::ExecuteIteration(Box::new(
             DirectIteration {
                 session_id: session_id.to_string(),
@@ -797,36 +877,6 @@ impl IterationScheduler {
         result.recv().map_err(|error| {
             InferenceError::backend(format!("iteration scheduler stopped: {error}"))
         })?
-    }
-
-    /// Queue cache restore/prefill work by stage-local radix affinity while
-    /// retaining aging and decode-turn fairness.
-    pub(crate) fn execute_cache_aware_runtime_timed<T>(
-        &self,
-        label: &'static str,
-        request: CacheAwareRuntimeRequest<'_>,
-        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
-        + Send
-        + 'static,
-    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
-    where
-        T: Send + 'static,
-    {
-        let (runtime_operation, result, control) = cache_runtime_operation(
-            label,
-            request.operation_id,
-            request.deadline,
-            request.cancellation,
-            operation,
-        );
-        self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
-            runtime_operation,
-            request.prompt_tokens,
-            request.priority,
-            request.payload,
-            request.refresh_affinity,
-        ))?;
-        wait_for_cache_runtime(result, &control)
     }
 
     fn enqueue_command(&self, command: SchedulerCommand) -> InferenceResult<()> {
@@ -915,11 +965,9 @@ impl SchedulerWorker {
             if self.requests.is_empty()
                 && self.direct_iterations.is_empty()
                 && self.cache_runtime_queue.is_empty()
+                && !self.wait_idle()
             {
-                match self.commands.recv() {
-                    Ok(SchedulerCommand::Shutdown) | Err(_) => break,
-                    Ok(command) => self.handle_command(command),
-                }
+                break;
             }
             for _ in 0..self.max_commands_per_turn {
                 match self.commands.try_recv() {
@@ -938,8 +986,12 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            self.refresh_cache_wave_sessions();
             if self.should_defer_cache_runtime() {
-                if !self.wait_for_scheduler_command(DIRECT_ITERATION_COALESCE_WINDOW) {
+                if !self.wait_for_scheduler_command(
+                    "stage.scheduler_cache_defer",
+                    DIRECT_ITERATION_COALESCE_WINDOW,
+                ) {
                     return;
                 }
                 continue;
@@ -947,7 +999,7 @@ impl SchedulerWorker {
             let cache_fill_wave_pending = should_fill_cache_runtime_wave(
                 !self.direct_iterations.is_empty(),
                 self.cache_runtime_queue.has_wave_aware_operations(),
-                self.active_runtime_sessions,
+                self.cache_wave_sessions,
                 self.max_direct_batch_size,
             );
             let coalesce_direct = should_coalesce_direct_iterations(
@@ -958,16 +1010,8 @@ impl SchedulerWorker {
                 return;
             }
             self.run_work_turn();
-            if !self.iteration_interval.is_zero() {
-                match self.commands.recv_timeout(self.iteration_interval) {
-                    Ok(SchedulerCommand::Shutdown) => {
-                        self.fail_all(InferenceError::backend("iteration scheduler stopped"));
-                        return;
-                    }
-                    Ok(command) => self.handle_command(command),
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
-                }
+            if !self.wait_iteration_interval() {
+                return;
             }
         }
     }
@@ -1001,71 +1045,6 @@ impl SchedulerWorker {
         }
     }
 
-    fn should_defer_cache_runtime(&self) -> bool {
-        self.cache_runtime_queue.has_wave_aware_operations()
-            && self.direct_wave_full
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-            && self.direct_iterations.is_empty()
-            && self.requests.is_empty()
-            && !self.cache_runtime_queue.is_empty()
-    }
-
-    fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
-        match self.commands.recv_timeout(timeout) {
-            Ok(SchedulerCommand::Shutdown) => {
-                self.fail_all(InferenceError::backend("iteration scheduler stopped"));
-                false
-            }
-            Ok(command) => {
-                self.handle_command(command);
-                true
-            }
-            Err(std_mpsc::RecvTimeoutError::Timeout) => true,
-            Err(std_mpsc::RecvTimeoutError::Disconnected) => false,
-        }
-    }
-
-    fn run_work_turn(&mut self) {
-        let has_cache_runtime = !self.cache_runtime_queue.is_empty();
-        let has_wave_aware_cache_runtime = self.cache_runtime_queue.has_wave_aware_operations();
-        let has_direct = !self.direct_iterations.is_empty();
-        let has_planned = !self.requests.is_empty();
-        let has_iteration = has_planned || has_direct;
-        if has_wave_aware_cache_runtime
-            && has_direct
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-        {
-            self.direct_wave_full = true;
-        }
-        let suppress_cache_runtime = should_suppress_cache_runtime(
-            has_wave_aware_cache_runtime,
-            self.direct_wave_full,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let fill_cache_wave = should_fill_cache_runtime_wave(
-            has_direct,
-            has_wave_aware_cache_runtime,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let serve_cache_runtime = !suppress_cache_runtime
-            && (fill_cache_wave
-                || should_serve_cache_runtime(
-                    has_cache_runtime,
-                    has_iteration,
-                    self.last_served_cache_runtime,
-                ));
-        self.cache_runtime_queue.advance_turn();
-        if serve_cache_runtime {
-            self.last_served_cache_runtime = true;
-            self.run_cache_runtime_operation();
-        } else {
-            self.last_served_cache_runtime = false;
-            self.run_iteration();
-        }
-    }
-
     fn run_cache_runtime_operation(&mut self) {
         let Some((queued, telemetry)) = self.cache_runtime_queue.pop_next() else {
             return;
@@ -1081,12 +1060,24 @@ impl SchedulerWorker {
         let started = Instant::now();
         let label = operation.label;
         let cache_operation = operation.control.clone();
+        // The operation's native calls nest under its span.
+        let mut span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_feature_runtime",
+            SpanLevel::Debug,
+        );
+        let entered = span.enter();
         // Only lock-held runtime work counts as compute time; scheduler-side
         // waits, including lock contention, are excluded from the meter.
         let compute = (operation.run)(&self.runtime);
+        drop(entered);
         self.record_compute(compute);
-        self.active_runtime_sessions = lock_runtime(&self.runtime).active_session_count();
-        if self.active_runtime_sessions < self.max_direct_batch_size {
+        {
+            let runtime = lock_runtime(&self.runtime);
+            self.active_runtime_sessions = runtime.active_session_count();
+            self.cache_wave_sessions = runtime.nonempty_active_session_count();
+        }
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
             // A cache restore may complete before its caller can enqueue
@@ -1094,7 +1085,7 @@ impl SchedulerWorker {
             // another cache restore cannot slip in during that gap.
             self.direct_wave_full = true;
         }
-        if let Some(telemetry) = self.telemetry.as_ref() {
+        if self.telemetry.is_some() {
             let mut attrs = BTreeMap::from([
                 ("skippy.scheduler.operation".to_string(), json!(label)),
                 (
@@ -1143,36 +1134,9 @@ impl SchedulerWorker {
                     json!(cache.stale_affinity_fallback),
                 );
             }
-            telemetry.emit_debug("stage.scheduler_feature_runtime", attrs);
+            span.extend_attributes(attrs);
         }
-    }
-
-    fn coalesce_direct_iterations(&mut self) -> bool {
-        let target = direct_coalesce_target(
-            self.active_runtime_sessions,
-            self.direct_iterations.len(),
-            self.direct_group_batch_size,
-        );
-        if target <= self.direct_iterations.len() {
-            return true;
-        }
-
-        let deadline = Instant::now() + DIRECT_ITERATION_COALESCE_WINDOW;
-        while self.direct_iterations.len() < target {
-            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                break;
-            };
-            match self.commands.recv_timeout(remaining) {
-                Ok(SchedulerCommand::Shutdown) => {
-                    self.fail_all(InferenceError::backend("iteration scheduler stopped"));
-                    return false;
-                }
-                Ok(command) => self.handle_command(command),
-                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
-        true
+        span.end();
     }
 
     fn submit(&mut self, request: ScheduledRequest) {
@@ -1190,7 +1154,7 @@ impl SchedulerWorker {
             request.prompt_tokens.clone(),
             request.max_tokens,
             request.sampling.clone(),
-            0,
+            request.priority,
         )
         .with_admission_tokens(admission_tokens);
         if !request.generated_tokens.is_empty() {
@@ -1293,11 +1257,25 @@ impl SchedulerWorker {
             return;
         }
 
-        let iteration_started = Instant::now();
+        let iteration = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_iteration",
+            SpanLevel::Debug,
+        )
+        .with_metrics();
+        let plan_span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_plan",
+            SpanLevel::Debug,
+        );
         let mut plan = self.scheduler.plan_iteration();
+        plan_span.end();
         if plan.work.is_empty() {
+            iteration.discard();
             return;
         }
+        // Session setup and native execution for this step nest under it.
+        let entered = iteration.enter();
 
         self.last_served_direct = false;
         let mut setup_ids = BTreeSet::new();
@@ -1315,7 +1293,18 @@ impl SchedulerWorker {
                 ));
             }
         }
-        let (configured, setup_failures) = match self.prepare_runtime_sessions(&setup) {
+        let setup_span = (!setup.is_empty()).then(|| {
+            ActiveSpan::start(
+                self.telemetry.as_ref(),
+                "stage.scheduler_session_setup",
+                SpanLevel::Debug,
+            )
+        });
+        let prepared = self.prepare_runtime_sessions(&setup);
+        if let Some(span) = setup_span {
+            span.end();
+        }
+        let (configured, setup_failures) = match prepared {
             Ok(result) => result,
             Err(error) => {
                 self.fail_all(error);
@@ -1340,18 +1329,45 @@ impl SchedulerWorker {
         let execution_started = Instant::now();
         let result = self.execute_plan(&plan);
         let execution_elapsed = execution_started.elapsed();
-        let predicted = match result {
-            Ok(predicted) => predicted,
+        let executed = match result {
+            Ok(executed) => executed,
             Err(error) => {
                 self.fail_all(error);
                 return;
             }
         };
+        let complete_span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_complete",
+            SpanLevel::Debug,
+        );
         self.scheduler
             .observe_iteration_duration(&plan, execution_elapsed);
-        let step = self.scheduler.complete_iteration(&plan, &predicted);
-        self.finish_iteration(&plan, &predicted);
-        self.emit_step_telemetry(&step, iteration_started.elapsed(), execution_elapsed);
+        let step = self
+            .scheduler
+            .complete_iteration(&plan, &executed.predicted);
+        self.finish_iteration(&plan, &executed.predicted);
+        resource_metrics::record_scheduler(
+            step.active_sequences,
+            step.waiting_sequences,
+            plan.work.len(),
+        );
+        complete_span.end();
+        drop(entered);
+        let links = plan
+            .work
+            .iter()
+            .filter_map(|work| trace_context::sequence_context(&work.sequence_id))
+            .collect();
+        self.emit_step_telemetry(
+            &step,
+            StepTiming {
+                span: iteration,
+                execution_elapsed,
+                kv_used_cells: executed.kv_used_cells,
+                links,
+            },
+        );
     }
 
     fn finish_iteration(
@@ -1427,129 +1443,11 @@ impl SchedulerWorker {
         }
     }
 
-    fn emit_step_telemetry(
-        &mut self,
-        step: &skippy_scheduler::IterationTelemetry,
-        elapsed: Duration,
-        execution_elapsed: Duration,
-    ) {
-        if self.telemetry.is_none() {
-            return;
-        }
-        let lifecycle_counters = (
-            step.finished,
-            step.failed,
-            step.cancelled,
-            step.rejected_overload,
-        );
-        let lifecycle_changed = lifecycle_counters != self.last_emitted_lifecycle_counters;
-        if lifecycle_changed {
-            self.last_emitted_lifecycle_counters = lifecycle_counters;
-        }
-        let telemetry = self
-            .telemetry
-            .as_ref()
-            .expect("telemetry presence checked above");
-        let mut attrs = BTreeMap::from([
-            (
-                "skippy.scheduler.iteration".to_string(),
-                json!(step.iteration),
-            ),
-            (
-                "skippy.scheduler.running".to_string(),
-                json!(step.active_sequences),
-            ),
-            (
-                "skippy.scheduler.waiting".to_string(),
-                json!(step.waiting_sequences),
-            ),
-            (
-                "skippy.scheduler.admitted".to_string(),
-                json!(step.admitted),
-            ),
-            (
-                "skippy.scheduler.preempted".to_string(),
-                json!(step.preempted),
-            ),
-            (
-                "skippy.scheduler.prefill_tokens".to_string(),
-                json!(step.prefill_tokens),
-            ),
-            (
-                "skippy.scheduler.recompute_tokens".to_string(),
-                json!(step.recompute_tokens),
-            ),
-            (
-                "skippy.scheduler.decode_tokens".to_string(),
-                json!(step.decode_tokens),
-            ),
-            (
-                "skippy.scheduler.prefix_hits".to_string(),
-                json!(step.prefix_hits),
-            ),
-            (
-                "skippy.scheduler.prefix_misses".to_string(),
-                json!(step.prefix_misses),
-            ),
-            (
-                "skippy.scheduler.step_ms".to_string(),
-                json!(elapsed.as_secs_f64() * 1_000.0),
-            ),
-            (
-                "skippy.scheduler.execution_ms".to_string(),
-                json!(execution_elapsed.as_secs_f64() * 1_000.0),
-            ),
-            (
-                "skippy.scheduler.overhead_ms".to_string(),
-                json!(elapsed.saturating_sub(execution_elapsed).as_secs_f64() * 1_000.0),
-            ),
-        ]);
-        if lifecycle_changed {
-            attrs.extend([
-                (
-                    "skippy.scheduler.finished".to_string(),
-                    json!(step.finished),
-                ),
-                ("skippy.scheduler.failed".to_string(), json!(step.failed)),
-                (
-                    "skippy.scheduler.cancelled".to_string(),
-                    json!(step.cancelled),
-                ),
-                (
-                    "skippy.scheduler.rejected_overload".to_string(),
-                    json!(step.rejected_overload),
-                ),
-            ]);
-        }
-        for (name, used) in &step.component_used_bytes {
-            attrs.insert(
-                format!("skippy.scheduler.component.{name}.used_bytes"),
-                json!(used),
-            );
-        }
-        for (name, available) in &step.component_available_bytes {
-            attrs.insert(
-                format!("skippy.scheduler.component.{name}.available_bytes"),
-                json!(available),
-            );
-            let used = step
-                .component_used_bytes
-                .iter()
-                .find_map(|(used_name, used)| (used_name == name).then_some(*used))
-                .unwrap_or(0);
-            attrs.insert(
-                format!("skippy.scheduler.component.{name}.free_bytes"),
-                json!(available.saturating_sub(used)),
-            );
-        }
-        telemetry.emit_debug("stage.scheduler_iteration", attrs);
-    }
-
     fn prepare_runtime_sessions(
         &self,
         setup: &[(String, Option<String>, Option<SamplingConfig>, usize)],
     ) -> InferenceResult<RuntimeSetupOutcome> {
-        let mut runtime = lock_runtime(&self.runtime);
+        let mut runtime = self.lock_runtime_traced();
         let mut configured = Vec::new();
         let mut failures = Vec::new();
         for (id, metadata, sampling, prompt_token_count) in setup {
@@ -1581,15 +1479,28 @@ impl SchedulerWorker {
         Ok((configured, failures))
     }
 
+    /// Take the runtime lock, its wait a debug span.
+    fn lock_runtime_traced(&self) -> std::sync::MutexGuard<'_, RuntimeState> {
+        let span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.runtime_lock_wait",
+            SpanLevel::Debug,
+        );
+        let runtime = lock_runtime(&self.runtime);
+        span.end();
+        runtime
+    }
+
     fn record_compute(&self, elapsed: Duration) {
         self.compute_meter.record(elapsed);
+        resource_metrics::record_runtime_busy(elapsed);
     }
 
     fn execute_plan(
         &self,
         plan: &skippy_scheduler::IterationPlan,
-    ) -> InferenceResult<Vec<IterationPrediction>> {
-        let mut runtime = lock_runtime(&self.runtime);
+    ) -> InferenceResult<ExecutedPlan> {
+        let mut runtime = self.lock_runtime_traced();
         let hold_started = Instant::now();
         let requests = plan
             .work
@@ -1613,24 +1524,30 @@ impl SchedulerWorker {
             })
             .collect::<Vec<_>>();
         let result = runtime.iteration_batch_sampled(&requests);
+        let hold = hold_started.elapsed();
+        let kv_used_cells = plan.work.first().and_then(|work| {
+            sample_kv_used_cells(self.telemetry.as_ref(), &mut runtime, &work.sequence_id)
+        });
         drop(runtime);
-        self.record_compute(hold_started.elapsed());
+        self.record_compute(hold);
         let decode_steps = plan
             .work
             .iter()
             .filter(|work| work.phase == IterationPhase::Decode)
             .count();
         self.compute_meter.record_decode_tokens(decode_steps as u64);
+        resource_metrics::record_decode_tokens(decode_steps as u64);
         result
-            .map(|outputs| {
-                outputs
+            .map(|outputs| ExecutedPlan {
+                predicted: outputs
                     .samples
                     .into_iter()
                     .map(|sample| IterationPrediction {
                         work_index: sample.request_index,
                         token: sample.predicted_token,
                     })
-                    .collect()
+                    .collect(),
+                kv_used_cells,
             })
             .map_err(openai_backend_error)
     }
@@ -1669,7 +1586,8 @@ impl SchedulerWorker {
             runtime.active_session_count()
         };
         self.active_runtime_sessions = active_runtime_sessions;
-        if active_runtime_sessions < self.max_direct_batch_size {
+        self.refresh_cache_wave_sessions();
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         }
     }

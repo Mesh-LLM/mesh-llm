@@ -33,7 +33,11 @@ impl Node {
         let (tx, rx) = mpsc::channel(16);
         let node = self.clone();
         let idle = self.native_inference.stream_idle();
-        let task = tokio::spawn(async move {
+        // The caller's tier and private scope are task-local, so they are
+        // carried onto the producing task.
+        let tier = super::request_tier::current_request_tier();
+        let scope = super::current_private_scope();
+        let produce = async move {
             let result = tokio::select! {
                 _ = tx.closed() => return,
                 result = async {
@@ -47,7 +51,11 @@ impl Node {
             if let Err(error) = result {
                 let _ = tx.send(Err(error)).await;
             }
-        });
+        };
+        let task = tokio::spawn(super::with_private_scope(
+            scope,
+            super::request_tier::with_request_tier(tier, produce),
+        ));
         Ok(ChatCompletionStream::new(rx, task))
     }
 
@@ -57,7 +65,7 @@ impl Node {
         tx: &ChunkSender,
         idle: Duration,
     ) -> Result<()> {
-        let mut prepared = self.prepare_native_chat(call, false).await?;
+        let mut prepared = self.prepare_native_chat(call, None).await?;
         let request = std::mem::take(&mut prepared.request);
         let mut chunks = tokio::select! {
             _ = tx.closed() => return Ok(()),
@@ -120,11 +128,12 @@ impl Node {
     pub(super) async fn serve_native_chat(
         &self,
         call: NativeChatRequest,
+        requester: EndpointId,
         send: &mut iroh::endpoint::SendStream,
     ) -> Result<()> {
         let idle = self.native_inference.stream_idle();
         let stream = call.request.stream;
-        let mut prepared = self.prepare_native_chat(call, true).await?;
+        let mut prepared = self.prepare_native_chat(call, Some(requester)).await?;
         let request = std::mem::take(&mut prepared.request);
         if stream {
             let mut chunks = tokio::select! {

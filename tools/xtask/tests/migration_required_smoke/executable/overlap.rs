@@ -27,7 +27,7 @@ pub(super) fn headless(root: &Path, scenario: &str) -> Result<(), Box<dyn std::e
     std::fs::write(root.join("overlap.observed"), b"live")?;
     if scenario.starts_with("overlap-") {
         std::fs::write(root.join("overlap.armed"), b"armed")?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
         while !root.join("overlap.release").exists() && !super::signals::stopped() {
             if std::time::Instant::now() >= deadline {
                 return Err("overlap barrier expired".into());

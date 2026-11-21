@@ -5,8 +5,9 @@ use crate::StageActivationCodec;
 use super::invalid_data;
 
 // v17 adds unsampled prefill readouts and bounded selected-score replies.
+// v18 adds the request tier and private-partition flags on stage messages.
 // Stage peers must be upgraded together; the Mesh gossip envelope stays additive.
-pub const STAGE_STATE_VERSION: i32 = 17;
+pub const STAGE_STATE_VERSION: i32 = 18;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -219,6 +220,14 @@ pub mod state_flags {
     /// attention window. Stages forward no DFlash feature rows for them, and
     /// the draft does not ingest them; its context starts after them.
     pub const SPLIT_DFLASH_UNATTENDED_ROWS: i32 = 1 << 16;
+    /// Bits 17..=18: how many tiers below `local` the request is served at
+    /// (0 local, 1 trusted, 2 mesh; 3 is read as mesh). A stage caps this at
+    /// its own classification of the coordinator, partitions its caches by
+    /// it, and evicts lower tiers first.
+    pub const REQUEST_TIER_DEMOTION_SHIFT: u32 = 17;
+    pub const REQUEST_TIER_DEMOTION_MASK: i32 = 0x3 << REQUEST_TIER_DEMOTION_SHIFT;
+    /// The request uses the private cache partition of its tier.
+    pub const PRIVATE_CACHE_PARTITION: i32 = 1 << 19;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -422,6 +431,34 @@ impl StageStateHeader {
         self.flags = (self.flags & !state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK)
             | (value << state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT)
             | state_flags::NATIVE_MTP_DRAFT_TOKENS_SET;
+    }
+
+    /// How many tiers below `local` the request is served at: 0 local,
+    /// 1 trusted, 2 mesh. The unused value 3 reads as mesh.
+    pub fn request_tier_demotion(self) -> u8 {
+        let value = (self.flags & state_flags::REQUEST_TIER_DEMOTION_MASK)
+            >> state_flags::REQUEST_TIER_DEMOTION_SHIFT;
+        (value as u8).min(2)
+    }
+
+    /// Stamp the request tier as tiers below `local`, saturating at mesh.
+    pub fn set_request_tier_demotion(&mut self, demotion: u8) {
+        let value = i32::from(demotion.min(2));
+        self.flags = (self.flags & !state_flags::REQUEST_TIER_DEMOTION_MASK)
+            | (value << state_flags::REQUEST_TIER_DEMOTION_SHIFT);
+    }
+
+    /// Whether the request uses its tier's private cache partition.
+    pub fn private_cache_partition(self) -> bool {
+        self.flags & state_flags::PRIVATE_CACHE_PARTITION != 0
+    }
+
+    pub fn set_private_cache_partition(&mut self, private: bool) {
+        if private {
+            self.flags |= state_flags::PRIVATE_CACHE_PARTITION;
+        } else {
+            self.flags &= !state_flags::PRIVATE_CACHE_PARTITION;
+        }
     }
 
     /// Whether the sender accepts drafts that follow a rejected window's correction.

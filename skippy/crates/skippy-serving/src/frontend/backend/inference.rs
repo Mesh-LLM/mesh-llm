@@ -22,7 +22,17 @@ impl InferenceBackend for StageOpenAiBackend {
 
     /// Serve System One requests through the backend's selected execution path.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
-        self.serve_system_one(request).await
+        self.serve_system_one(request, Default::default()).await
+    }
+
+    /// Serve System One at the request's tier and in its cache partition.
+    async fn system_one_with_context(
+        &self,
+        request: SystemOneRequest,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<SystemOneResponse> {
+        self.serve_system_one(request, context.request_class())
+            .await
     }
 
     async fn chat_completion(
@@ -37,15 +47,17 @@ impl InferenceBackend for StageOpenAiBackend {
     /// Keep the scope through prompt preparation, native request IDs and cache selection.
     async fn chat_completion_with_context(
         &self,
-        request: GenerationRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationResponse> {
+        request.request_class = context.request_class();
         let ids = generation_ids(
             InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.chat_completion_with_prepared_hooks_for_exchange(
             request,
             None,
@@ -60,6 +72,7 @@ impl InferenceBackend for StageOpenAiBackend {
                 let template_options = chat_template_options(&request, &request_defaults)?;
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(
                         &request,
@@ -67,6 +80,7 @@ impl InferenceBackend for StageOpenAiBackend {
                         context.clone(),
                     )
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -191,9 +205,10 @@ impl InferenceBackend for StageOpenAiBackend {
     /// Retain the context in the native worker while producing bounded response events.
     async fn chat_completion_stream(
         &self,
-        request: GenerationRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationEventStream> {
+        request.request_class = context.request_class();
         let ids = generation_ids(
             InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
@@ -216,9 +231,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let emit_reasoning = template_exposes_reasoning(&template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(&request, template_options, context.clone())
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -302,6 +319,7 @@ impl InferenceBackend for StageOpenAiBackend {
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.ensure_model(&request.model)?;
         let (request_defaults, defaults_diagnostics) =
             resolve_completion_request_defaults(&request, &self.request_defaults.snapshot());

@@ -5,7 +5,7 @@ use crate::frontend::local_generation::CaptureTaskOutstandingGuard;
 pub(super) const PANICKING_DIRECT_SESSION: &str = "panicking-direct-iteration";
 
 /// Construct a direct-iteration request for scheduler unit tests.
-fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
+pub(super) fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     let (reply, _result) = std_mpsc::sync_channel(1);
     DirectIteration {
         session_id: session_id.to_string(),
@@ -94,10 +94,12 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
             direct_group_batch_size: 1,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -268,10 +270,12 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         kv_capacity_tokens: 64,
         max_direct_batch_size: 2,
         direct_group_batch_size: 2,
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
+        cache_wave_sessions: 0,
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
@@ -282,6 +286,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
     let (reply_b, events_b) = std_mpsc::channel();
     worker.submit(ScheduledRequest {
         id: "a".into(),
+        priority: 0,
         prompt_tokens: vec![1, 2],
         max_tokens: 1,
         sampling: None,
@@ -293,6 +298,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
     });
     worker.submit(ScheduledRequest {
         id: "b".into(),
+        priority: 0,
         prompt_tokens: vec![3, 4],
         max_tokens: 1,
         sampling: None,
@@ -362,117 +368,6 @@ fn feature_driver_iterations_enforce_the_native_batch_shape() {
 }
 
 #[test]
-fn direct_iteration_batch_defers_duplicate_sessions() {
-    let mut queue = VecDeque::from([
-        direct_iteration("same", 1),
-        direct_iteration("same", 1),
-        direct_iteration("other", 1),
-    ]);
-
-    let batch = take_direct_iteration_batch(&mut queue, 3, 8);
-
-    assert_eq!(
-        batch
-            .iter()
-            .map(|request| request.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["same", "other"]
-    );
-    assert_eq!(queue.len(), 1);
-    assert_eq!(queue.front().unwrap().session_id, "same");
-}
-
-#[test]
-fn direct_prefill_wave_never_exceeds_configured_native_batch_tokens() {
-    let mut queue = (0..8)
-        .map(|index| direct_iteration(&format!("session-{index}"), 128))
-        .collect::<VecDeque<_>>();
-
-    let batch = take_direct_iteration_batch(&mut queue, 8, 512);
-
-    assert_eq!(batch.len(), 4);
-    assert_eq!(
-        batch
-            .iter()
-            .map(|request| request.token_ids.len())
-            .sum::<usize>(),
-        512
-    );
-    assert_eq!(queue.len(), 4);
-}
-
-#[test]
-fn direct_wave_packs_decode_rows_queued_behind_an_oversized_prefill_chunk() {
-    let mut queue = VecDeque::from([
-        direct_iteration("prefill-a", 384),
-        direct_iteration("prefill-b", 256),
-        direct_iteration("decode-a", 1),
-        direct_iteration("decode-b", 1),
-        direct_iteration("late-arrival", 1),
-    ]);
-
-    let batch = take_direct_iteration_batch(&mut queue, 4, 512);
-
-    assert_eq!(
-        batch
-            .iter()
-            .map(|request| request.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["prefill-a", "decode-a", "decode-b", "late-arrival"]
-    );
-    assert_eq!(queue.len(), 1);
-    assert_eq!(queue.front().unwrap().session_id, "prefill-b");
-}
-
-#[test]
-fn deferred_prefill_chunk_stays_ahead_of_requests_it_did_not_reach() {
-    let mut queue = VecDeque::from([
-        direct_iteration("prefill-a", 384),
-        direct_iteration("prefill-b", 256),
-        direct_iteration("decode-a", 1),
-        direct_iteration("decode-b", 1),
-    ]);
-
-    let batch = take_direct_iteration_batch(&mut queue, 2, 512);
-
-    assert_eq!(batch.len(), 2);
-    assert_eq!(
-        queue
-            .iter()
-            .map(|request| request.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["prefill-b", "decode-b"]
-    );
-}
-
-#[test]
-fn deferred_prefill_chunk_is_not_overtaken_by_its_own_session() {
-    let mut queue = VecDeque::from([
-        direct_iteration("prefill-a", 384),
-        direct_iteration("same", 256),
-        direct_iteration("same", 1),
-        direct_iteration("decode-a", 1),
-    ]);
-
-    let batch = take_direct_iteration_batch(&mut queue, 4, 512);
-
-    assert_eq!(
-        batch
-            .iter()
-            .map(|request| request.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["prefill-a", "decode-a"]
-    );
-    assert_eq!(
-        queue
-            .iter()
-            .map(|request| request.token_ids.len())
-            .collect::<Vec<_>>(),
-        [256, 1]
-    );
-}
-
-#[test]
 fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();
@@ -487,10 +382,12 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
         direct_group_batch_size: 1,
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
+        cache_wave_sessions: 0,
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
@@ -500,6 +397,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let (reply, events) = std_mpsc::channel();
     worker.submit(ScheduledRequest {
         id: "slow-consumer".into(),
+        priority: 0,
         prompt_tokens: vec![1],
         max_tokens: 2,
         sampling: None,
@@ -527,6 +425,58 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     assert!(!worker.requests.contains_key("slow-consumer"));
 }
 
+/// The worker decodes ahead of acknowledgements, so a token can already be
+/// queued when the caller says Stop. That token is acknowledged with Stop,
+/// never reaches the caller's token callback, and is reported as undelivered.
+#[test]
+fn tokens_queued_after_a_stop_are_not_delivered() {
+    let (commands, _commands_rx) = std_mpsc::sync_channel(8);
+    let scheduler = IterationScheduler {
+        shared: Arc::new(IterationSchedulerShared {
+            commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
+            owner_count: AtomicUsize::new(1),
+            worker: Mutex::new(None),
+        }),
+    };
+    let (reply, events) = std_mpsc::channel();
+    let (stop_ack, stop_control) = std_mpsc::sync_channel(1);
+    let (late_ack, late_control) = std_mpsc::sync_channel(1);
+    reply
+        .send(SchedulerEvent::Token {
+            token: 10,
+            ack: stop_ack,
+        })
+        .unwrap();
+    reply
+        .send(SchedulerEvent::Token {
+            token: 11,
+            ack: late_ack,
+        })
+        .unwrap();
+    reply.send(SchedulerEvent::Complete).unwrap();
+
+    let mut delivered = Vec::new();
+    let stats = scheduler
+        .drive_generation_events(
+            "stopped",
+            None,
+            events,
+            &mut |token| {
+                delivered.push(token);
+                Ok(TokenControl::Stop)
+            },
+            Instant::now(),
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(delivered, vec![10]);
+    assert_eq!(stats.undelivered_tokens, vec![11]);
+    assert_eq!(stop_control.try_recv(), Ok(TokenControl::Stop));
+    assert_eq!(late_control.try_recv(), Ok(TokenControl::Stop));
+}
+
 #[test]
 fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
@@ -546,10 +496,12 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
         direct_group_batch_size: 1,
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
+        cache_wave_sessions: 0,
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
@@ -603,10 +555,12 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
             direct_group_batch_size: 3,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -649,10 +603,12 @@ fn detached_runtime_operation_returns_before_work_completes() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
             direct_group_batch_size: 3,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -792,17 +748,19 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
         direct_group_batch_size: 1,
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 1,
+        cache_wave_sessions: 1,
         direct_wave_full: true,
         telemetry: None,
         last_served_direct: true,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
-    worker.cache_runtime_queue.enqueue_with_payload(
+    worker.cache_runtime_queue.enqueue_with_policy(
         RuntimeOperation {
             label: "full-wave-cache",
             control: None,
@@ -814,7 +772,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         skippy_scheduler::CacheAffinity::default(),
         Arc::from([1]),
         0,
-        StagePrefixCachePayload::KvRecurrent,
+        CacheSchedulingPolicy::Cooperative,
         None,
     );
 
@@ -840,10 +798,12 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
         direct_group_batch_size: 1,
+        batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 1,
+        cache_wave_sessions: 1,
         direct_wave_full: true,
         telemetry: None,
         last_served_direct: true,
@@ -935,10 +895,12 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
             direct_group_batch_size: 1,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -966,6 +928,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
     commands
         .send(SchedulerCommand::Submit(ScheduledRequest {
             id: "panic-contained".into(),
+            priority: 0,
             prompt_tokens: vec![1],
             max_tokens: 1,
             sampling: None,
@@ -1055,10 +1018,12 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
             direct_group_batch_size: 1,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -1149,10 +1114,12 @@ fn scheduler_worker_keeps_serving_after_an_operation_panics() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
             direct_group_batch_size: 1,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
@@ -1211,10 +1178,12 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
             direct_group_batch_size: 1,
+            batch_policy: crate::frontend::iteration_scheduler::batch_policy::default_policy(),
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
+            cache_wave_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,

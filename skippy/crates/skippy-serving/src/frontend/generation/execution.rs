@@ -20,6 +20,7 @@ pub(in crate::frontend) fn generation_ids(
         frontend_request_id,
     )
     .with_execution_scope(context.execution_scope())
+    .with_request_class(context.request_class())
 }
 
 /// Run blocking inference while owning its permit and full request context.
@@ -34,14 +35,14 @@ where
     F: FnOnce(skippy_inference_api::CancellationToken) -> T + Send + 'static,
     P: Send + 'static,
 {
-    task::spawn_blocking(move || {
+    task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
         let _permit = permit;
         let result = work(context.cancellation_token());
         // The outer future may have been dropped while native execution was
         // unwinding. Shared-owner capacity remains held until this point.
         drop(context);
         result
-    })
+    }))
     .await
 }
 

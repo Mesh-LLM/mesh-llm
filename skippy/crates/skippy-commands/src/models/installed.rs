@@ -1,13 +1,13 @@
-use crate::models::details::{
-    find_remote_catalog_model_exact, installed_model_capabilities, installed_model_display_name,
-    installed_model_huggingface_ref, remote_catalog_model_ref,
-};
 use crate::models::storage::{
     huggingface_hub_cache_dir, huggingface_identity_for_path, layered_package_layer_count_for_path,
     layered_package_total_bytes_for_path, load_model_usage_record_for_path,
     scan_installed_artifacts_in,
 };
 use anyhow::Result;
+use skippy_model_hf::details::{
+    find_remote_catalog_model_exact, installed_model_capabilities, installed_model_display_name,
+    installed_model_huggingface_ref, remote_catalog_model_ref,
+};
 use std::path::Path;
 
 use super::formatters::{InstalledRow, models_formatter};
@@ -65,7 +65,7 @@ fn build_installed_rows(cache_root: &Path) -> Vec<InstalledRow> {
                 std::fs::metadata(&path).map(|meta| meta.len()).ok()
             };
             let capabilities = if is_safetensors {
-                crate::models::capabilities::infer_local_model_capabilities(&name, &path)
+                skippy_model_hf::capabilities::infer_local_model_capabilities(&name, &path)
             } else {
                 installed_model_capabilities(&name)
             };

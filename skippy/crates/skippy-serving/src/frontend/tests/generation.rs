@@ -1,7 +1,6 @@
 use super::*;
 use crate::frontend::generation::run_blocking_generation_worker;
 use skippy_inference_api::chat::ChatCompletionRequest;
-use std::sync::atomic::AtomicBool;
 
 fn assert_generation_rate_limit(error: InferenceError, message_fragment: &str) {
     assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -203,65 +202,70 @@ fn queued_arrival_cannot_be_overtaken_when_a_lane_opens() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_worker_stops_before_the_next_request_acquires_the_only_lane() {
+    use tokio::sync::oneshot;
+
+    struct CancelOnDrop(InferenceRequestContext);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+
+    let wait = Duration::from_secs(30);
     let generation_limit = Arc::new(Semaphore::new(1));
     let queue_depth = Arc::new(AtomicUsize::new(0));
     let first_permit = acquire_generation_permit_with_queue(
         generation_limit.clone(),
         queue_depth.clone(),
         1,
-        Duration::from_secs(1),
+        wait,
     )
     .await
     .unwrap();
-    let first_context = InferenceRequestContext::new();
-    let worker_started = Arc::new(AtomicBool::new(false));
-    let worker_stopped = Arc::new(AtomicBool::new(false));
-    let started = worker_started.clone();
-    let stopped = worker_stopped.clone();
+    let first_context = CancelOnDrop(InferenceRequestContext::new());
+    let (started, worker_started) = oneshot::channel();
+    let (cancelled, worker_cancelled) = oneshot::channel();
+    let (finish, worker_finish) = oneshot::channel();
     let first_worker = tokio::spawn(run_blocking_generation_worker(
         first_permit,
-        first_context.clone(),
+        first_context.0.clone(),
         move |cancellation| {
-            started.store(true, Ordering::Release);
-            while !cancellation.is_cancelled() {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            stopped.store(true, Ordering::Release);
+            tokio::runtime::Handle::current().block_on(async move {
+                let _ = started.send(());
+                // A failed assertion must not strand a blocking worker at runtime shutdown.
+                tokio::time::timeout(wait, async {
+                    cancellation.cancelled().await;
+                    let _ = cancelled.send(());
+                    let _ = worker_finish.await;
+                })
+                .await
+                .expect("worker must receive cancellation and permission to finish");
+            });
         },
     ));
 
-    tokio::time::timeout(Duration::from_millis(100), async {
-        while !worker_started.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("first generation worker started");
-
-    let second_limit = generation_limit.clone();
-    let second_queue_depth = queue_depth.clone();
-    let second = tokio::spawn(async move {
-        let permit = acquire_generation_permit_with_queue(
-            second_limit,
-            second_queue_depth,
-            1,
-            Duration::from_secs(1),
-        )
+    tokio::time::timeout(wait, worker_started)
         .await
+        .expect("first generation worker started")
         .unwrap();
-        assert!(
-            worker_stopped.load(Ordering::Acquire),
-            "the first worker must stop before its permit is released"
-        );
-        drop(permit);
-    });
+    let second =
+        acquire_generation_permit_with_queue(generation_limit.clone(), queue_depth, 1, wait);
+    tokio::pin!(second);
+    assert!(futures_util::poll!(second.as_mut()).is_pending());
 
-    first_context.cancel();
-    tokio::time::timeout(Duration::from_millis(200), second)
+    first_context.0.cancel();
+    tokio::time::timeout(wait, worker_cancelled)
         .await
-        .expect("second request acquired the lane promptly")
+        .expect("first worker observed cancellation")
         .unwrap();
+    assert!(
+        futures_util::poll!(second.as_mut()).is_pending(),
+        "the first worker must retain its permit while unwinding"
+    );
+    finish.send(()).unwrap();
+    let second_permit = second.await.expect("second request acquired the lane");
     first_worker.await.unwrap().unwrap();
+    drop(second_permit);
     assert_eq!(generation_limit.available_permits(), 1);
 }
 

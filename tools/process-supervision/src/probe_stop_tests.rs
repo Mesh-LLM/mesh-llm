@@ -23,6 +23,9 @@ impl Leader for Script {
     }
 }
 impl Tree for Script {
+    fn pre_force(&mut self) -> crate::PreForceObservation {
+        panic!("unexpected force observation")
+    }
     fn active(&mut self) -> Result<bool, Failure> {
         match self.0.pop_front() {
             Some(Step::Active(active)) => Ok(active),

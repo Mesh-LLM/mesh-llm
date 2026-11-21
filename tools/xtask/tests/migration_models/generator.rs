@@ -51,6 +51,80 @@ fn standalone_cpp_api_projection_is_required_when_its_suite_is_admitted() -> Tes
     Ok(())
 }
 
+#[test]
+fn derived_suites_refuse_generation_until_every_member_is_pinned() -> TestResult {
+    // Given: a registry deriving a suite from a one-model list it lacks rows for.
+    let stage = Stage::new("derived-suite")?;
+    let list = "evals/models.json";
+    stage.write(
+        list,
+        br#"[{"key":"tiny-q4-k-m","family":"hybrid-dense","repo":"acme/Tiny-GGUF","revision":"0123456789abcdef0123456789abcdef01234567","files":[{"name":"Tiny-Q4_K_M.gguf","sha256":"3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"}]}]"#,
+    )?;
+    let mut registry: Value = serde_json::from_slice(&small_registry()?)?;
+    registry["suites"]
+        .as_array_mut()
+        .ok_or("suites")?
+        .push(Value::from("performance-core"));
+    registry["derived_suites"] = serde_json::json!([{
+        "suite": "performance-core",
+        "from": list,
+        "selectors": ["Q4_K_M", "BF16"],
+        "id_prefix": "perf"
+    }]);
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    let missing = xtask(stage.path(), &["models", "generate"])?;
+    assert_eq!(missing.status.code(), Some(2));
+    let stderr = crate::support::text(&missing.stderr);
+    assert!(stderr.contains("run `cargo xtool models pin`"), "{stderr}");
+    assert!(
+        stderr.contains("(perf-tiny-q4-k-m) acme/Tiny-GGUF Tiny-Q4_K_M.gguf"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("(perf-tiny-bf16) acme/Tiny-GGUF Tiny-BF16.gguf"),
+        "{stderr}"
+    );
+
+    // When: both derived rows are registered, one of them under another file.
+    let row = |id: &str, file: &str, selector: &str| {
+        serde_json::json!({
+            "id": id, "family": "hybrid-dense", "suites": ["performance-core"],
+            "cadences": ["manual"], "capability_tags": ["dense", "gguf", "hybrid"],
+            "artifact": {"repo": "acme/Tiny-GGUF",
+                "revision": "0123456789abcdef0123456789abcdef01234567", "selector": selector,
+                "files": [{"path": file, "size_bytes": 12, "sha256": "ab".repeat(32)}]}
+        })
+    };
+    let rows = registry["artifacts"].as_array_mut().ok_or("artifacts")?;
+    rows.push(row("perf-tiny-q4-k-m", "Tiny-Q4_K_M.gguf", "Q4_K_M"));
+    rows.push(row("perf-tiny-bf16", "Tiny-Q8_0.gguf", "BF16"));
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    let differs = xtask(stage.path(), &["models", "generate"])?;
+    assert_eq!(differs.status.code(), Some(2));
+    assert!(
+        crate::support::text(&differs.stderr)
+            .contains("perf-tiny-bf16 is registered as something other than")
+    );
+
+    // Then: with the derivation matched, the suite projects.
+    let rows = registry["artifacts"].as_array_mut().ok_or("artifacts")?;
+    let last = rows.len() - 1;
+    rows[last]["artifact"]["files"][0]["path"] = Value::from("Tiny-BF16.gguf");
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    assert_streams(
+        "derived suite",
+        &xtask(stage.path(), &["models", "generate"])?,
+        0,
+        "",
+        "",
+    );
+    let manifest: Value =
+        serde_json::from_str(&stage.read("ci/model-artifacts/manifests/performance-core.json")?)?;
+    assert_eq!(manifest["artifacts"].as_array().map(Vec::len), Some(2));
+    assert_eq!(manifest["artifacts"][1]["file"], "Tiny-BF16.gguf");
+    Ok(())
+}
+
 /// Applies recorded `{set,value}` / `{delete}` path operations.
 fn apply(mut registry: Value, ops: &[Value]) -> Result<Value, Box<dyn std::error::Error>> {
     for op in ops {
@@ -240,7 +314,7 @@ fn migration_models_generator_projects_system_one_suite_in_python_order() -> Tes
     // Given: the real registry and its checked-in System One manifest.
     let stage = Stage::new("system-one")?;
     let root = crate::support::repository_root();
-    stage.write(REGISTRY, &std::fs::read(root.join(REGISTRY))?)?;
+    stage.real_registry(&root)?;
     let stale = xtask(stage.path(), &["models", "generate", "--check"])?;
     let stale_names = crate::support::text(&stale.stderr);
     let preceding = stale_names

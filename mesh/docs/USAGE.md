@@ -187,7 +187,9 @@ model_path = "/mnt/fast-storage/llms/orca-70b-q4-k-m.gguf"
 source_policy = "local-required"
 ```
 
-Start the private mesh on node A, then use its invite token on node B:
+Start an unpublished mesh on node A, then use its join token on node B.
+For private membership, configure [admission control](MESHES.md#ownership-and-admission-control)
+on the participating nodes:
 
 ```bash
 # node A
@@ -393,7 +395,7 @@ the daemon detects host activity and adapts inference admission:
     explicitly-known-and-empty while non-admitting.
   - `coarse_state` (default): emit the admission enum and also publish
     known-empty availability for old peers.
-  - `private_coarse_state`: emit the enum only on private meshes; use
+  - `private_coarse_state`: emit the enum only when public-discovery mode is off; use
     known-empty availability publicly.
 
 **Platform support**: unsupported or headless platforms report `Unknown` and
@@ -1733,7 +1735,7 @@ To validate the harness contract without starting processes or writing evidence,
 
 `--config-only` skips public-mesh probes and focuses on the owner-control migration lane:
 
-- loopback released/current private-mesh coexistence in both directions
+- loopback released/current unpublished-mesh coexistence in both directions
 - current-branch proof that new clients prefer `mesh-llm-control/2`
 - current-branch proof that missing endpoints fail with `ControlEndpointRequired`
 - current-node `runtime bootstrap` / `runtime get-config` evidence when owner-control is enabled

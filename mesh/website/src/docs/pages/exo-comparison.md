@@ -37,7 +37,7 @@ layer splits, and one OpenAI-compatible endpoint served through a mesh of peers.
 - **Use Mesh when you want:**
   - One OpenAI-compatible endpoint across a mesh of machines, no matter what hardware each runs
   - Cross-platform support spanning CUDA, ROCm, Vulkan, Metal, and CPU
-  - A public or private mesh with catalog-backed model references and operator controls
+  - Catalog-backed model references and operator controls, with optional [admission-controlled membership](/docs/pages/private-meshes/#restrict-membership)
   - Layer packages for very large GGUF models that won't fit on a single device
   - Agent and tool integrations with built-in launchers for Goose, Claude Code, OpenCode, and Pi
   - An opt-in Mixture-of-Agents plugin that answers non-streaming `model: "mesh"` text chat with a committee of models (one model when only small or single candidates are eligible)
@@ -61,7 +61,7 @@ single-point writer bottleneck.
 Mesh uses a **decentralized mesh** with QUIC/iroh peer-to-peer connections and
 gossip protocol for state dissemination. There is no single master; nodes coordinate
 through peer membership, heartbeats, and capability advertisement. Published meshes
-use Nostr for public discovery while private meshes stay invite-token based.
+use Nostr for public discovery. Unpublished meshes can be located through join tokens; private membership requires enforced admission control, not just a token or a name.
 
 ## Splitting philosophy
 

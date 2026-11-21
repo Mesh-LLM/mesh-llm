@@ -62,8 +62,8 @@ impl ServeSettings {
             "sources": sources,
             "constraints": {
                 "unified_kv": "required",
-                "ram_cache_requires_disk": true,
-                "prefix_budget": "retention target; one indivisible exact-state snapshot may exceed its limit",
+                "ram_cache_requires_disk": false,
+                "prefix_budget": "retention target; loaded native cache capabilities determine accounting",
                 "capabilities": "payload/backend compatibility resolves after model load",
             },
         })

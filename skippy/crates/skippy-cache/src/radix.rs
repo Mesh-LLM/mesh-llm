@@ -1,3 +1,6 @@
+mod resident_matching;
+use resident_matching::resident_backing_prefix;
+
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, bail};
@@ -351,7 +354,47 @@ impl<R, E> UnifiedRadixCache<R, E> {
     }
 
     pub fn evict_lru_recurrent(&mut self) -> Option<RadixEviction<E>> {
-        let victim = self.lru_victim(ComponentKind::KvRecurrent)?;
+        self.evict_recurrent_by_retention(|_| 0)
+    }
+
+    /// The retention of the entry [`Self::evict_recurrent_by_retention`]
+    /// would evict next, if any is evictable.
+    pub fn recurrent_victim_retention(&self, retention: impl Fn(&E) -> u64) -> Option<u64> {
+        self.ranked_victim(&|node| {
+            node.components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| {
+                    (
+                        retention(&entry.value),
+                        entry.last_used,
+                        entry.logical_bytes,
+                    )
+                })
+        })
+        .map(|victim| victim.retention)
+    }
+
+    /// Evict the unreferenced recurrent entry with the lowest `retention`,
+    /// least recently used first among equals.
+    pub fn evict_recurrent_by_retention(
+        &mut self,
+        retention: impl Fn(&E) -> u64,
+    ) -> Option<RadixEviction<E>> {
+        let victim = self.ranked_victim(&|node| {
+            node.components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| {
+                    (
+                        retention(&entry.value),
+                        entry.last_used,
+                        entry.logical_bytes,
+                    )
+                })
+        })?;
         let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
         self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
         Some(RadixEviction {
@@ -360,6 +403,35 @@ impl<R, E> UnifiedRadixCache<R, E> {
             logical_bytes: victim.logical_bytes,
             value,
         })
+    }
+
+    /// Evict the least-recently-used unreferenced recurrent entry that is a
+    /// strict prefix of another recurrent entry in its namespace. A longer
+    /// entry already continues that conversation, so the shorter one is the
+    /// cheapest snapshot to lose.
+    pub fn evict_lru_superseded_recurrent(&mut self) -> Option<RadixEviction<E>> {
+        let mut victim = None;
+        for (namespace, root) in &self.roots {
+            collect_lru_superseded_recurrent(namespace, root, &mut Vec::new(), &mut victim);
+        }
+        let victim = victim?;
+        let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
+        self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
+        Some(RadixEviction {
+            namespace: victim.namespace,
+            tokens: victim.tokens,
+            logical_bytes: victim.logical_bytes,
+            value,
+        })
+    }
+
+    /// Recurrent entries with no longer recurrent entry below them: the latest
+    /// continuation of each distinct conversation.
+    pub fn recurrent_leaf_entries(&self) -> usize {
+        self.roots
+            .values()
+            .map(|root| count_recurrent_leaves(root).0)
+            .sum()
     }
 
     pub fn stats(&self) -> UnifiedRadixCacheStats {
@@ -388,9 +460,29 @@ impl<R, E> UnifiedRadixCache<R, E> {
     }
 
     fn lru_victim(&self, component: ComponentKind) -> Option<Victim> {
+        self.ranked_victim(&|node| match component {
+            ComponentKind::ResidentKv => node
+                .components
+                .resident
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| (0, entry.last_used, entry.logical_bytes)),
+            ComponentKind::KvRecurrent => node
+                .components
+                .recurrent
+                .as_ref()
+                .filter(|entry| entry.active_refs == 0)
+                .map(|entry| (0, entry.last_used, entry.logical_bytes)),
+        })
+    }
+
+    /// The evictable node with the lowest `(retention, last_used)`, where
+    /// `candidate` yields `(retention, last_used, logical_bytes)` for nodes
+    /// holding an evictable entry.
+    fn ranked_victim(&self, candidate: &VictimCandidate<'_, R, E>) -> Option<Victim> {
         let mut victim = None;
         for (namespace, root) in &self.roots {
-            collect_lru_victim(namespace, root, component, &mut Vec::new(), &mut victim);
+            collect_lru_victim(namespace, root, candidate, &mut Vec::new(), &mut victim);
         }
         victim
     }
@@ -633,6 +725,7 @@ struct Victim {
     tokens: Vec<i32>,
     logical_bytes: u64,
     last_used: u64,
+    retention: u64,
 }
 
 fn validate_tokens(tokens: &[i32]) -> Result<()> {
@@ -707,86 +800,6 @@ fn ensure_node<'a, R, E>(
         .get_mut(&first)
         .and_then(|split| split.children.get_mut(&new_first))
         .expect("new split radix child should exist")
-}
-
-/// Find the longest query prefix backed by any resident sequence.
-///
-/// Unlike recurrent checkpoints, native resident KV can be sliced when copied:
-/// a cached sequence for `[1, 2, 3, 4]` can restore `[1, 2]` for a request that
-/// diverges at token 3. Native restore only reads the stored resident source,
-/// so multiple restores may hold references concurrently; eviction remains
-/// blocked until every reference is released.
-fn resident_backing_prefix<R, E>(
-    root: &RadixNode<R, E>,
-    tokens: &[i32],
-) -> Option<(usize, Vec<i32>)> {
-    let mut node = root;
-    let mut remaining = tokens;
-    let mut consumed = 0usize;
-    let mut path = Vec::new();
-    let mut best = None;
-
-    if node.components.resident.is_some() {
-        best = Some((0, Vec::new()));
-    }
-
-    while let Some(first) = remaining.first() {
-        let Some(child) = node.children.get(first) else {
-            // The query can diverge exactly at an existing branch point. No
-            // child starts with its next token, but any resident descendant
-            // still owns a native sequence that can be sliced to `consumed`.
-            // Without this fallback, the first two branches split the edge
-            // and every later sibling incorrectly becomes a full miss.
-            if consumed > 0
-                && let Some(stored_tokens) = nearest_resident_descendant(node, &path)
-            {
-                best = Some((consumed, stored_tokens));
-            }
-            break;
-        };
-        let common = common_prefix_len(&child.edge, remaining);
-        if common < child.edge.len() {
-            let mut child_path = path.clone();
-            child_path.extend_from_slice(&child.edge);
-            if common > 0
-                && let Some(stored_tokens) = nearest_resident_descendant(child, &child_path)
-            {
-                best = Some((consumed.saturating_add(common), stored_tokens));
-            }
-            break;
-        }
-        consumed = consumed.saturating_add(common);
-        remaining = &remaining[common..];
-        path.extend_from_slice(&child.edge);
-        node = child;
-        if node.components.resident.is_some() {
-            best = Some((consumed, path.clone()));
-        }
-    }
-
-    if remaining.is_empty()
-        && let Some(stored_tokens) = nearest_resident_descendant(node, &path)
-    {
-        best = Some((consumed, stored_tokens));
-    }
-    best.filter(|(matched, _)| *matched > 0)
-}
-
-fn nearest_resident_descendant<R, E>(
-    node: &RadixNode<R, E>,
-    node_path: &[i32],
-) -> Option<Vec<i32>> {
-    if node.components.resident.is_some() {
-        return Some(node_path.to_vec());
-    }
-    for child in node.children.values() {
-        let mut child_path = node_path.to_vec();
-        child_path.extend_from_slice(&child.edge);
-        if let Some(candidate) = nearest_resident_descendant(child, &child_path) {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn longest_component_prefix<R, E>(
@@ -909,35 +922,24 @@ fn find_recurrent_path<R, E>(
     None
 }
 
+type VictimCandidate<'a, R, E> = dyn Fn(&RadixNode<R, E>) -> Option<(u64, u64, u64)> + 'a;
+
 fn collect_lru_victim<R, E>(
     namespace: &str,
     node: &RadixNode<R, E>,
-    component: ComponentKind,
+    candidate: &VictimCandidate<'_, R, E>,
     path: &mut Vec<i32>,
     victim: &mut Option<Victim>,
 ) {
     let original_len = path.len();
     path.extend_from_slice(&node.edge);
-    let candidate = match component {
-        ComponentKind::ResidentKv => node
-            .components
-            .resident
-            .as_ref()
-            .filter(|entry| entry.active_refs == 0)
-            .map(|entry| (entry.last_used, entry.logical_bytes)),
-        ComponentKind::KvRecurrent => node
-            .components
-            .recurrent
-            .as_ref()
-            .filter(|entry| entry.active_refs == 0)
-            .map(|entry| (entry.last_used, entry.logical_bytes)),
-    };
-    if let Some((last_used, logical_bytes)) = candidate {
+    if let Some((retention, last_used, logical_bytes)) = candidate(node) {
         let replace = victim
             .as_ref()
             .map(|current| {
-                (last_used, namespace, path.as_slice())
+                (retention, last_used, namespace, path.as_slice())
                     < (
+                        current.retention,
                         current.last_used,
                         current.namespace.as_str(),
                         current.tokens.as_slice(),
@@ -950,13 +952,67 @@ fn collect_lru_victim<R, E>(
                 tokens: path.clone(),
                 logical_bytes,
                 last_used,
+                retention,
             });
         }
     }
     for child in node.children.values() {
-        collect_lru_victim(namespace, child, component, path, victim);
+        collect_lru_victim(namespace, child, candidate, path, victim);
     }
     path.truncate(original_len);
+}
+
+/// Returns (leaf recurrent entries, whether the subtree holds any recurrent entry).
+fn count_recurrent_leaves<R, E>(node: &RadixNode<R, E>) -> (usize, bool) {
+    let mut leaves = 0;
+    let mut below = false;
+    for child in node.children.values() {
+        let (child_leaves, child_any) = count_recurrent_leaves(child);
+        leaves += child_leaves;
+        below |= child_any;
+    }
+    let here = node.components.recurrent.is_some();
+    if here && !below {
+        leaves += 1;
+    }
+    (leaves, here || below)
+}
+
+/// Returns whether the subtree holds any recurrent entry.
+fn collect_lru_superseded_recurrent<R, E>(
+    namespace: &str,
+    node: &RadixNode<R, E>,
+    path: &mut Vec<i32>,
+    victim: &mut Option<Victim>,
+) -> bool {
+    let original_len = path.len();
+    path.extend_from_slice(&node.edge);
+    let mut below = false;
+    for child in node.children.values() {
+        below |= collect_lru_superseded_recurrent(namespace, child, path, victim);
+    }
+    let entry = node.components.recurrent.as_ref();
+    if below && let Some(entry) = entry.filter(|entry| entry.active_refs == 0) {
+        let replace = victim.as_ref().is_none_or(|current| {
+            (entry.last_used, namespace, path.as_slice())
+                < (
+                    current.last_used,
+                    current.namespace.as_str(),
+                    current.tokens.as_slice(),
+                )
+        });
+        if replace {
+            *victim = Some(Victim {
+                namespace: namespace.to_string(),
+                tokens: path.clone(),
+                logical_bytes: entry.logical_bytes,
+                last_used: entry.last_used,
+                retention: 0,
+            });
+        }
+    }
+    path.truncate(original_len);
+    below || entry.is_some()
 }
 
 fn collect_resident_eviction_candidates<R: Clone, E>(
@@ -1394,6 +1450,27 @@ mod tests {
         assert_eq!(existing.value, "old");
         assert_eq!(existing.active_refs, 1);
         assert!(cache.release_resident("stage", &[1]));
+    }
+
+    #[test]
+    fn superseded_recurrent_eviction_keeps_each_conversations_latest_entry() {
+        let mut cache = UnifiedRadixCache::<(), &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 1, "a-prefill")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[7, 8], 1, "b-prefill")
+            .unwrap();
+        cache
+            .insert_recurrent("stage", &[1, 2, 3, 4], 1, "a-decode")
+            .unwrap();
+        assert_eq!(cache.recurrent_leaf_entries(), 2);
+        assert_eq!(
+            cache.evict_lru_superseded_recurrent().unwrap().value,
+            "a-prefill"
+        );
+        assert!(cache.evict_lru_superseded_recurrent().is_none());
+        assert_eq!(cache.recurrent_leaf_entries(), 2);
     }
 
     #[test]

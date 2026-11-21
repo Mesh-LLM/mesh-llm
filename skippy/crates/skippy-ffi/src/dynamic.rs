@@ -264,8 +264,12 @@ dynamic_symbols! {
     skippy_import_kv_page(session: *mut Session, desc: *const KvPageDesc, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_import_cachegen_kv_page_v1(session: *mut Session, desc: *const KvPageDesc, records: *const CacheGenRecordV1, record_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
+    skippy_model_kv_pool_cells(model: *const Model) -> u32;
     skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_export_resident_kv_page(session: *mut Session, cache_seq_id: i32, layer_start: i32, layer_end: i32, token_start: u64, token_count: u64, out_desc: *mut KvPageDesc, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_export_resident_recurrent_state(session: *mut Session, cache_seq_id: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_resident_prefix_bytes(session: *mut Session, cache_seq_id: i32, out_bytes: *mut u64, out_error: *mut *mut Error) -> Status;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_restore_prefix(session: *mut Session, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_memory_used_cells(session: *mut Session, out_used_cells: *mut u64, out_error: *mut *mut Error) -> Status;
@@ -442,6 +446,32 @@ pub fn skippy_clear_runtime_event_reporter_fn() -> Option<SkippyClearRuntimeEven
         symbols().lookup_optional::<SkippyClearRuntimeEventReporterFn>(
             b"skippy_clear_runtime_event_reporter\0",
         )
+    })
+}
+
+pub fn skippy_set_gpu_command_timing_callback_fn()
+-> Option<crate::SkippySetGpuCommandTimingCallbackFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetGpuCommandTimingCallbackFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetGpuCommandTimingCallbackFn>(
+            b"skippy_set_gpu_command_timing_callback\0",
+        )
+    })
+}
+
+pub fn skippy_set_native_span_callback_fn() -> Option<crate::SkippySetNativeSpanCallbackFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetNativeSpanCallbackFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetNativeSpanCallbackFn>(
+            b"skippy_set_native_span_callback\0",
+        )
+    })
+}
+
+pub fn skippy_set_trace_tag_fn() -> Option<crate::SkippySetTraceTagFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetTraceTagFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetTraceTagFn>(b"skippy_set_trace_tag\0")
     })
 }
 

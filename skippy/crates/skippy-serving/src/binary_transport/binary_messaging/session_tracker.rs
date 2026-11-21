@@ -17,6 +17,8 @@ use std::{
 pub(super) struct ConnectionSessionOwnership {
     sessions: Mutex<BTreeMap<String, SessionState>>,
     release_completed: Condvar,
+    capacity: Option<usize>,
+    runtime_lanes: Option<Arc<crate::runtime_state::lane_admission::RuntimeLaneAdmission>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,6 +31,7 @@ pub(super) struct SessionLease {
     ownership: Arc<ConnectionSessionOwnership>,
     session_key: String,
     connection_id: u64,
+    runtime_lane: Mutex<Option<crate::runtime_state::lane_admission::RuntimeLanePermit>>,
 }
 
 pub(super) struct SessionRelease<'a> {
@@ -40,6 +43,11 @@ impl Drop for SessionRelease<'_> {
         self.lease
             .ownership
             .finish_release(&self.lease.session_key, self.lease.connection_id);
+        self.lease
+            .runtime_lane
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 }
 
@@ -69,21 +77,71 @@ impl SessionLease {
 }
 
 impl ConnectionSessionOwnership {
+    pub(super) fn with_runtime_lanes(
+        lanes: Arc<crate::runtime_state::lane_admission::RuntimeLaneAdmission>,
+    ) -> Self {
+        Self {
+            capacity: Some(lanes.capacity()),
+            runtime_lanes: Some(lanes),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity: Some(capacity.max(1)),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn claim(
         self: &Arc<Self>,
         session_key: &str,
         connection_id: u64,
     ) -> Result<SessionLease> {
-        let sessions = self
+        self.claim_interruptible(session_key, connection_id, || false)
+    }
+
+    fn claim_interruptible(
+        self: &Arc<Self>,
+        session_key: &str,
+        connection_id: u64,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<SessionLease> {
+        let mut sessions = self
             .sessions
             .lock()
             .expect("binary session ownership registry lock poisoned");
-        let mut sessions = self
-            .release_completed
-            .wait_while(sessions, |sessions| {
-                matches!(sessions.get(session_key), Some(SessionState::Releasing(_)))
-            })
-            .expect("binary session ownership registry lock poisoned");
+        loop {
+            if cancelled() {
+                bail!("binary session admission cancelled");
+            }
+            let releasing = matches!(sessions.get(session_key), Some(SessionState::Releasing(_)));
+            let capacity_full = !sessions.contains_key(session_key)
+                && self
+                    .capacity
+                    .is_some_and(|capacity| sessions.len() >= capacity);
+            if capacity_full
+                && sessions
+                    .values()
+                    .any(|state| *state == SessionState::Owned(connection_id))
+            {
+                // This connection must remain able to consume Stop for its
+                // existing sessions; waiting would hide that Stop behind the
+                // new session's admission indefinitely.
+                bail!("stop an active session before opening another beyond stage capacity");
+            }
+            if !releasing && !capacity_full {
+                break;
+            }
+            sessions = self
+                .release_completed
+                .wait_timeout(sessions, std::time::Duration::from_millis(50))
+                .expect("binary session ownership registry lock poisoned")
+                .0;
+        }
         // Never seize ownership from another live connection. Nonzero wire
         // session ids become session keys, so an observing peer could
         // otherwise replay a victim's live session id on its own connection
@@ -97,13 +155,40 @@ impl ConnectionSessionOwnership {
         if seized_live_owner {
             bail!("stage session is owned by another live connection");
         }
+        // HTTP can occupy lanes without an entry in this binary registry. A
+        // connection that already owns a session may only add another when a
+        // real runtime permit is immediately available: blocking here would
+        // prevent it from consuming Stop for its existing session.
+        let runtime_lane = if let Some(lanes) = &self.runtime_lanes
+            && sessions
+                .values()
+                .any(|state| *state == SessionState::Owned(connection_id))
+        {
+            Some(lanes.try_acquire()?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "stop an active session before opening another beyond stage capacity"
+                )
+            })?)
+        } else {
+            None
+        };
+        let needs_runtime_lane = runtime_lane.is_none();
         sessions.insert(session_key.to_string(), SessionState::Owned(connection_id));
         drop(sessions);
-        Ok(SessionLease {
+        let lease = SessionLease {
             ownership: self.clone(),
             session_key: session_key.to_string(),
             connection_id,
-        })
+            runtime_lane: Mutex::new(runtime_lane),
+        };
+        if needs_runtime_lane && let Some(lanes) = &self.runtime_lanes {
+            let permit = lanes.acquire_blocking(cancelled)?;
+            *lease
+                .runtime_lane
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(permit);
+        }
+        Ok(lease)
     }
 
     fn begin_release(&self, session_key: &str, connection_id: u64) -> bool {
@@ -143,6 +228,8 @@ impl ConnectionSessionOwnership {
         if sessions.get(session_key) == Some(&SessionState::Owned(connection_id)) {
             sessions.remove(session_key);
         }
+        drop(sessions);
+        self.release_completed.notify_all();
     }
 
     #[cfg(test)]
@@ -182,11 +269,22 @@ impl ConnectionSessionTracker {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn touch(&mut self, session_key: &str) -> Result<()> {
+        self.touch_interruptible(session_key, || false)
+    }
+
+    pub(super) fn touch_interruptible(
+        &mut self,
+        session_key: &str,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<()> {
         if self.active.contains_key(session_key) {
             return Ok(());
         }
-        let lease = self.ownership.claim(session_key, self.connection_id)?;
+        let lease =
+            self.ownership
+                .claim_interruptible(session_key, self.connection_id, cancelled)?;
         self.active.insert(session_key.to_string(), lease);
         Ok(())
     }
@@ -311,6 +409,133 @@ mod tests {
         collections::BTreeMap,
         sync::{Arc, Mutex},
     };
+
+    #[test]
+    fn global_lane_admission_waits_for_another_connections_session_release() {
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            sync::mpsc,
+            time::Duration,
+        };
+        let ownership = Arc::new(ConnectionSessionOwnership::with_capacity(1));
+        let first = ownership.claim("first", 1).unwrap();
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let queued_owner = ownership.clone();
+        let queued = std::thread::spawn(move || {
+            let notified = AtomicBool::new(false);
+            let second = queued_owner
+                .claim_interruptible("second", 2, || {
+                    if !notified.swap(true, Ordering::AcqRel) {
+                        waiting_tx.send(()).unwrap();
+                    }
+                    false
+                })
+                .unwrap();
+            admitted_tx.send(()).unwrap();
+            second
+        });
+        waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(admitted_rx.try_recv().is_err());
+        // Native Stop/cleanup marks the ownership released only after the
+        // actual runtime session has been dropped.
+        drop(first.begin_release().unwrap());
+        admitted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(queued.join().unwrap());
+        drop(first);
+        assert_eq!(ownership.owner_count(), 0);
+    }
+
+    #[test]
+    fn shutdown_cancels_capacity_wait_without_claiming_a_lane() {
+        let ownership = Arc::new(ConnectionSessionOwnership::with_capacity(1));
+        let first = ownership.claim("first", 1).unwrap();
+        assert!(ownership.claim_interruptible("second", 2, || true).is_err());
+        assert!(first.still_owns());
+        assert_eq!(ownership.owner_count(), 1);
+    }
+
+    #[test]
+    fn same_connection_over_capacity_does_not_hide_its_queued_stop() {
+        let ownership = Arc::new(ConnectionSessionOwnership::with_capacity(1));
+        let first = ownership.claim("first", 1).unwrap();
+        let error = ownership
+            .claim("second", 1)
+            .err()
+            .expect("multiplexed session must not block its own Stop");
+        assert!(error.to_string().contains("stop an active session"));
+        assert!(first.still_owns());
+        drop(first.begin_release().unwrap());
+        assert!(ownership.claim("second", 1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn http_occupancy_cannot_make_a_second_binary_session_hide_stop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let lanes = crate::runtime_state::lane_admission::RuntimeLaneAdmission::new(2);
+        let _http = lanes.acquire().await.unwrap();
+        let ownership = Arc::new(ConnectionSessionOwnership::with_runtime_lanes(lanes));
+        let first = ownership.claim("first", 1).unwrap();
+        let checks = AtomicUsize::new(0);
+        // A regressed blocking claim is cancelled on its second poll so this
+        // regression fails deterministically instead of hanging the suite.
+        let error = ownership
+            .claim_interruptible("second", 1, || checks.fetch_add(1, Ordering::AcqRel) > 0)
+            .err()
+            .expect("an occupied runtime must refuse same-connection multiplexing");
+        assert!(error.to_string().contains("stop an active session"));
+        assert_eq!(checks.load(Ordering::Acquire), 1);
+        assert_eq!(ownership.owner_count(), 1);
+        assert!(first.still_owns());
+    }
+
+    #[test]
+    fn same_binary_connection_can_use_an_available_second_runtime_lane() {
+        let lanes = crate::runtime_state::lane_admission::RuntimeLaneAdmission::new(2);
+        let ownership = Arc::new(ConnectionSessionOwnership::with_runtime_lanes(lanes));
+        let first = ownership.claim("first", 1).unwrap();
+        let second = ownership.claim("second", 1).unwrap();
+        assert!(first.still_owns());
+        assert!(second.still_owns());
+        assert_eq!(ownership.owner_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn binary_session_waits_for_http_runtime_reservation() {
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            sync::mpsc,
+            time::Duration,
+        };
+        let runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
+        let lanes = runtime.lane_admission();
+        let http = lanes.acquire().await.unwrap();
+        let ownership = Arc::new(ConnectionSessionOwnership::with_runtime_lanes(lanes));
+        let queued_owner = ownership.clone();
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let queued = std::thread::spawn(move || {
+            let notified = AtomicBool::new(false);
+            let lease = queued_owner
+                .claim_interruptible("binary", 7, || {
+                    if !notified.swap(true, Ordering::AcqRel) {
+                        waiting_tx.send(()).unwrap();
+                    }
+                    false
+                })
+                .unwrap();
+            admitted_tx.send(()).unwrap();
+            lease
+        });
+        waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(admitted_rx.try_recv().is_err());
+        drop(http);
+        admitted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let lease = queued.join().unwrap();
+        drop(lease.begin_release().unwrap());
+        drop(lease);
+        assert_eq!(ownership.owner_count(), 0);
+    }
 
     fn tracker(
         connection_id: u64,

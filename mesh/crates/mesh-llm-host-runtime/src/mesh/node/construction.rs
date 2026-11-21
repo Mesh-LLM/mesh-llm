@@ -3,6 +3,7 @@
 use super::startup::*;
 use super::*;
 use crate::mesh::private_nodes::PrivateNodes;
+use crate::mesh::request_tier::RequestTierOwners;
 
 pub(crate) struct ScopedNodeIdentity {
     pub key: SecretKey,
@@ -99,6 +100,7 @@ impl Node {
         super::startup::end_if_stopping(&endpoint).await?;
         let config_state_init = super::startup::load_config_state(config_path)?;
         let config = config_state_init.config();
+        let reload = identity.is_none();
         let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),
@@ -205,14 +207,13 @@ impl Node {
             model_requirements: Default::default(),
             unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
-            release_attestation_summary: Arc::new(Mutex::new(
-                crate::ReleaseAttestationSummary::default(),
-            )),
+            release_attestation_summary: Arc::default(),
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
             trust_policy: owner_runtime.trust_policy,
-            private_nodes: PrivateNodes::kept_current(config, config_path, identity.is_none()),
+            private_nodes: PrivateNodes::kept_current(config, config_path, reload),
+            request_tier_owners: RequestTierOwners::kept_current(config, config_path, reload),
             enumerate_host,
             gpu_name: hardware.gpu_name,
             hostname: hardware.hostname,
@@ -242,6 +243,8 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            #[cfg(test)]
+            test_apply_config_deadline: Arc::default(),
             native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),

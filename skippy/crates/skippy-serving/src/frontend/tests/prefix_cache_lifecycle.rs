@@ -115,6 +115,8 @@ fn real_initialization_notifies_started_then_completed() {
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
         Some(skippy_runtime::MemoryCacheCapabilities {
+            resident_attention: true,
+            resident_checkpoint: false,
             resident: true,
             kv_recurrent: true,
             full_state: true,
@@ -151,6 +153,8 @@ fn disabled_kv_config_never_notifies_init_at_all() {
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
         Some(skippy_runtime::MemoryCacheCapabilities {
+            resident_attention: true,
+            resident_checkpoint: false,
             resident: true,
             kv_recurrent: true,
             full_state: true,

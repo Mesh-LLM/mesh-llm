@@ -183,8 +183,13 @@ fn main() -> Result<()> {
         args.speculative_window
     );
 
-    let target_config =
+    let mut target_config =
         full_model_config(&args.target_model_path, args.ctx_size, args.n_gpu_layers)?;
+    // This context later verifies drafts, even though its first run is serial.
+    // DFlash includes the current-token anchor; reserve that bound for both
+    // benchmark modes rather than relying on a native default.
+    target_config.recurrent_rollback_tokens =
+        u32::try_from(args.speculative_window.saturating_add(1)).unwrap_or(u32::MAX);
     let mut target = StageModel::open(&args.target_model_path, &target_config)
         .with_context(|| format!("open target model {}", args.target_model_path.display()))?;
     // Baselines run before any draft exists: an attached DFlash draft makes
@@ -348,6 +353,11 @@ fn full_model_config(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Ru
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
+        sample_threads: None,
     })
 }
 
