@@ -478,22 +478,236 @@ Permanent Depot PR activation must be a separate change after the composable CI
 graph is complete. It must not be combined with routing, required-check,
 artifact or branch-protection migration.
 
-## Measurement and rollback evidence
+## Per-role rollout
 
-Use `cargo xtool ci-ops collect-metrics` to monitor all five focused PR lanes and
-their historical GitHub cohorts. Keep raw run/job JSON under `/tmp` or an issue
-artifact. Schema-v3 reports separate workflow wall and queue, job runner queue,
+The trusted-main set that went active with #3177 (merge `36dd5047dc`) is the
+baseline: `quality`, `linux-host`, `linux-runtime-gpu`, `static-abi` and
+`kotlin-native-sdk` pass `DEPOT_RUNNERS_ENABLED`. Every other row in
+`ci/runner-roles.json` stays where it is until its own proposal below is
+approved, sampled and accepted. One role moves at a time: the next proposal
+opens only after the previous role's evidence is accepted. Keeping a role on
+GitHub-hosted runners is a valid result, and an inconclusive result leaves the
+role `supported`, not `qualified`. Full release placement and PR Depot
+expansion are separate approvals and never ride along with a main role.
+
+A role's matrix row, its workflow main gate and its readiness state change
+together in one reviewed PR that links the accepted evidence.
+
+### Sampling path
+
+A `supported` row passes `depot_main_enabled: 'false'` and its slice does not
+accept `use_depot`, so neither a main push nor a manual dispatch can place it
+on Depot today; its only Depot route is the PR exception, which has a
+different trust and cache mode. Each proposal therefore lands in two reviewed
+steps:
+
+1. **Sampling PR.** The slice declares `use_depot` and forwards it to its
+   selector as `manual_use_depot`; its lane passes the dispatch's `use_depot`.
+   The main gate stays `'false'`, the row stays `supported`, and the
+   `runner_roles` and `composed_routing` contracts are updated so ordinary
+   main pushes still resolve hosted. Only a trusted-main `workflow_dispatch`
+   with `use_depot=true` reaches Depot, under the trusted-main cache mode
+   that the role would have after promotion. Paired samples are a hosted
+   dispatch and a `use_depot=true` dispatch of the same main SHA and plan.
+   `collect-metrics --compare-input` requires disjoint provider sets across
+   the whole report and does not filter by `runner_role`. While other roles
+   already run on Depot, both arms contain Depot jobs and the comparison
+   returns `hold`, so a proposal cannot reach `eligible` until the collector
+   can compare one role's jobs on their own. Until then, report the role's
+   per-job medians from each arm's report and record the decision as an
+   approver judgment, not a collector verdict.
+2. **Promotion PR**, after the evidence is accepted: the main gate becomes
+   `DEPOT_RUNNERS_ENABLED`, and the row's `main` decision and readiness change
+   with it, as described above. A rejected or inconclusive result reverts the
+   sampling opt-in instead.
+
+### Proposal template
+
+Copy this block into the role's tracking issue and fill every field before the
+first sample. Thresholds can't be edited once sampling starts; changing one
+restarts the proposal.
+
+```text
+Role:                    <ci/runner-roles.json id>
+Owner:                   <human>
+Independent approver:    <@micspiral | @ndizazzo | @i386, not the owner or author>
+Frozen source revision:  <40-hex main SHA, filled at qualification time>
+Frozen workflow revision:<40-hex SHA of the runner-owning workflows, filled at qualification time>
+Command/test set:        <slice, recipe, selected rows, expected skips>
+Artifacts:               <produced and consumed artifact names, digests checked>
+Trust/cache mode:        <event, ref, selector outputs, sccache mode, seed yes/no>
+Runner resources:        hosted <label, vCPU, RAM>  vs  Depot <label, vCPU, RAM>
+Conditions:              <cold and warm cohorts, change class>
+Acceptance thresholds:   correctness / reliability / wall time / runner-minutes (see below)
+Budget:                  <max dispatches and runner-minutes per arm>
+Rollback:                DEPOT_RUNNERS_ENABLED=false; per sampling dispatch, dispatch CI · Plan with use_depot=false (its only Depot input)
+Result:                  accepted | hosted retained | inconclusive
+```
+
+### Default acceptance thresholds
+
+A proposal may tighten these, never loosen them after sampling begins.
+
+- Correctness: required results identical on both arms. Same selected slices,
+  same expected skips, same artifact names, and for deterministic producers
+  the same digests. Any difference fails the role.
+- Reliability: no failure attributable to the provider (runner loss, image or
+  toolchain drift, cache authority leak) in the sampled Depot runs. One such
+  failure stops sampling and the role stays hosted.
+- Wall time: the Depot median, final required-result time, is no worse than
+  the hosted median for the same cohort. A role whose only win is cheaper
+  minutes still needs this bound met or an explicit approver note.
+- Runner-minutes: the Depot median `runner_minutes` (elapsed job minutes,
+  as `collect-metrics` reports them, with no size weighting) is at most 1.25
+  times the hosted median. Billed cost is a separate check before
+  promotion: multiply each arm's job minutes by the provider's per-minute
+  rate for that runner size, and record the source of the rates.
+- Windows: the host-runtime suite measured 475-494 s on Depot against
+  145-163 s hosted. Windows roles stay hosted unless a proposal names a change
+  that is expected to beat the hosted range and then measures it.
+
+### First proposals
+
+These are the `supported` rows from the #2788 role matrix, in the order they
+should be proposed. Only the first is open; each later one waits for the one
+before it. Revisions are frozen when sampling starts.
+
+| Order | Role | Command/test set | Artifacts | Trust/cache mode | Resources (hosted vs Depot) | Budget |
+|---|---|---|---|---|---|---|
+| 1 | `rust-tests` | `ci-rust-tests-slice.yml` exhaustive-main shards, unit, integration and doc tests | restores `product_automation_linux`; no product output | trusted-main `workflow_dispatch` of one main SHA, hosted vs `use_depot=true` after its sampling PR; provider-derived; sccache seed on hosted only | `ubuntu-24.04` vs `depot-ubuntu-24.04` | 5 pairs per cohort, 2 cohorts |
+| 2 | `linux-product` | Linux product composition and its smokes | consumes host, runtime and automation artifacts; product digests compared | trusted-main dispatch pairs as above; composer never compiles | `ubuntu-24.04` vs `depot-ubuntu-24.04` | 5 pairs per cohort |
+| 3 | `console-ui-artifact` | console UI build for the Linux lane | console UI artifact digest compared | trusted-main dispatch pairs as above | `ubuntu-24.04` vs `depot-ubuntu-24.04-4` | 3 pairs per cohort |
+| 4 | `website` | Website lane build and checks | site output compared | trusted-main dispatch pairs as above | `ubuntu-24.04` vs `depot-ubuntu-24.04-4` | 3 pairs per cohort |
+
+For every row: owner and approver are recorded in the issue before sampling,
+source and workflow revisions are placeholders until then, and the default
+thresholds apply. `macos`, `windows` and `platform-checks` are not
+proposed now; Windows is held by the measurement above and macOS waits until
+the Linux rows are settled. `product-automation` needs a qualified provider
+profile and a reviewed replacement for its `RUNNER_ENVIRONMENT=github-hosted`
+admission before it can be proposed at all; a `runs-on` change alone fails it.
+
+### Rollback
+
+- Repository-wide: an administrator sets `DEPOT_RUNNERS_ENABLED=false`,
+  sets `DEPOT_PR_RUNNERS_ENABLED=false` and deletes `DEPOT_PR_CANARY_REF`.
+  The first returns trusted-main pushes and release dispatches without
+  `use_depot` to GitHub-hosted runners through every nested workflow; the
+  PR gate and canary ref are separate inputs the selector reads for
+  same-repository PRs, so they need their own change. None of them moves the
+  self-hosted x86_64 CUDA release leg while `USE_SELF_HOSTED=true`, and a
+  dispatch with `use_depot=true` keeps its opt-in.
+- Per dispatch: run release with `force_hosted_runners=true`. It overrides
+  `use_depot` and the self-hosted CUDA leg, so every release job runs on
+  GitHub-hosted runners. Don't pass `use_depot=true` during a rollback.
+- Per role: revert the promotion PR that flipped the role's main gate and
+  readiness. That leaves the sampling PR's `use_depot` opt-in, so a manual
+  trusted-main dispatch with `use_depot=true` can still place the role on
+  Depot. To return the role to hosted-only placement, revert the sampling PR
+  as well. A `supported` row can still reach Depot through the PR exception.
+  There is no per-role PR switch: the PR gate and canary ref are
+  repository-wide, and a row's `pull_request` decision only records what the
+  selector inputs already do. A role that must be hosted-only on PRs either
+  waits for the repository-wide PR rollback or gets a reviewed change that
+  passes `depot_pr_enabled: 'false'` in its own slice, with its row updated to
+  match.
+- A revert or variable change affects runs created afterwards. Runs already
+  frozen on an earlier definition keep their placement; keep their evidence as
+  it is and don't relabel it.
+- After a repository-wide rollback, rerun the same profile and a
+  same-repository PR, and confirm each leg's expected placement:
+  GitHub-hosted, except the CUDA release leg, which stays self-hosted while
+  `USE_SELF_HOSTED=true`, and any job of a dispatch that passed
+  `use_depot=true`. After a per-dispatch rollback,
+  confirm every job of that dispatch ran on a GitHub-hosted label. After a
+  per-role rollback, confirm only that role's trusted-main and dispatch jobs
+  moved to hosted runners; its PR jobs follow the PR gate, and other
+  enabled roles stay on Depot, so the plan stays mixed-provider. In
+  every case, record who authorized the rollback.
+
+## Measurement protocol
+
+- At least three comparable observations per condition, preferring five
+  paired observations when variance is material. A condition is provider,
+  OS, role, profile and change class. Cold and warm cache cohorts are
+  separate conditions and are never pooled.
+- Hold source, workload, toolchain, architecture, features, profiles and
+  native inputs comparable. Write down any intentional provider difference.
+- Use `cargo xtool ci-ops collect-metrics` for every number. Keep raw
+  run/attempt/job JSON under `/tmp` or an issue artifact, with failures and
+  exclusions. Account for cancelled waste separately.
+- Report what `collect-metrics` emits, per condition: `p50` as the median and
+  `min`/`max`/`p90` as the spread of `workflow.wall_seconds` (final
+  required-result time) and of the `terminal_job_*` and per-job
+  `execution_seconds`/`runner_queue_seconds` summaries; `capacity.runner_minutes`
+  and `capacity.peak_workers`; and the absolute and percentage deltas between
+  the arms. First diagnostic or smoke time is not a collector output and is
+  not required; credentialed smoke jobs are outside its scope.
+- Don't claim a p95 from three samples, don't pick the best sample, and don't
+  add overlapping savings.
+- Created-to-start time is not provider queue. Split it into dependency
+  readiness, matrix eligibility, runner queue and execution.
+- If the budget runs out before a comparable result, report inconclusive.
+
+Schema-v3 reports separate workflow wall and queue, job runner queue,
 measured dependency wait (otherwise `n/a`), execution, runner-minutes,
 cancelled minutes and peak workers, grouped by provider, OS, architecture,
 semantic role and Depot size. Use `--compare-input` only with matching plan
 profile, selected slices, source/change class, image/toolchain epoch and cache
 mode; the provider sets must be disjoint and job families common.
 
-The date-independent rollout signals are deterministic: fewer than three job
-queue samples is `insufficient_sample`; queue p95 over 60 seconds is `hold`;
-job or terminal-job queue p95 at least 300 seconds is capacity-contaminated and
-`rollback`; a candidate cohort is `eligible` only when provider separation and
-all other comparability checks pass. A contaminated run may prove correctness
-or artifact reuse but cannot prove provider latency. Rollback changes only the
-central provider gate to GitHub-hosted and reruns the same plan; it does not
-change build shape. Do not place dated conclusions or raw evidence in `ci/`.
+The collector's rollout signals are deterministic: fewer than three job queue
+samples is `insufficient_sample`; queue p95 over 60 seconds is `hold`; job
+or terminal-job queue p95 at least 300 seconds is capacity-contaminated and
+`rollback`; a candidate cohort is `eligible` only when provider separation
+and all other comparability checks pass. A contaminated run may prove
+correctness or artifact reuse but can't prove provider latency. Don't place
+dated conclusions or raw evidence in `ci/`.
+
+## Admin steps after merge
+
+Nothing here runs as part of this change. An administrator works through the
+list in order after the PR merges; each dispatch or settings change needs its
+own authorization.
+
+1. Read back provider concurrency quotas and runner-group restrictions per role
+   (GitHub-hosted Linux, macOS and Windows plans, Depot org limits) and record
+   them against the inventory model in
+   [current-inventory.md](../.agents/skills/manage-ci/references/current-inventory.md).
+2. Record the rollback in the runbook: `DEPOT_RUNNERS_ENABLED=false`, or a
+   release dispatch with `force_hosted_runners=true`. No variable change is
+   needed for the merged source to be correct.
+3. Live-qualify a release canary (`canary=true`) with
+   `force_hosted_runners=true use_depot=true` and confirm every job label is
+   GitHub-hosted, including the nested `Produce matching static ABI` and
+   native SDK jobs.
+4. On the first main macOS run after merge, confirm host and runtime jobs log
+   `configure-sccache-gha` disk-only and that build time hasn't regressed
+   against run 44909332615. Optionally run a release canary to confirm the
+   ARM64 smoke starts sccache through the policy, hosted and with
+   `use_depot=true`.
+5. Live-qualify a manual-full Linux dispatch with `use_depot=true` and the
+   gate off. Confirm static ABI and the Kotlin native SDK input land on Depot
+   beside the hosts, and take a hosted comparison measurement for those two
+   producers under the protocol above.
+6. Open the first per-role proposal (`rust-tests`) with owner, approver and
+   thresholds, then collect the paired cohorts with
+   `cargo xtool ci-ops collect-metrics`. Each later `supported` row
+   (`linux-product`, `console-ui-artifact`, `website`, then `macos`,
+   `windows`, `platform-checks`) gets its own proposal only after the
+   previous one is accepted, and its matrix row and literal `false` main gate
+   change in the same reviewed PR.
+7. For `product-automation-artifact.yml`: qualify a Depot provider profile
+   and runner-group admission, collect same-run artifact transport evidence
+   across both providers (exact source, artifact ID, digest and OS/arch,
+   including the canary's hosted results origin), and record queue, build,
+   upload, download and verification timings separately with the hosted
+   rollback.
+8. Publish the reviewed immutable `audit-pr-authority-verified` (staging in
+   `immutable-authority-audit`) at a protected commit, switch callers with
+   their producer dependencies intact, and check that required checks and the
+   Quality model-resolution consumer still pass.
+9. Isolation qualification and any PR exception renewal or expansion need a
+    separately authorized sentinel and an independent approver.
+10. Once quota is known, design organization-wide admission: concurrent PRs
+    plus every main revision, never replacing pending main.

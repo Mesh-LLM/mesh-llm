@@ -582,6 +582,20 @@ retired parser behavior, and source review still owns semantic emulation.
   and Swift callers, resolves hosted). Rolling previews always dispatch with
   `force_hosted_runners=true`. A manual `use_depot=true` dispatch remains an
   explicit opt-in under the first rollback; do not pass it during rollback.
+  A revert changes future workflow definitions only; runs already frozen on
+  an earlier definition keep their placement and evidence.
+- Roll Depot out one role at a time. The trusted-main Linux and Quality set
+  that went active with #3177 (merge `36dd5047dc`: `quality`, `linux-host`,
+  `linux-runtime-gpu`, `static-abi`, `kotlin-native-sdk`) is the starting
+  point; no other row moves on main without its own bounded proposal in
+  `ci/DEPOT_MIGRATION.md` ("Per-role rollout"). A proposal freezes source and
+  workflow revisions, the command/test set, artifacts, trust/cache mode,
+  runner resources, budget, owner, an independent approver and rollback, and
+  declares its acceptance thresholds before any sample is taken. Propose the
+  next role only after the previous role's evidence is accepted. Hosted
+  retention is a valid outcome, and inconclusive evidence leaves the role
+  unqualified. Full release placement and PR Depot expansion keep their own
+  approval gates and are never qualified as a side effect of a main role.
 - Keep runner-contract coverage separate from placement. Exhaustive main and
   manual-full profiles still execute runner contracts; only actual `ci-control`
   or `runner-infra` changes and unknown-diff fallbacks require hosted placement.
