@@ -384,6 +384,32 @@ async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthR
     probe_openai_compatible_http_endpoint_for_protocol(address, None).await
 }
 
+fn is_loopback_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(host)) => {
+            host.trim_end_matches('.').eq_ignore_ascii_case("localhost")
+        }
+        None => false,
+    }
+}
+
+/// Plain-HTTP probes never talk TLS, so skip loading system CA certificates;
+/// loopback probes also bypass proxy settings and redirects, matching
+/// `network::local_http::local_http_client`.
+fn health_probe_client_builder(url: &Url) -> reqwest::ClientBuilder {
+    if url.scheme() == "http" {
+        if is_loopback_host(url) {
+            mesh_llm_system::local_http::local_http_client_builder()
+        } else {
+            reqwest::Client::builder().tls_certs_only([])
+        }
+    } else {
+        reqwest::Client::builder()
+    }
+}
+
 async fn probe_openai_compatible_http_endpoint_for_protocol(
     address: &str,
     protocol: Option<&str>,
@@ -400,7 +426,7 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
         }
     };
 
-    let client = match reqwest::Client::builder()
+    let client = match health_probe_client_builder(&models_url)
         .timeout(std::time::Duration::from_secs(3))
         .build()
     {
@@ -939,3 +965,7 @@ mod managed_task_tests {
         assert!(!model_matches_protocol(&depth, Some("openai_compatible")));
     }
 }
+
+#[cfg(test)]
+#[path = "health_probe_tests.rs"]
+mod probe_client_tests;
