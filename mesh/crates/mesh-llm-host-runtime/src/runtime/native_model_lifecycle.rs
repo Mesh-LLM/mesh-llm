@@ -22,6 +22,8 @@ pub(crate) struct NativeModelLifecycle {
     models: BTreeMap<String, Arc<Residency>>,
     targets: watch::Receiver<ModelTargets>,
     intents: mpsc::Sender<ModelIntent>,
+    #[cfg(test)]
+    gate_wait_checkpoint: std::sync::Mutex<Option<mpsc::UnboundedSender<&'static str>>>,
 }
 
 struct Residency {
@@ -35,9 +37,49 @@ struct Residency {
     instance: std::sync::Mutex<Option<(String, String, u16)>>,
 }
 
+tokio::task_local! {
+    static CURRENT_REQUEST_LEASE: RequestLease;
+}
+
+#[derive(Clone)]
 pub(crate) struct RequestLease {
+    inner: Arc<RequestLeaseInner>,
+}
+
+struct RequestLeaseInner {
     residency: Arc<Residency>,
     _gate: OwnedRwLockReadGuard<()>,
+}
+
+impl RequestLease {
+    fn new(residency: Arc<Residency>, gate: OwnedRwLockReadGuard<()>) -> Self {
+        Self {
+            inner: Arc::new(RequestLeaseInner {
+                residency,
+                _gate: gate,
+            }),
+        }
+    }
+}
+
+/// Run `future` with `lease` visible to nested `lease_port` calls on this task
+/// so selected-instance admission reuses the existing read lock instead of
+/// acquiring a second read on the same write-preferring `RwLock`.
+pub(crate) async fn with_request_lease<F: std::future::Future>(
+    lease: Option<RequestLease>,
+    future: F,
+) -> F::Output {
+    match lease {
+        Some(lease) => CURRENT_REQUEST_LEASE.scope(lease, future).await,
+        None => future.await,
+    }
+}
+
+fn current_request_lease_for(residency: &Arc<Residency>) -> Option<RequestLease> {
+    CURRENT_REQUEST_LEASE
+        .try_with(|lease| Arc::ptr_eq(&lease.inner.residency, residency).then(|| lease.clone()))
+        .ok()
+        .flatten()
 }
 
 /// Exclusive local GPU lease held while forwarding to an `exclusive_gpu`
@@ -48,7 +90,7 @@ pub(crate) struct ExclusiveGpuHandoffLease {
     _gates: Vec<OwnedRwLockWriteGuard<()>>,
 }
 
-impl Drop for RequestLease {
+impl Drop for RequestLeaseInner {
     fn drop(&mut self) {
         *self
             .residency
@@ -74,10 +116,46 @@ impl NativeModelLifecycle {
                 models: configured_residencies(config),
                 targets: snapshot,
                 intents,
+                gate_wait_checkpoint: std::sync::Mutex::new(None),
             }),
             receiver,
             targets,
         )
+    }
+
+    #[cfg(test)]
+    fn install_gate_wait_checkpoint(&self) -> mpsc::UnboundedReceiver<&'static str> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self
+            .gate_wait_checkpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        rx
+    }
+
+    #[cfg(test)]
+    async fn await_gate_with_checkpoint<F>(&self, fut: F, label: &'static str) -> F::Output
+    where
+        F: std::future::Future,
+    {
+        let checkpoint = self
+            .gate_wait_checkpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut fut = std::pin::pin!(fut);
+        let mut notified = false;
+        std::future::poll_fn(|cx| {
+            let result = fut.as_mut().poll(cx);
+            if !notified {
+                notified = true;
+                if let Some(tx) = &checkpoint {
+                    let _ = tx.send(label);
+                }
+            }
+            result
+        })
+        .await
     }
 
     /// Resolve a configured identifier or loaded runtime alias to shared state.
@@ -173,6 +251,38 @@ impl NativeModelLifecycle {
         }
     }
 
+    async fn acquire_gate_read(
+        &self,
+        residency: &Residency,
+        #[cfg_attr(not(test), allow(unused_variables))] label: &'static str,
+    ) -> OwnedRwLockReadGuard<()> {
+        let fut = residency.gate.clone().read_owned();
+        #[cfg(test)]
+        {
+            self.await_gate_with_checkpoint(fut, label).await
+        }
+        #[cfg(not(test))]
+        {
+            fut.await
+        }
+    }
+
+    async fn acquire_gate_write(
+        &self,
+        residency: &Residency,
+        #[cfg_attr(not(test), allow(unused_variables))] label: &'static str,
+    ) -> OwnedRwLockWriteGuard<()> {
+        let fut = residency.gate.clone().write_owned();
+        #[cfg(test)]
+        {
+            self.await_gate_with_checkpoint(fut, label).await
+        }
+        #[cfg(not(test))]
+        {
+            fut.await
+        }
+    }
+
     /// Lease the actual selected local port, including routes bypassing HTTP ingress.
     pub(crate) async fn lease_port(&self, port: u16) -> Option<RequestLease> {
         let residency = self
@@ -186,17 +296,23 @@ impl NativeModelLifecycle {
                     .is_some_and(|(_, _, p)| *p == port)
             })?
             .clone();
-        let gate = residency.gate.clone().read_owned().await;
+        if let Some(existing) = current_request_lease_for(&residency) {
+            let still_owned = residency
+                .instance
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|(_, _, p)| *p == port);
+            return still_owned.then_some(existing);
+        }
+        let gate = self.acquire_gate_read(&residency, "lease_port_read").await;
         let still_owned = residency
             .instance
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .is_some_and(|(_, _, p)| *p == port);
-        still_owned.then_some(RequestLease {
-            residency,
-            _gate: gate,
-        })
+        still_owned.then_some(RequestLease::new(residency, gate))
     }
 
     /// Keep this lease until dispatch (including streaming) has finished.
@@ -208,12 +324,9 @@ impl NativeModelLifecycle {
         let residency = residency.clone();
         tokio::time::timeout(LOAD_TIMEOUT, async {
             loop {
-                let gate = residency.gate.clone().read_owned().await;
+                let gate = self.acquire_gate_read(&residency, "acquire_read").await;
                 if ready(&self.targets(), &model, true) {
-                    return Ok(Some(RequestLease {
-                        residency,
-                        _gate: gate,
-                    }));
+                    return Ok(Some(RequestLease::new(residency, gate)));
                 }
                 // Release the read lock before loading so a waiting write lock
                 // (`acquire_exclusive_gpu_handoff`) cannot deadlock with
@@ -232,22 +345,32 @@ impl NativeModelLifecycle {
     pub(crate) async fn acquire_exclusive_gpu_handoff(
         self: &Arc<Self>,
     ) -> Result<ExclusiveGpuHandoffLease> {
-        tokio::time::timeout(LOAD_TIMEOUT, async {
+        self.acquire_exclusive_gpu_handoff_with_timeout(LOAD_TIMEOUT)
+            .await
+    }
+
+    async fn acquire_exclusive_gpu_handoff_with_timeout(
+        self: &Arc<Self>,
+        timeout: Duration,
+    ) -> Result<ExclusiveGpuHandoffLease> {
+        tokio::time::timeout(timeout, async {
             let mut gates = Vec::with_capacity(self.models.len());
             for (model, residency) in &self.models {
                 let operation = residency.operation.clone().lock_owned().await;
-                let gate = residency.gate.clone().write_owned().await;
+                let gate = self
+                    .acquire_gate_write(residency, "exclusive_gpu_handoff_write")
+                    .await;
                 let instance = residency
                     .instance
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
-                if let Some((instance_id, _, _)) = instance {
+                let gate = if let Some((instance_id, _, _)) = instance {
                     let (completion, result) = tokio::sync::oneshot::channel();
                     let intent = ModelIntent::Unload {
                         intent_id: None,
                         canonical_model_ref: Some(model.clone()),
-                        target: UnloadTarget::Instance(instance_id),
+                        target: UnloadTarget::Instance(instance_id.clone()),
                         options: UnloadOptions {
                             force: false,
                             ..Default::default()
@@ -259,17 +382,47 @@ impl NativeModelLifecycle {
                         .send(intent)
                         .await
                         .context("native model lifecycle unavailable for plugin GPU handoff")?;
-                    result
+                    // Once the unload intent is accepted by the control loop,
+                    // transfer ownership of the write gate and operation lock
+                    // to a detached task so timeout or caller cancellation
+                    // keeps the gate held until unload finishes and still
+                    // clears the matching instance record.
+                    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+                    let residency_for_task = residency.clone();
+                    let model_name = model.clone();
+                    tokio::spawn(async move {
+                        let _operation = operation;
+                        let outcome = result
+                            .await
+                            .context("native model unload interrupted during plugin GPU handoff")
+                            .and_then(|unload_result| {
+                                unload_result.with_context(|| {
+                                    format!(
+                                        "failed to unload native model '{model_name}' for exclusive_gpu plugin handoff"
+                                    )
+                                })
+                            });
+                        if outcome.is_ok() {
+                            let mut slot = residency_for_task
+                                .instance
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            if slot
+                                .as_ref()
+                                .is_some_and(|(id, _, _)| id == &instance_id)
+                            {
+                                *slot = None;
+                            }
+                        }
+                        let _ = done_tx.send(outcome.map(|_| gate));
+                    });
+                    done_rx
                         .await
-                        .context("native model unload interrupted during plugin GPU handoff")?
-                        .with_context(|| {
-                            format!(
-                                "failed to unload native model '{model}' for exclusive_gpu plugin handoff"
-                            )
-                        })?;
-                    *residency.instance.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                }
-                drop(operation);
+                        .context("native model unload task stopped during plugin GPU handoff")??
+                } else {
+                    drop(operation);
+                    gate
+                };
                 gates.push(gate);
             }
             Ok(ExclusiveGpuHandoffLease { _gates: gates })
@@ -529,6 +682,8 @@ pub(super) async fn install(
         models,
         targets,
         intents,
+        #[cfg(test)]
+        gate_wait_checkpoint: std::sync::Mutex::new(None),
     });
     if node.native_model_lifecycle.set(lifecycle.clone()).is_err() {
         return Ok(());

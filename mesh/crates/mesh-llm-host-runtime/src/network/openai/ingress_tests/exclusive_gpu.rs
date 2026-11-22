@@ -155,7 +155,9 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
             .unwrap();
     });
 
-    let dispatch = tokio::spawn(async move { run_plugin_dispatch(&node, plugin_addr).await });
+    let dispatch_node = node.clone();
+    let dispatch =
+        tokio::spawn(async move { run_plugin_dispatch(&dispatch_node, plugin_addr).await });
 
     let ModelIntent::Unload {
         target,
@@ -183,6 +185,7 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
     plugin_task.await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert_responded_status(outcome, 200);
+    node.endpoint.close().await;
 }
 
 #[tokio::test]
@@ -211,6 +214,7 @@ async fn default_plugin_leaves_on_demand_native_model_loaded() {
         intents.try_recv().is_err(),
         "non-exclusive plugin must not unload native models"
     );
+    node.endpoint.close().await;
 }
 
 #[tokio::test]
@@ -220,7 +224,9 @@ async fn exclusive_gpu_handoff_failure_returns_503_without_calling_plugin() {
 
     let plugin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let plugin_addr = plugin_listener.local_addr().unwrap();
-    let dispatch = tokio::spawn(async move { run_plugin_dispatch(&node, plugin_addr).await });
+    let dispatch_node = node.clone();
+    let dispatch =
+        tokio::spawn(async move { run_plugin_dispatch(&dispatch_node, plugin_addr).await });
 
     let ModelIntent::Unload {
         completion: Some(completion),
@@ -248,4 +254,5 @@ async fn exclusive_gpu_handoff_failure_returns_503_without_calling_plugin() {
         .is_err(),
         "plugin endpoint must not be dialed when exclusive_gpu handoff fails"
     );
+    node.endpoint.close().await;
 }

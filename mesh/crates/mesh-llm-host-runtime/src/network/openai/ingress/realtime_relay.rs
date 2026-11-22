@@ -112,7 +112,6 @@ pub(super) async fn relay(
             targets = node.targets_in_current_private_scope(targets).await;
         }
     }
-    let _residency = residency;
     let (model, target) = match choose_host(node, request, &targets, requested_by.is_some()).await {
         Ok(chosen) => chosen,
         Err(message) => {
@@ -120,7 +119,14 @@ pub(super) async fn relay(
             return;
         }
     };
-    run_session(node, client, &request.raw, &model, target).await;
+    let lease = matches!(target, InferenceTarget::Local(_))
+        .then_some(residency)
+        .flatten();
+    crate::runtime::native_model_lifecycle::with_request_lease(
+        lease,
+        run_session(node, client, &request.raw, &model, target),
+    )
+    .await;
 }
 
 /// Relays an admitted session to its host and logs how it ended.
