@@ -150,6 +150,9 @@ pub(crate) struct OpenAiRouteObserver<'a> {
     parent: Option<&'a RawMeshRequestLifecycle>,
     capture: Option<&'a Arc<dyn OpenAiArtifactCapture>>,
     request_id: Option<RequestId>,
+    inference_observation: Option<
+        &'a crate::plugin::inference_observation::plugin_endpoint::PluginExecutionObservation,
+    >,
 }
 
 /// An existing lifecycle attempt plus its private logging timestamp.
@@ -194,6 +197,7 @@ impl OpenAiLifecycleAttachment {
                 .parent
                 .as_ref()
                 .map(RawMeshRequestLifecycle::request_id),
+            inference_observation: None,
         }
     }
 
@@ -241,6 +245,24 @@ impl<'a> OpenAiRouteObserver<'a> {
             parent: None,
             capture: Some(capture),
             request_id: Some(request_id),
+            inference_observation: None,
+        }
+    }
+
+    pub(crate) fn with_optional_inference_observation<'b>(
+        self,
+        observation: Option<
+            &'b crate::plugin::inference_observation::plugin_endpoint::PluginExecutionObservation,
+        >,
+    ) -> OpenAiRouteObserver<'b>
+    where
+        'a: 'b,
+    {
+        OpenAiRouteObserver {
+            parent: self.parent,
+            capture: self.capture,
+            request_id: self.request_id,
+            inference_observation: observation,
         }
     }
 
@@ -323,6 +345,13 @@ impl<'a> OpenAiRouteObserver<'a> {
     pub(crate) fn stream_first_token(&self) {
         if let Some(parent) = self.parent {
             parent.stream_first_token();
+        }
+        self.inference_observation_first_output();
+    }
+
+    pub(crate) fn inference_observation_first_output(&self) {
+        if let Some(observation) = self.inference_observation {
+            observation.first_output();
         }
     }
 

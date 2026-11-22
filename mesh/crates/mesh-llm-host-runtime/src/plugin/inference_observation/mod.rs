@@ -10,6 +10,7 @@
 pub(crate) mod adapter;
 pub(crate) mod delivery;
 pub(crate) mod hub;
+pub(crate) mod plugin_endpoint;
 pub(crate) mod subscription;
 
 use super::proto;

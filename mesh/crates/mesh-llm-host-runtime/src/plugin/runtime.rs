@@ -76,6 +76,9 @@ pub(crate) struct ExternalPlugin {
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
     in_process: Option<super::InProcessPluginRunner>,
+    observed_models: std::sync::OnceLock<
+        Arc<super::inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
+    >,
 }
 
 pub(crate) struct PluginRuntime {
@@ -178,6 +181,7 @@ impl ExternalPlugin {
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
+            observed_models: std::sync::OnceLock::new(),
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
@@ -905,7 +909,18 @@ impl ExternalPlugin {
         ))
     }
 
-    async fn handle_runtime_failure(&self, generation: Option<u64>, reason: String) {
+    pub(crate) fn attach_observed_models(
+        &self,
+        tracker: Arc<super::inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
+    ) {
+        let _ = self.observed_models.set(tracker);
+    }
+
+    pub(in crate::plugin) async fn handle_runtime_failure(
+        &self,
+        generation: Option<u64>,
+        reason: String,
+    ) {
         let reason = crate::logging::policy::redact_urls_in_text(&reason);
         let failed_runtime = {
             let mut runtime = self.runtime.lock().await;
@@ -931,6 +946,9 @@ impl ExternalPlugin {
             drop(summary);
             self.runtime_data_producer
                 .clear_plugin_reports(&self.spec.name);
+            if let Some(tracker) = self.observed_models.get() {
+                tracker.clear_plugin(&self.spec.name);
+            }
             failed_runtime
         };
         if let Some(runtime) = failed_runtime {

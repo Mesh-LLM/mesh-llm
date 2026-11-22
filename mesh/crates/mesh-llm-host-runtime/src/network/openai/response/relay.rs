@@ -276,6 +276,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             insert_header_before_body(&mut buffered, header_end, MESH_SERVED_BY_HEADER, served_by);
         header_end = header_end.saturating_add_signed(delta);
     }
+    let body_already_sent = buffered.len() > header_end;
     insert_header_before_body(
         &mut buffered,
         header_end,
@@ -284,7 +285,15 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     );
     tcp_stream.write_all(&buffered).await?;
     route_observer.capture_response_unavailable(ArtifactUnavailableReason::ResponseBodyNotBounded);
-    if let Err(err) = tokio::io::copy(reader, &mut *tcp_stream).await {
+    if let Err(err) = super::dispatch::copy_unbounded_response_body(
+        reader,
+        tcp_stream,
+        parsed.content_type.as_deref(),
+        body_already_sent,
+        route_observer,
+    )
+    .await
+    {
         tcp_stream.record_exchange_outcome("transport_error");
         tcp_stream.finish_wire_bytes(
             skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,

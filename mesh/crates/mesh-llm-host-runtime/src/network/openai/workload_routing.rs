@@ -28,7 +28,7 @@ pub(super) fn is_document_ocr_path(path: &str) -> bool {
 /// Recognize the typed System One endpoints independently of query parameters.
 /// `/v1/systemone` is the canonical Jev interface path; `/systemone` is the
 /// legacy Skippy mount kept for compatibility.
-pub(super) fn is_system_one_path(path: &str) -> bool {
+pub(crate) fn is_system_one_path(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
         "/v1/systemone" | "/systemone" | "/v1/decisions"

@@ -36,6 +36,7 @@ impl PluginManager {
             summary.clone()
         } else {
             self.clear_plugin_endpoint_health(plugin_name).await;
+            self.inner.observed_models.clear_plugin(plugin_name);
             return Ok(());
         };
         self.publish_plugin_summary(&summary);
@@ -47,6 +48,7 @@ impl PluginManager {
         };
         let Some(manifest) = manifest else {
             self.clear_plugin_endpoint_health(plugin_name).await;
+            self.inner.observed_models.clear_plugin(plugin_name);
             self.publish_plugin_summary(&summary);
             self.publish_plugin_providers(plugin_name, Vec::new());
             return Ok(());
@@ -125,6 +127,17 @@ impl PluginManager {
             endpoint_states.insert(endpoint_key(plugin_name, &key), health);
         }
 
+        let ready_models =
+            super::inference_observation::plugin_endpoint::ready_models_for_endpoints(
+                &endpoint_summaries,
+            );
+        if self
+            .inner
+            .shutting_down
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
         self.clear_plugin_endpoint_health(plugin_name).await;
         self.publish_plugin_summary(&summary);
         self.publish_plugin_manifest(plugin_name, Some(plugin_manifest_overview(&manifest)));
@@ -136,6 +149,10 @@ impl PluginManager {
 
         let mut registry = self.inner.endpoint_health.lock().await;
         registry.extend(endpoint_states);
+        drop(registry);
+        self.inner
+            .observed_models
+            .sync_plugin_models(plugin_name, ready_models);
         Ok(())
     }
 

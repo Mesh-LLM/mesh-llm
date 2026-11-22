@@ -1864,6 +1864,13 @@ pub async fn route_http_endpoint_request(
         route_metadata.provider,
         route_metadata.engine,
     );
+    let inference_observation =
+        crate::plugin::inference_observation::plugin_endpoint::PluginExecutionObservation::start_for_request(
+            model,
+            request,
+        );
+    let attempt_observer =
+        route_observer.with_optional_inference_observation(inference_observation.as_ref());
     let lifecycle_attempt = route_observer.start_proxy_attempt();
     let result = route_http_endpoint_attempt(
         tcp_stream,
@@ -1874,12 +1881,21 @@ pub async fn route_http_endpoint_request(
             request_id: request.request_id,
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
-            route_observer,
+            route_observer: attempt_observer,
             served_by: None,
             peer_capsule_id: None,
         },
     )
     .await;
+    if let Some(observation) = inference_observation {
+        match &result {
+            RouteAttemptResult::Delivered {
+                status_code, usage, ..
+            } if (200..300).contains(status_code) => observation.complete(usage.as_ref()),
+            RouteAttemptResult::ClientDisconnected => observation.dropped(),
+            _ => observation.fail(),
+        }
+    }
     finish_route_attempt(
         route_observer,
         lifecycle_attempt,

@@ -17,7 +17,39 @@ use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    tcp_stream: &mut ClientStream,
+    content_type: Option<&str>,
+    body_already_sent: bool,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<u64> {
+    let is_sse = content_type.is_some_and(|ct| {
+        ct.split(';')
+            .next()
+            .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"))
+    });
+    if !is_sse {
+        return tokio::io::copy(reader, &mut *tcp_stream).await;
+    }
+    if body_already_sent {
+        route_observer.inference_observation_first_output();
+        return tokio::io::copy(reader, &mut *tcp_stream).await;
+    }
+    let mut first = [0u8; 4096];
+    match reader.read(&mut first).await? {
+        0 => Ok(0),
+        n => {
+            route_observer.inference_observation_first_output();
+            tcp_stream.write_all(&first[..n]).await?;
+            tokio::io::copy(reader, &mut *tcp_stream)
+                .await
+                .map(|rest| rest + n as u64)
+        }
+    }
+}
 
 pub(in crate::network::openai::response) struct RelayAttemptContext<'a> {
     pub(in crate::network::openai::response) request_id: RequestId,
@@ -242,4 +274,87 @@ const fn is_streaming_response_adapter(response_adapter: ResponseAdapter) -> boo
             | ResponseAdapter::OpenAiResponsesStream
             | ResponseAdapter::AnthropicMessagesStream
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::inference_observation::hub::ObservationHub;
+    use crate::plugin::inference_observation::plugin_endpoint::PluginExecutionObservation;
+    use mesh_llm_plugin::proto::inference_observation_event::Kind;
+    use std::sync::Arc;
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn run_copy_case(
+        content_type: Option<&str>,
+        body_already_sent: bool,
+        remaining: &[u8],
+    ) -> (Vec<u8>, bool) {
+        let hub = Arc::new(ObservationHub::new());
+        let (sub, _, _) = hub.subscribe();
+        let obs = PluginExecutionObservation::start(
+            hub.clone(),
+            Some("dev/echo"),
+            "/v1/completions",
+            true,
+        )
+        .expect("start streaming observation");
+        let observer =
+            OpenAiRouteObserver::default().with_optional_inference_observation(Some(&obs));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let reader_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).await.unwrap();
+            received
+        });
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let mut client_stream = ClientStream::from(server_stream);
+        let mut cursor = std::io::Cursor::new(remaining.to_vec());
+
+        let copied = copy_unbounded_response_body(
+            &mut cursor,
+            &mut client_stream,
+            content_type,
+            body_already_sent,
+            observer,
+        )
+        .await
+        .unwrap();
+        assert_eq!(copied, remaining.len() as u64);
+        let _ = client_stream.shutdown().await;
+        drop(client_stream);
+        obs.complete(None);
+
+        let received = reader_task.await.unwrap();
+        let drained = hub.drain(sub, usize::MAX).unwrap();
+        let saw_first_output = drained
+            .events
+            .iter()
+            .any(|e| matches!(e.kind.as_ref(), Some(Kind::FirstOutput(_))));
+        (received, saw_first_output)
+    }
+
+    #[tokio::test]
+    async fn copy_unbounded_response_body_signals_first_output_only_for_non_empty_sse() {
+        let payload = b"data: {\"text\":\"hi\"}\n\n";
+        let (rx, first) = run_copy_case(Some("text/event-stream"), true, payload).await;
+        assert_eq!(rx, payload);
+        assert!(first, "SSE with body_already_sent must signal first_output");
+
+        let (rx, first) =
+            run_copy_case(Some("text/event-stream; charset=utf-8"), false, payload).await;
+        assert_eq!(rx, payload);
+        assert!(first, "SSE first chunk read must signal first_output");
+
+        let (rx, first) = run_copy_case(Some("text/event-stream"), false, b"").await;
+        assert!(rx.is_empty());
+        assert!(!first, "empty SSE EOF must not signal first_output");
+
+        let (rx, first) = run_copy_case(Some("application/octet-stream"), false, payload).await;
+        assert_eq!(rx, payload);
+        assert!(!first, "non-SSE body must not signal first_output");
+    }
 }
