@@ -255,6 +255,11 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             // Reads may include bytes beyond the declared HTTP body. Only the
             // declared response is client-visible and capturable.
             tcp_stream.write_all(&buffered[..outgoing_end]).await?;
+            if body_len > 0
+                && super::dispatch::is_event_stream_content_type(parsed.content_type.as_deref())
+            {
+                route_observer.inference_observation_first_output();
+            }
             route_observer.capture_response_body(
                 &buffered[outgoing_end - body_len..outgoing_end],
                 parsed.content_type.as_deref(),

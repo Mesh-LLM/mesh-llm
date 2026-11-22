@@ -418,13 +418,17 @@ async fn plugin_openai_endpoint_emits_readiness_and_execution_observations() {
         ["started", "compute_finished", "ended"]
     );
 
-    // 5. Listing models does not start an execution.
-    let models_req = "GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    let _models_response = run_plugin_http_request(&node, &model, &address, models_req).await;
-    assert!(
-        drain_model_events(&hub, subscriber, &model).is_empty(),
-        "GET /v1/models must not emit execution observations"
-    );
+    // 5. Non-execution routes and non-POST requests do not start an execution.
+    for req in [
+        "GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        "GET /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    ] {
+        let _ = run_plugin_http_request(&node, &model, &address, req).await;
+        assert!(
+            drain_model_events(&hub, subscriber, &model).is_empty(),
+            "request must not emit execution observations: {req}"
+        );
+    }
 
     // 6. Shutting the plugin down unloads the model from ready_models.
     manager.shutdown().await;
@@ -542,7 +546,7 @@ async fn spawn_disconnect_capable_server(
                     return;
                 }
                 let body = format!(
-                    r#"{{"id":"chatcmpl-ok","object":"chat.completion","created":1,"model":"{model}","choices":[{{"index\":0,\"message":{{"role":"assistant","content":"ok"}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}}}"#
+                    r#"{{"id":"chatcmpl-ok","object":"chat.completion","created":1,"model":"{model}","choices":[{{"index":0,"message":{{"role":"assistant","content":"ok"}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}}}"#
                 );
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

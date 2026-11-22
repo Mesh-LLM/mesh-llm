@@ -19,6 +19,14 @@ use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
+pub(super) fn is_event_stream_content_type(content_type: Option<&str>) -> bool {
+    content_type.is_some_and(|ct| {
+        ct.split(';')
+            .next()
+            .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"))
+    })
+}
+
 pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
     reader: &mut R,
     tcp_stream: &mut ClientStream,
@@ -26,12 +34,7 @@ pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
     body_already_sent: bool,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> std::io::Result<u64> {
-    let is_sse = content_type.is_some_and(|ct| {
-        ct.split(';')
-            .next()
-            .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"))
-    });
-    if !is_sse {
+    if !is_event_stream_content_type(content_type) {
         return tokio::io::copy(reader, &mut *tcp_stream).await;
     }
     if body_already_sent {

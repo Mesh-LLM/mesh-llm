@@ -178,6 +178,9 @@ impl PluginExecutionObservation {
         model: Option<&str>,
         request: &BufferedHttpRequest,
     ) -> Option<Self> {
+        if !request.method.eq_ignore_ascii_case("POST") {
+            return None;
+        }
         Self::start(
             super::hub(),
             model,
