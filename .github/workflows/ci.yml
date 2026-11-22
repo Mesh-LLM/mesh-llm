@@ -166,6 +166,14 @@ jobs:
       - name: Run inference
         run: just smoke skippy-runtime smoke-model.gguf
 
+      # Two MeshLLM processes: a host that serves the model and a client that
+      # joins it with the host's invite token. Requests go to the client, so
+      # they pass only if the mesh formed and routed them to the host.
+      - name: Form a two-node mesh and route requests through it
+        env:
+          MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR: ${{ github.workspace }}/skippy-runtime
+        run: scripts/ci-two-node-client-serving-smoke.sh target/debug/mesh-llm target/debug smoke-model.gguf
+
       - name: Run the tests that need a runtime
         run: just test-with-runtime skippy-runtime
 
