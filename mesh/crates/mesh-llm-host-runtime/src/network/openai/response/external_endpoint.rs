@@ -173,6 +173,11 @@ fn build_external_endpoint_target(
 /// backend, so without this gate any other route the backend happens to serve
 /// on that listener (admin, metrics, debug) would be reachable through the
 /// mesh ingress.
+///
+/// Keep in sync with `workload_routing::is_openai_ingress_backend_path`: every
+/// route admitted here must also be admitted at ingress (via that predicate or
+/// `model_discovery::is_request`), while ingress additionally admits native-only
+/// routes (System One, tokenizers, health probes).
 fn is_forwardable_external_endpoint_path(request_path: &str) -> bool {
     let path_only = request_path.split('?').next().unwrap_or(request_path);
     crate::network::openai::workload_routing::request_workload_class(path_only).is_some()
@@ -392,6 +397,12 @@ mod tests {
             assert!(
                 is_forwardable_external_endpoint_path(path),
                 "{path} must be forwardable"
+            );
+            assert!(
+                crate::network::openai::workload_routing::is_openai_ingress_backend_path(
+                    "POST", path
+                ) || crate::network::openai::model_discovery::is_request("GET", path),
+                "{path} must also be admitted at OpenAI ingress"
             );
             assert!(
                 build_external_endpoint_target(

@@ -35,6 +35,22 @@ pub(super) fn is_system_one_path(path: &str) -> bool {
     )
 }
 
+/// Whether `method` + `path` is a known backend route forwarded by the OpenAI
+/// ingress listener (after control-plane routes like `/v1/models` and legacy
+/// lifecycle checks have already run).
+///
+/// Keep in sync with `response::external_endpoint::is_forwardable_external_endpoint_path`,
+/// which intentionally stays narrower (omitting native-only routes such as System One,
+/// tokenizers, and health probes that must not be forwarded to arbitrary external backends).
+pub(super) fn is_openai_ingress_backend_path(method: &str, path: &str) -> bool {
+    let path_only = path.split('?').next().unwrap_or(path);
+    request_workload_class(path_only).is_some()
+        || is_system_one_path(path_only)
+        || matches!(path_only, "/v1/messages/count_tokens" | "/v1/tokenize")
+        || (matches!(method, "GET" | "HEAD")
+            && matches!(path_only, "/health" | "/healthz" | "/readyz"))
+}
+
 /// Map inference endpoints to native workloads; control paths impose no class.
 pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
     match path.split('?').next().unwrap_or(path) {

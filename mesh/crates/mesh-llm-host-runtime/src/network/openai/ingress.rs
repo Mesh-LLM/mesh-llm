@@ -1890,3 +1890,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ingress_tests/telemetry_rejection.rs"]
 mod telemetry_rejection;
+
+#[cfg(test)]
+#[path = "ingress_tests/unknown_path.rs"]
+mod unknown_path;

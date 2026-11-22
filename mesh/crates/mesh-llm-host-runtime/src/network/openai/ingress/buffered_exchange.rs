@@ -63,6 +63,22 @@ pub(super) async fn handle_buffered_api_request(
             Err(tcp_stream) => tcp_stream,
         };
 
+    if !workload_routing::is_openai_ingress_backend_path(&request.method, &request.client_path) {
+        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
+        let outcome = response_outcome(
+            404,
+            proxy::send_route_not_found_observed(
+                tcp_stream,
+                "route not found on OpenAI ingress",
+                lifecycle.route_observer(),
+            )
+            .await,
+        );
+        finish_exchange(&mut exchange, outcome).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+        return;
+    }
+
     let callable = callable_models(ctx.route.targets);
     let descriptors = ctx.route.node.all_served_model_descriptors().await;
     if ingress_type != crate::runtime::IngressType::RemoteQuicHttp {

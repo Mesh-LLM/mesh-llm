@@ -174,6 +174,22 @@ pub(crate) async fn send_model_not_ready_observed(
     .await
 }
 
+pub(crate) async fn send_route_not_found_observed(
+    stream: ClientStream,
+    reason: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_openai_error_with(
+        stream,
+        404,
+        reason,
+        Some("not_found"),
+        None,
+        Some(route_observer),
+    )
+    .await
+}
+
 async fn send_openai_error(
     stream: ClientStream,
     code: u16,
