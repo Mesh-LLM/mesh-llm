@@ -88,3 +88,40 @@ describe('Composer pending type detection gate', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
   })
 })
+
+describe('Composer quote chip', () => {
+  it('shows the pending quote and removes it on demand', () => {
+    const onRemoveQuote = vi.fn()
+    render(
+      <Composer
+        value="why though?"
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+        quote={{ id: 'q1', text: 'quoted passage from the answer' }}
+        onRemoveQuote={onRemoveQuote}
+      />
+    )
+    const chip = screen.getByTestId('composer-quote')
+    expect(chip).toHaveTextContent('quoted passage from the answer')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove quote' }))
+    expect(onRemoveQuote).toHaveBeenCalledTimes(1)
+  })
+
+  it('never lets a quote alone enable sending', () => {
+    render(
+      <Composer
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+        quote={{ id: 'q1', text: 'quoted passage' }}
+        onRemoveQuote={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
+  })
+
+  it('renders no chip without a quote', () => {
+    render(<Composer value="" onChange={vi.fn()} onSend={vi.fn()} />)
+    expect(screen.queryByTestId('composer-quote')).toBeNull()
+  })
+})

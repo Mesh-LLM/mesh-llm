@@ -20,6 +20,7 @@ import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import { liveChatActionMetrics } from '@/features/chat/lib/live-chat-metrics'
 import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
+import { mergeQuoteIntoPrompt, type ComposerQuote } from '@/features/chat/lib/quote-to-ask'
 import {
   loadChatRoutingPreferences,
   saveChatRoutingPreferences,
@@ -179,6 +180,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   const pendingSendRef = useRef<{
     prompt: string
     attachments: File[]
+    restore?: ComposerSubmission['restore']
     previousMessages: typeof chat.messages
     previousThreadMessages: ReturnType<typeof uiMessagesToThreadMessages>
     conversationId: string
@@ -246,6 +248,27 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     },
     [updateComposerAttachments]
   )
+  // Quote-to-ask: the quote rides the per-conversation draft (it survives
+  // conversation switches with its own composer) and merges into the prompt
+  // as a visible blockquote at submission time. Accepting a quote also moves
+  // focus to the composer so the next keystroke starts the question.
+  const setComposerQuote = useCallback(
+    (quote: ComposerQuote) => {
+      setComposerDrafts((current) => {
+        const currentDraft = current[composerConversationId] ?? { prompt: '', attachments: [] }
+        return { ...current, [composerConversationId]: { ...currentDraft, quote } }
+      })
+      composerTextareaRef.current?.focus({ preventScroll: true })
+    },
+    [composerConversationId]
+  )
+  const removeComposerQuote = useCallback(() => {
+    setComposerDrafts((current) => {
+      const currentDraft = current[composerConversationId]
+      if (!currentDraft?.quote) return current
+      return { ...current, [composerConversationId]: { ...currentDraft, quote: null } }
+    })
+  }, [composerConversationId])
   const clearComposerDraft = useCallback(
     (conversationId: string) => setComposerDraft(conversationId, { prompt: '', attachments: [] }),
     [setComposerDraft]
@@ -454,8 +477,9 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
 
     if (chat.error) {
       setComposerDraft(pendingSend.conversationId, {
-        prompt: pendingSend.prompt,
-        attachments: pendingSend.attachments
+        prompt: pendingSend.restore?.prompt ?? pendingSend.prompt,
+        attachments: pendingSend.attachments,
+        quote: pendingSend.restore?.quote ?? null
       })
       chat.setMessages(pendingSend.previousMessages)
       updateThread(pendingSend.conversationId, pendingSend.previousThreadMessages)
@@ -558,6 +582,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       pendingSendRef.current = {
         prompt: promptSnapshot,
         attachments: attachmentsSnapshot,
+        restore: submission.restore,
         previousMessages: chat.messages,
         previousThreadMessages: uiMessagesToThreadMessages(chat.messages),
         conversationId: ensuredConversationId,
@@ -597,8 +622,9 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         const pendingSend = pendingSendRef.current
         if (pendingSend) {
           setComposerDraft(pendingSend.conversationId, {
-            prompt: promptSnapshot,
-            attachments: attachmentsSnapshot
+            prompt: pendingSend.restore?.prompt ?? promptSnapshot,
+            attachments: attachmentsSnapshot,
+            quote: pendingSend.restore?.quote ?? null
           })
           chat.setMessages(pendingSend.previousMessages)
           updateThread(pendingSend.conversationId, pendingSend.previousThreadMessages)
@@ -637,7 +663,11 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     if (!nextPrompt && composerDraft.attachments.length === 0) return
 
     requestJumpToLatest()
-    const submission: ComposerSubmission = { prompt: composerDraft.prompt, attachments: [...composerDraft.attachments] }
+    const submission: ComposerSubmission = {
+      prompt: mergeQuoteIntoPrompt(composerDraft.quote, composerDraft.prompt),
+      attachments: [...composerDraft.attachments],
+      restore: { prompt: composerDraft.prompt, quote: composerDraft.quote ?? null }
+    }
 
     if (composerShouldQueue) {
       const queued: QueuedSubmission = {
@@ -690,7 +720,11 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     void (async () => {
       try {
         await submitPromptNow(
-          { prompt: nextSubmission.prompt, attachments: [...nextSubmission.attachments] },
+          {
+            prompt: nextSubmission.prompt,
+            attachments: [...nextSubmission.attachments],
+            restore: nextSubmission.restore
+          },
           nextSubmission.conversationId,
           nextSubmission.target
         )
@@ -867,6 +901,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         updateComposerAttachments((current) => [...current, ...files])
       }}
       onRemoveComposerAttachment={removeComposerAttachment}
+      onComposerQuoteSelected={setComposerQuote}
+      onRemoveComposerQuote={removeComposerQuote}
       composerDisabled={(composerIsPreparingAttachments || !canChat) && !composerIsStreaming}
       composerRequestDisabled={composerIsPreparingAttachments || !canChat || pickedModelUnavailable}
       composerPendingTypeDetection={composerPendingTypeDetection}

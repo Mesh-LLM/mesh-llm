@@ -6,6 +6,8 @@ import { TextInputDialog } from '@/components/ui/TextInputDialog'
 import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { Composer, type ComposerPromptUpdate } from '@/features/chat/components/Composer'
+import { QuoteSelectionPopover } from '@/features/chat/components/messages/QuoteSelectionPopover'
+import type { ComposerQuote } from '@/features/chat/lib/quote-to-ask'
 import { ChatTargetNotice } from '@/features/chat/components/ChatTargetNotice'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
@@ -74,6 +76,9 @@ type ChatPageLayoutProps = {
   onComposerPromptChange: (value: ComposerPromptUpdate) => void
   onComposerAttachmentsChange: (files: File[]) => void
   onRemoveComposerAttachment: (index: number) => void
+  /** Quote-to-ask: a selection extracted from an assistant message. */
+  onComposerQuoteSelected: (quote: ComposerQuote) => void
+  onRemoveComposerQuote: () => void
   composerDisabled: boolean
   composerRequestDisabled?: boolean
   composerPendingTypeDetection?: boolean
@@ -164,6 +169,8 @@ export function ChatPageLayout({
   onComposerPromptChange,
   onComposerAttachmentsChange,
   onRemoveComposerAttachment,
+  onComposerQuoteSelected,
+  onRemoveComposerQuote,
   composerDisabled,
   composerRequestDisabled,
   composerPendingTypeDetection,
@@ -259,6 +266,7 @@ export function ChatPageLayout({
 
   return (
     <>
+      <QuoteSelectionPopover onQuote={onComposerQuoteSelected} />
       <DestructiveActionDialog
         open={conversationPendingDelete !== null}
         onOpenChange={onDeleteDialogOpenChange}
@@ -299,6 +307,8 @@ export function ChatPageLayout({
               onAttach={onComposerAttachmentsChange}
               attachments={composerDraft.attachments}
               onRemoveAttachment={onRemoveComposerAttachment}
+              quote={composerDraft.quote ?? null}
+              onRemoveQuote={onRemoveComposerQuote}
               disabled={composerDisabled}
               requestDisabled={composerRequestDisabled}
               pendingTypeDetection={composerPendingTypeDetection}

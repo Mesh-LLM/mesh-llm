@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState, type Ref } from 'react'
-import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, TextQuote, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
+import type { ComposerQuote } from '@/features/chat/lib/quote-to-ask'
 import {
   adjustPasteRange,
   applyPasteEffects,
@@ -75,6 +76,10 @@ type ComposerProps = {
   onSystemPrompt?: () => void
   attachments?: File[]
   onRemoveAttachment?: (index: number) => void
+  /** Pending quote-to-ask selection shown above the input; merges into the
+   *  prompt as a visible blockquote when sent. */
+  quote?: ComposerQuote | null
+  onRemoveQuote?: () => void
   onStop?: () => void
   onRetry?: () => void
   canRetry?: boolean
@@ -116,6 +121,8 @@ export function Composer({
   onSystemPrompt,
   attachments = [],
   onRemoveAttachment,
+  quote,
+  onRemoveQuote,
   onStop,
   onRetry,
   canRetry = false,
@@ -233,6 +240,25 @@ export function Composer({
       )}
       data-panel-interactive="true"
     >
+      {quote ? (
+        <div className="flex items-start gap-2 border-b border-border-soft px-3.5 py-2" data-testid="composer-quote">
+          <TextQuote aria-hidden={true} className="mt-0.5 size-3.5 shrink-0 text-fg-faint" />
+          <p className="min-w-0 flex-1 line-clamp-3 text-[length:var(--density-type-caption)] leading-snug text-fg-muted">
+            {quote.text}
+          </p>
+          <Tooltip content="Remove quote">
+            <button
+              type="button"
+              className="ui-control inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--radius)] border"
+              aria-label="Remove quote"
+              disabled={disabled}
+              onClick={() => onRemoveQuote?.()}
+            >
+              <X className="size-2.5" />
+            </button>
+          </Tooltip>
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <div
           className="flex flex-wrap items-center gap-1.5 border-b border-border-soft px-3.5 py-2"
