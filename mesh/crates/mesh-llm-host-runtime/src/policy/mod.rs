@@ -1,5 +1,6 @@
 use crate::proto::node::{MeshPolicyPayload, SignedMeshPolicy};
 use prost::Message;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -9,6 +10,11 @@ pub(crate) mod config_overlay;
 #[derive(Debug, Default)]
 pub(crate) struct PolicyStore {
     current: RwLock<Option<StoredPolicy>>,
+    /// Per-owner monotonic generation counters for stale-rejection.
+    /// Each owner's generation is tracked independently so that a low
+    /// generation from owner B is never rejected because owner A's
+    /// accepted generation happens to be higher.
+    owner_gens: RwLock<HashMap<String, u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,15 +41,25 @@ impl PolicyStore {
             Ok(p) => p,
             Err(e) => return PolicyUpdateResult::Invalid(format!("decode error: {e}")),
         };
-        let mut guard = self.current.write().await;
-        if let Some(current) = guard.as_ref() {
-            if payload.policy_gen <= current.payload.policy_gen {
-                return PolicyUpdateResult::Stale {
-                    current_gen: current.payload.policy_gen,
-                };
-            }
+        // Per-owner stale check: compare against this owner's last accepted
+        // generation only, not against whatever other owner's gen happens to
+        // sit in `current`.
+        let mut owner_gens_guard = self.owner_gens.write().await;
+        let owner_current_gen = owner_gens_guard
+            .get(&payload.owner_id)
+            .copied()
+            .unwrap_or(0);
+        if payload.policy_gen <= owner_current_gen && owner_current_gen > 0 {
+            return PolicyUpdateResult::Stale {
+                current_gen: owner_current_gen,
+            };
         }
         let policy_gen = payload.policy_gen;
+        // Update the per-owner generation tracking.
+        owner_gens_guard.insert(payload.owner_id.clone(), policy_gen);
+        drop(owner_gens_guard);
+
+        let mut guard = self.current.write().await;
         *guard = Some(StoredPolicy {
             signed: incoming,
             payload,

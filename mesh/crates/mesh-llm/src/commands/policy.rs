@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use mesh_llm_cli::{Cli, PolicyCommand};
 use mesh_llm_system::local_http::local_http_client_builder;
 use reqwest::header::AUTHORIZATION;
@@ -9,19 +11,40 @@ pub(super) async fn dispatch_policy_command(command: &PolicyCommand, cli: &Cli) 
     let _ = cli;
     match command {
         PolicyCommand::Set {
+            ensure_models,
+            drain_models,
+            expires_in_secs,
+            policy_gen,
             payload,
             signature,
             port,
             json,
-        } => run_policy_set(payload, signature, *port, *json).await,
+        } => {
+            run_policy_set(
+                ensure_models,
+                drain_models,
+                *expires_in_secs,
+                *policy_gen,
+                payload.as_deref(),
+                signature.as_deref(),
+                *port,
+                *json,
+            )
+            .await
+        }
         PolicyCommand::Get { port, json } => run_policy_get(*port, *json).await,
         PolicyCommand::Clear { port, json } => run_policy_clear(*port, *json).await,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_policy_set(
-    payload: &str,
-    signature: &str,
+    ensure_models: &[String],
+    drain_models: &[String],
+    expires_in_secs: Option<u64>,
+    policy_gen: Option<u32>,
+    payload: Option<&str>,
+    signature: Option<&str>,
     port: u16,
     json_output: bool,
 ) -> Result<()> {
@@ -30,9 +53,19 @@ async fn run_policy_set(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let url = format!("http://127.0.0.1:{port}/api/runtime/control/mesh-policy");
+
+    let (payload_b64, signature_b64) = if let (Some(p), Some(s)) = (payload, signature) {
+        // Pre-signed mode: use the values directly.
+        (p.to_string(), s.to_string())
+    } else {
+        // Auto-sign mode: build the payload from the model lists, load the
+        // owner keypair, sign, and base64-encode.
+        build_and_sign_policy(ensure_models, drain_models, expires_in_secs, policy_gen)?
+    };
+
     let body = json!({
-        "policy_payload_bytes": payload,
-        "signature": signature,
+        "policy_payload_bytes": payload_b64,
+        "signature": signature_b64,
     });
     let response = client
         .post(&url)
@@ -45,6 +78,65 @@ async fn run_policy_set(
         .json::<serde_json::Value>()
         .await?;
     print_policy_response("Set mesh policy", &response, json_output)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn build_and_sign_policy(
+    ensure_models: &[String],
+    drain_models: &[String],
+    expires_in_secs: Option<u64>,
+    policy_gen: Option<u32>,
+) -> Result<(String, String)> {
+    use mesh_llm_identity::{OwnerKeypair, default_keystore_path, load_keystore};
+    use mesh_llm_protocol::proto::node::{MeshModelIntent, MeshModelIntentAction, MeshPolicyPayload};
+    use prost::Message;
+
+    let keystore_path = default_keystore_path()
+        .context("Could not determine default keystore path")?;
+    let keypair: OwnerKeypair = load_keystore(&keystore_path, None)
+        .context("Failed to load owner keypair from default keystore")?;
+
+    let issued = now_ms();
+    let expires = expires_in_secs
+        .map(|s| issued + s * 1000)
+        .unwrap_or(0);
+
+    let mut model_intents = Vec::new();
+    for m in ensure_models {
+        model_intents.push(MeshModelIntent {
+            canonical_model_ref: m.clone(),
+            action: MeshModelIntentAction::Ensure as i32,
+        });
+    }
+    for m in drain_models {
+        model_intents.push(MeshModelIntent {
+            canonical_model_ref: m.clone(),
+            action: MeshModelIntentAction::Drain as i32,
+        });
+    }
+
+    let payload = MeshPolicyPayload {
+        issued_at_unix_ms: issued,
+        expires_at_unix_ms: expires,
+        owner_id: keypair.owner_id(),
+        owner_sign_public_key: hex::encode(keypair.verifying_key().as_bytes()),
+        policy_gen: policy_gen.unwrap_or(1),
+        model_intents,
+    };
+
+    let payload_bytes = payload.encode_to_vec();
+    let signature_bytes = keypair.sign_bytes(&payload_bytes);
+
+    let payload_b64 = BASE64_STANDARD.encode(&payload_bytes);
+    let signature_b64 = BASE64_STANDARD.encode(signature_bytes);
+
+    Ok((payload_b64, signature_b64))
 }
 
 async fn run_policy_get(port: u16, json_output: bool) -> Result<()> {
@@ -66,19 +158,21 @@ async fn run_policy_get(port: u16, json_output: bool) -> Result<()> {
 }
 
 async fn run_policy_clear(port: u16, json_output: bool) -> Result<()> {
-    // POST with empty payload to clear — the server treats missing/invalid payload as clear.
-    // We rely on the GET/POST distinction: a POST with no policy_payload_bytes is treated as a
-    // clear request by the server. For now, print a note since the endpoint doesn't have a
-    // dedicated clear path.
-    let _ = port;
-    let _ = json_output;
-    let mut out = mesh_llm_events::console_out();
-    writeln!(
-        out,
-        "Note: policy clear is not yet wired to a server endpoint. \
-         Restart the node to clear the in-memory policy, or wait for it to expire."
-    )?;
-    Ok(())
+    let token = mesh_llm_commands::owner_control::owner_control_token(port).await?;
+    let client = local_http_client_builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}/api/runtime/control/mesh-policy");
+    let response = client
+        .delete(&url)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Can't connect to mesh-llm on port {port}: {e}"))?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    print_policy_response("Clear mesh policy", &response, json_output)
 }
 
 fn print_policy_response(

@@ -188,6 +188,8 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         refuses_peer_model_downloads: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
         cache_affinity: None,
 
         display_rtt: None,

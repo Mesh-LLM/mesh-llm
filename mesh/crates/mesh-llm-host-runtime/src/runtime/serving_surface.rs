@@ -970,6 +970,43 @@ async fn apply_owner_control_token(
     }
 }
 
+/// Wire the `PolicyStore` and `PolicyApplicator` from `console_state` into the
+/// `node` so that inbound gossip processing and outbound gossip injection both
+/// use the same store that the management API exposes via its routes. Called
+/// after `MeshApi::new` creates the store and after `apply_owner_control_token`
+/// sets the token (the applicator needs it to call owner-control endpoints).
+async fn wire_policy_store_into_node(
+    console_state: &api::MeshApi,
+    node: &mesh::Node,
+    api_port: u16,
+) {
+    let store = console_state.policy_store();
+    let token = console_state
+        .owner_control_token()
+        .await
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_default();
+    let applicator = crate::policy::applicator::PolicyApplicator::new(
+        store.clone(),
+        api_port,
+        token,
+    );
+    node.set_policy_store(store.clone(), applicator.clone());
+    // Phase 3.2: load persisted policy from disk and re-apply it so the fleet
+    // intent survives a restart without waiting for the next gossip round.
+    if let Some(state_dir) = &node.identity_state_dir {
+        match crate::policy::PolicyStore::load_from_disk(state_dir).await {
+            Ok(Some(signed)) => {
+                applicator.apply_if_newer(signed).await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!("fleet policy: could not load persisted policy: {error:#}");
+            }
+        }
+    }
+}
+
 pub(super) async fn setup_run_auto_console_state(
     ctx: RunAutoConsoleStateContext<'_>,
 ) -> Result<Option<api::MeshApi>> {
@@ -998,6 +1035,10 @@ pub(super) async fn setup_run_auto_console_state(
     console_state.set_primary_backend("skippy".into()).await;
     console_state.set_update_check(ctx.update_check).await;
     apply_owner_control_token(&console_state, ctx.owner_key_path.as_deref()).await;
+    // Wire the shared PolicyStore and PolicyApplicator into the Node so that
+    // inbound gossip and outbound gossip both use the same store that the
+    // management API reads and writes.
+    wire_policy_store_into_node(&console_state, ctx.node, ctx.api_port).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;

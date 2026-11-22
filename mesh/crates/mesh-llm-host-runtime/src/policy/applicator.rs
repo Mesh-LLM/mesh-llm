@@ -68,6 +68,20 @@ impl PolicyApplicator {
         }
     }
 
+    async fn fetch_local_control_endpoint(&self, client: &reqwest::Client) -> Option<String> {
+        let url = format!(
+            "http://127.0.0.1:{}/api/runtime/control-bootstrap",
+            self.management_port
+        );
+        let Ok(resp) = client.get(&url).send().await else {
+            return None;
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return None;
+        };
+        json.get("endpoint")?.as_str().map(str::to_string)
+    }
+
     async fn apply_model_intents(&self, payload: &MeshPolicyPayload) {
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -76,6 +90,19 @@ impl PolicyApplicator {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("PolicyApplicator: failed to build HTTP client: {e}");
+                return;
+            }
+        };
+
+        // Resolve the local control endpoint token (a real QUIC endpoint address,
+        // not the literal string "local").
+        let local_endpoint = match self.fetch_local_control_endpoint(&client).await {
+            Some(ep) => ep,
+            None => {
+                tracing::warn!(
+                    "PolicyApplicator: control-bootstrap endpoint not ready yet; \
+                     skipping model intent application"
+                );
                 return;
             }
         };
@@ -101,7 +128,7 @@ impl PolicyApplicator {
                 MeshModelIntentAction::Unspecified => continue,
             };
             let body = serde_json::json!({
-                "endpoint": "local",
+                "endpoint": local_endpoint,
                 "model": intent.canonical_model_ref,
             });
             let url = format!("http://127.0.0.1:{}{}", self.management_port, path);

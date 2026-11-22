@@ -784,13 +784,30 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum PolicyCommand {
     /// Push a signed mesh policy to the local node.
+    ///
+    /// Auto-sign mode: provide --ensure-models / --drain-models and the node's
+    /// owner keypair is loaded from the default keystore to sign the policy.
+    ///
+    /// Pre-signed mode: provide --payload and --signature (advanced / external signer).
     Set {
-        /// Base64-encoded signed policy payload bytes.
-        #[arg(long)]
-        payload: String,
-        /// Base64-encoded Ed25519 signature over the payload.
-        #[arg(long)]
-        signature: String,
+        /// Models to ensure are serving (comma-separated). Auto-sign mode.
+        #[arg(long, value_delimiter = ',', conflicts_with = "payload")]
+        ensure_models: Vec<String>,
+        /// Models to drain (comma-separated). Auto-sign mode.
+        #[arg(long, value_delimiter = ',', conflicts_with = "payload")]
+        drain_models: Vec<String>,
+        /// How long (in seconds) until the policy expires. Auto-sign mode.
+        #[arg(long, conflicts_with = "payload")]
+        expires_in_secs: Option<u64>,
+        /// Monotonic generation counter for the policy. Auto-sign mode (default: 1).
+        #[arg(long, conflicts_with = "payload")]
+        policy_gen: Option<u32>,
+        /// Base64-encoded signed policy payload bytes. Pre-signed mode.
+        #[arg(long, conflicts_with_all = ["ensure_models", "drain_models"])]
+        payload: Option<String>,
+        /// Base64-encoded Ed25519 signature over the payload. Pre-signed mode.
+        #[arg(long, requires = "payload")]
+        signature: Option<String>,
         /// Console/API port of the running mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,

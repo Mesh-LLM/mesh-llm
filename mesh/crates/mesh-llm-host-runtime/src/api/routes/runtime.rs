@@ -97,6 +97,7 @@ fn requires_owner_control_credential(method: &str, path_only: &str) -> bool {
             | ("POST", "/api/runtime/control/fleet")
             | ("POST", "/api/runtime/control/mesh-policy")
             | ("DELETE", "/api/runtime/kv-cache")
+        | ("DELETE", "/api/runtime/control/mesh-policy")
     ) || (method == "DELETE"
         && (path_only.starts_with("/api/runtime/models/")
             || path_only.starts_with("/api/runtime/instances/")))
@@ -195,12 +196,23 @@ async fn handle_delete(
             super::runtime_activity::handle_delete(stream, state).await
         }
         "/api/runtime/kv-cache" => super::kv_cache::handle_clear(stream, body).await,
+        "/api/runtime/control/mesh-policy" => {
+            handle_control_clear_mesh_policy(stream, state).await
+        }
         p if p.starts_with("/api/runtime/instances/") => {
             handle_unload_instance(stream, state, p).await
         }
         p if p.starts_with("/api/runtime/models/") => handle_unload_model(stream, state, p).await,
         _ => Ok(()),
     }
+}
+
+async fn handle_control_clear_mesh_policy(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
+    state.policy_store().clear().await;
+    respond_json(stream, 200, &serde_json::json!({"cleared": true})).await
 }
 
 fn handle_control_bootstrap<'a>(
@@ -1889,6 +1901,16 @@ struct FleetControlRequest {
     node_filter: Vec<String>,
     #[serde(default)]
     dry_run: bool,
+    /// Only target peers with at least this many VRAM bytes.
+    min_vram_bytes: Option<u64>,
+    /// Only target peers that have this model in available_models or catalog_models.
+    model_available: Option<String>,
+    /// Only target peers that do NOT have this model in serving_models.
+    model_not_serving: Option<String>,
+    /// Only target peers whose version string is >= this value (string compare).
+    version_min: Option<String>,
+    /// Only target peers whose owner_id matches this value exactly.
+    owner_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1940,7 +1962,7 @@ async fn handle_control_fleet(
     let peers = state.node().await.peers().await;
 
     // Filter peers
-    let filtered_peers: Vec<_> = peers
+    let mut filtered_peers: Vec<_> = peers
         .into_iter()
         .filter(|peer| {
             // Skip client roles unless explicitly requested
@@ -1970,6 +1992,26 @@ async fn handle_control_fleet(
             true
         })
         .collect();
+
+    // Fine-grained fleet filters
+    if let Some(min_vram) = request.min_vram_bytes {
+        filtered_peers.retain(|p| p.vram_bytes >= min_vram);
+    }
+    if let Some(ref model) = request.model_available {
+        filtered_peers.retain(|p| p.available_models.iter().any(|m| m == model));
+    }
+    if let Some(ref model) = request.model_not_serving {
+        filtered_peers.retain(|p| !p.serving_models.iter().any(|m| m == model));
+    }
+    if let Some(ref version) = request.version_min {
+        filtered_peers
+            .retain(|p| p.version.as_deref().map_or(false, |v| v >= version.as_str()));
+    }
+    if let Some(ref owner) = request.owner_id {
+        filtered_peers.retain(|p| {
+            p.owner_summary.owner_id.as_deref() == Some(owner.as_str())
+        });
+    }
 
     if request.dry_run {
         let targets: Vec<FleetDryRunTarget> = filtered_peers

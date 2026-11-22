@@ -7,6 +7,7 @@ mod download;
 mod load_tests;
 mod models;
 mod plugin_cli;
+mod policy;
 mod runtime;
 mod setup;
 
@@ -264,6 +265,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
                 .await
         }
+        Command::Policy { command } => policy::dispatch_policy_command(command, cli).await,
         Command::ModelPrepare(_)
         | Command::Auth { .. }
         | Command::Hermes(_)

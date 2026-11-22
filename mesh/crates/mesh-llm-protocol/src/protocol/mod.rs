@@ -1530,6 +1530,7 @@ mod tests {
         let frame_with_state = GossipFrame {
             signed_records: Vec::new(),
             signed_cache_affinity: Vec::new(),
+            signed_mesh_policy: None,
             r#gen: NODE_PROTOCOL_GENERATION,
             sender_id: vec![0x11; 32],
             peers: vec![peer.clone()],
