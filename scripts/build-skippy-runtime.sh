@@ -9,7 +9,7 @@
 # the local checkout chosen with scripts/skippy-source.sh.
 # Backend: --backend, else MESH_LLM_RUNTIME_BACKEND, else detected the way the
 # in-tree build did: metal on macOS; on Linux cuda, rocm or vulkan when their
-# tools are installed, else cpu; cpu on Windows. Names are Skippy's.
+# tools are installed, else cpu; the same on Windows. Names are Skippy's.
 # Output: target/<debug|release>/native-runtimes. A runtime already built from
 # the same pinned commit and backend is kept; a local checkout always rebuilds.
 # On Windows run this from Git Bash; it hands the build to Skippy's
@@ -56,9 +56,29 @@ if [[ -z "$backend" ]]; then
                 backend=cpu
             fi
             ;;
+        MINGW* | MSYS* | CYGWIN*)
+            # The checks the in-tree Windows build made, in its order.
+            pf="${PROGRAMFILES:-}"
+            has_hip_config() { compgen -G "$1/lib/cmake/hip/hip-config.cmake" >/dev/null || compgen -G "$1/*/lib/cmake/hip/hip-config.cmake" >/dev/null; }
+            if nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+                backend=cuda
+            elif { [[ -n "${HIP_PATH:-}" ]] && has_hip_config "$HIP_PATH"; } ||
+                { [[ -n "${ROCM_PATH:-}" ]] && has_hip_config "$ROCM_PATH"; } ||
+                { [[ -n "$pf" ]] && [[ -d "$pf/AMD/ROCm" || -d "$pf/AMD/HIP" ]]; } ||
+                command -v hipInfo >/dev/null 2>&1 || command -v hipconfig >/dev/null 2>&1; then
+                backend=rocm
+            elif vulkaninfo --summary >/dev/null 2>&1 ||
+                [[ -n "${VULKAN_SDK:-}" && -d "${VULKAN_SDK:-}" ]] ||
+                { [[ -n "$pf" ]] && compgen -G "$pf/VulkanSDK/*/" >/dev/null; }; then
+                backend=vulkan
+            else
+                backend=cpu
+            fi
+            ;;
         *) backend=cpu ;;
     esac
 fi
+[[ "$backend" != hip ]] || backend=rocm
 
 source_state="$("$REPO_ROOT/scripts/skippy-source.sh")"
 if [[ "$source_state" == local\ * ]]; then

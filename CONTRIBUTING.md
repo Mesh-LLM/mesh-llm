@@ -61,7 +61,7 @@ This produces `target/debug/mesh-llm` and `target/debug/native-runtimes`. `just 
 Skippy revision pinned in `Cargo.toml` into `.deps/skippy`, builds Skippy's
 native runtime for this machine, and puts it in `target/debug/native-runtimes`,
 where the host finds it with no settings. The backend is detected (Metal on
-macOS; CUDA, ROCm or Vulkan on Linux when their tools are installed; otherwise
+macOS; CUDA, ROCm or Vulkan on Linux and Windows when their tools are installed; otherwise
 CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. A runtime
 already built from the same pin and backend is reused. `just mesh` rebuilds the
 host alone, and `just runtime` the runtime alone. On Windows the runtime step
