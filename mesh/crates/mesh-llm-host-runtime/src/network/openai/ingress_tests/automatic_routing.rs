@@ -732,6 +732,8 @@ fn peer_serving(peer_id: iroh::EndpointId, model: &str, vision: bool) -> mesh::P
         persistent_lane_marker_supported: false,
         refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
         cache_affinity: None,
         display_rtt: None,
         selected_path: None,

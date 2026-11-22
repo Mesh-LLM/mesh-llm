@@ -879,6 +879,23 @@ impl Node {
         Ok(())
     }
 
+    /// Apply an inbound signed mesh policy if the node has a policy applicator
+    /// wired (Phase 2.3). No-op when the applicator is absent (test nodes,
+    /// memberships, nodes without an owner keypair).
+    async fn apply_inbound_mesh_policy(
+        &self,
+        policy: Option<crate::proto::node::SignedMeshPolicy>,
+    ) {
+        let applicator = self
+            .policy_applicator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let (Some(applicator), Some(policy)) = (applicator, policy) {
+            applicator.apply_if_newer(policy).await;
+        }
+    }
+
     /// One gossip exchange: the remote's announcements and verified plugin
     /// keys, and the round-trip time. Validates the direct sender before
     /// retaining signed records; the caller stores plugin keys only once
@@ -915,7 +932,10 @@ impl Node {
             AnnouncedPeerContext::direct(remote, Some(NODE_PROTOCOL_GENERATION)),
         )
         .await?;
+        // Extract policy before resolve_inbound_gossip consumes inbound.
+        let inbound_policy = inbound.signed_mesh_policy.clone();
         let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
+        self.apply_inbound_mesh_policy(inbound_policy).await;
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -990,7 +1010,10 @@ impl Node {
             AnnouncedPeerContext::direct(remote, Some(NODE_PROTOCOL_GENERATION)),
         )
         .await?;
+        // Extract policy before resolve_inbound_gossip consumes inbound.
+        let inbound_policy = inbound.signed_mesh_policy.clone();
         let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
+        self.apply_inbound_mesh_policy(inbound_policy).await;
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };

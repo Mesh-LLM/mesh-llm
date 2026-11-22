@@ -269,6 +269,15 @@ pub struct Node {
     pub(crate) local_endpoints: LocalEndpoints,
     /// A membership node: it keeps to the one mesh it was started for.
     pub(crate) is_membership: bool,
+    /// Fleet M2M: the shared policy store (None for test nodes and memberships).
+    /// Stored in an Arc<Mutex<Option<...>>> so it can be wired post-construction
+    /// via a shared reference when MeshApi creates its own PolicyStore.
+    pub(crate) policy_store:
+        std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::policy::PolicyStore>>>>,
+    /// Fleet M2M: the policy applicator that acts on inbound signed policies.
+    pub(crate) policy_applicator: std::sync::Arc<
+        std::sync::Mutex<Option<std::sync::Arc<crate::policy::applicator::PolicyApplicator>>>,
+    >,
 }
 
 pub(crate) struct PeerDownReport {
@@ -860,7 +869,26 @@ impl Node {
             unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,
+            policy_store: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            policy_applicator: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Wire the policy store and applicator post-construction (called from the
+    /// serving surface after `MeshApi` creates its own `PolicyStore`).
+    pub(crate) fn set_policy_store(
+        &self,
+        store: std::sync::Arc<crate::policy::PolicyStore>,
+        applicator: std::sync::Arc<crate::policy::applicator::PolicyApplicator>,
+    ) {
+        *self
+            .policy_store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(store);
+        *self
+            .policy_applicator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applicator);
     }
 
     /// Start direct owner control only for a verified owner on an ordinary node.

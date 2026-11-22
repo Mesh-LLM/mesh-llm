@@ -22,6 +22,9 @@ message GossipFrame {
   // byte-for-byte alongside its node record. Additive: older nodes keep
   // reading PeerAnnouncement.cache_affinity in compatibility meshes.
   repeated SignedCacheAffinity signed_cache_affinity = 5;
+  // Fleet policy signed by owner keypair; gossiped to all nodes. Additive —
+  // older nodes ignore this field. See SignedMeshPolicy.
+  optional SignedMeshPolicy signed_mesh_policy = 6;
 }
 
 // A node's self-description, signed with its endpoint key. Relays store and
@@ -94,6 +97,11 @@ message NodeRecord {
   // Mirrors PeerAnnouncement.refuses_peer_model_downloads. Absent means the
   // node accepts peer model downloads.
   optional bool refuses_peer_model_downloads = 26;
+  // Cumulative completion tokens this node has generated since last restart.
+  // Additive; older nodes ignore it.
+  optional uint64 cumulative_completion_tokens = 27;
+  // Cumulative prompt tokens processed since last restart.
+  optional uint64 cumulative_prompt_tokens = 28;
 }
 
 // Decode-only projection of the old LightningOffer wire message. Prices,
@@ -189,6 +197,10 @@ message PeerAnnouncement {
   // false`). Additive; older nodes ignore it. Absent means the node accepts
   // peer model downloads, which is the legacy behavior.
   optional bool refuses_peer_model_downloads = 55;
+  // Mirrors NodeRecord.cumulative_completion_tokens for gossip-path aggregation.
+  optional uint64 cumulative_completion_tokens = 56;
+  // Mirrors NodeRecord.cumulative_prompt_tokens for gossip-path aggregation.
+  optional uint64 cumulative_prompt_tokens = 57;
 }
 
 // A public key a plugin on this node signs with, bound to this node by the
@@ -1039,4 +1051,38 @@ message OwnerControlConfigUpdate {
   uint64 revision = 2;
   bytes config_hash = 3;                  // SHA-256 of canonical proto bytes (32 bytes)
   NodeConfigSnapshot config = 4;
+}
+
+// A fleet-wide model lifecycle and config policy, signed by the owner keypair.
+// Carried in GossipFrame.signed_mesh_policy and flood-filled across the mesh.
+// Nodes verify the Ed25519 signature against their TrustPolicy before applying.
+message SignedMeshPolicy {
+  // Canonical serialized MeshPolicyPayload bytes — signed as-is to avoid
+  // re-encode ambiguity.
+  bytes policy_payload_bytes = 1;
+  // Ed25519 signature over policy_payload_bytes.
+  bytes signature = 2;
+}
+
+message MeshPolicyPayload {
+  uint64 issued_at_unix_ms = 1;
+  uint64 expires_at_unix_ms = 2;  // 0 = no expiry
+  string owner_id = 3;
+  // Hex-encoded 32-byte Ed25519 public key.
+  string owner_sign_public_key = 4;
+  // Monotonic generation counter. Nodes reject incoming policies with
+  // gen <= their current accepted gen for this owner_id.
+  uint32 policy_gen = 5;
+  repeated MeshModelIntent model_intents = 6;
+}
+
+message MeshModelIntent {
+  string canonical_model_ref = 1;
+  MeshModelIntentAction action = 2;
+}
+
+enum MeshModelIntentAction {
+  MESH_MODEL_INTENT_ACTION_UNSPECIFIED = 0;
+  MESH_MODEL_INTENT_ACTION_ENSURE = 1;
+  MESH_MODEL_INTENT_ACTION_DRAIN = 2;
 }

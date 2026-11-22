@@ -128,6 +128,7 @@ async fn receive(
             announcements,
             signed_records,
             signed_cache_affinity: Vec::new(),
+            signed_mesh_policy: None,
         },
     )
     .await
@@ -370,6 +371,7 @@ async fn signed_cache_affinity_replaces_the_unsigned_copy_and_is_forwarded() {
             announcements: vec![twin],
             signed_records: vec![signed_worker_record(0x61, 1, "signed-model")],
             signed_cache_affinity: vec![signed.clone()],
+            signed_mesh_policy: None,
         },
     )
     .await;
@@ -402,6 +404,7 @@ async fn rejected_transitive_version_preserves_fresh_direct_peer_and_signed_reco
             announcements: vec![(addr.clone(), direct.clone())],
             signed_records: vec![signed_worker_record(peer_seed, 1, "direct-model")],
             signed_cache_affinity: vec![signed_cache_affinity(peer_seed, 1, "direct-model", 7)],
+            signed_mesh_policy: None,
         },
     )
     .await;
@@ -462,6 +465,7 @@ async fn signed_cache_affinity_applies_to_peers_known_only_by_unsigned_entries()
             announcements: vec![unsigned_worker(0x61, "legacy-model")],
             signed_records: Vec::new(),
             signed_cache_affinity: vec![signed_cache_affinity(0x61, 1, "legacy-model", 5)],
+            signed_mesh_policy: None,
         },
     )
     .await;
@@ -485,6 +489,7 @@ async fn forged_cache_affinity_falls_back_to_the_unsigned_copy() {
             announcements: vec![twin],
             signed_records: Vec::new(),
             signed_cache_affinity: vec![forged],
+            signed_mesh_policy: None,
         },
     )
     .await;
@@ -511,6 +516,7 @@ async fn cache_affinity_for_models_the_peer_does_not_route_is_dropped() {
             announcements: vec![unsigned_worker(0x61, "served-model")],
             signed_records: Vec::new(),
             signed_cache_affinity: vec![signed_cache_affinity(0x61, 1, "other-model", 5)],
+            signed_mesh_policy: None,
         },
     )
     .await;

@@ -329,6 +329,8 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xee))
@@ -459,6 +461,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
     let bad_gen_gossip = GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -503,6 +506,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
     let wrong_gen_gossip = GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: 2,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -556,6 +560,7 @@ fn remote_model_scans_are_ignored_after_gossip() {
     let gossip_frame = GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id.as_bytes().to_vec(),
         peers: vec![ProtoPA {
@@ -921,6 +926,8 @@ fn stale_serving_announcement(
         // The fixture models a bridge rebroadcast, which carries no opinion on
         // the departed peer's claimed log head.
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
     (addr, ann)
 }

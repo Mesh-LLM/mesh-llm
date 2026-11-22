@@ -3,6 +3,7 @@ use super::super::{
     http::{respond_error, respond_json, respond_runtime_error},
     status::decode_runtime_model_path,
 };
+use crate::mesh::encode_endpoint_addr_token;
 use super::control_apply_diagnostics::{
     LocalControlApplyDiagnosticPayload, local_control_apply_diagnostic_payload,
     local_control_apply_diagnostic_payload_from_local,
@@ -93,6 +94,8 @@ fn requires_owner_control_credential(method: &str, path_only: &str) -> bool {
             | ("POST", "/api/runtime/models")
             | ("POST", "/api/runtime/kv-cache/prune")
             | ("POST", "/api/runtime/mesh-guardrails")
+            | ("POST", "/api/runtime/control/fleet")
+            | ("POST", "/api/runtime/control/mesh-policy")
             | ("DELETE", "/api/runtime/kv-cache")
     ) || (method == "DELETE"
         && (path_only.starts_with("/api/runtime/models/")
@@ -124,6 +127,8 @@ async fn handle_get(
         }
         "/api/runtime/intents" => handle_get_intents(stream, state).await,
         "/api/runtime/activity" => super::runtime_activity::handle_get(stream, state).await,
+        "/api/runtime/fleet/metrics" => handle_fleet_metrics(stream, state).await,
+        "/api/runtime/control/mesh-policy" => handle_get_mesh_policy(stream, state).await,
         "/api/events" => handle_events(stream, state).await,
         _ => Ok(()),
     }
@@ -159,6 +164,8 @@ async fn handle_post(
         "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
         "/api/runtime/models" => handle_load_model(stream, state, body).await,
         "/api/runtime/kv-cache/prune" => super::kv_cache::handle_prune(stream, body).await,
+        "/api/runtime/control/fleet" => handle_control_fleet(stream, state, body).await,
+        "/api/runtime/control/mesh-policy" => handle_set_mesh_policy(stream, state, body).await,
         _ => Ok(()),
     }
 }
@@ -1866,6 +1873,517 @@ async fn handle_get_intents_inner(stream: &mut TcpStream, state: &MeshApi) -> an
         },
     )
     .await
+}
+
+// ─── Fleet control (Phase 1.1) ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct FleetControlRequest {
+    command: String,
+    model: Option<String>,
+    instance_id: Option<String>,
+    profile: Option<String>,
+    #[serde(default)]
+    role_filter: Vec<String>,
+    #[serde(default)]
+    node_filter: Vec<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetControlResponse {
+    results: Vec<FleetNodeResult>,
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetNodeResult {
+    node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<String>,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<LocalControlErrorPayload>,
+    duration_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetDryRunResponse {
+    targets: Vec<FleetDryRunTarget>,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetDryRunTarget {
+    node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<String>,
+}
+
+const FLEET_CONCURRENCY: usize = 32;
+
+async fn handle_control_fleet(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    body: &str,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    let request: FleetControlRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let peers = state.node().await.peers().await;
+
+    // Filter peers
+    let filtered_peers: Vec<_> = peers
+        .into_iter()
+        .filter(|peer| {
+            // Skip client roles unless explicitly requested
+            if request.role_filter.is_empty() {
+                if matches!(peer.role, mesh_llm_membership::NodeRole::Client) {
+                    return false;
+                }
+            } else {
+                let role_str = match &peer.role {
+                    mesh_llm_membership::NodeRole::Worker => "Worker",
+                    mesh_llm_membership::NodeRole::Host { .. } => "Host",
+                    mesh_llm_membership::NodeRole::Client => "Client",
+                };
+                if !request.role_filter.iter().any(|r| r == role_str) {
+                    return false;
+                }
+            }
+            // Apply node_filter
+            if !request.node_filter.is_empty() {
+                let node_id_hex = hex::encode(peer.id.as_bytes());
+                if !request.node_filter.iter().any(|n| {
+                    node_id_hex.starts_with(n.as_str()) || node_id_hex == n.as_str()
+                }) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    if request.dry_run {
+        let targets: Vec<FleetDryRunTarget> = filtered_peers
+            .iter()
+            .map(|peer| FleetDryRunTarget {
+                node_id: hex::encode(peer.id.as_bytes()),
+                hostname: peer.hostname.clone(),
+            })
+            .collect();
+        let total = targets.len();
+        return respond_json(stream, 200, &FleetDryRunResponse { targets, total }).await;
+    }
+
+    // Parse command into lifecycle operation + target
+    let operation = match request.command.as_str() {
+        "load-model" => ControlLifecycleOperation::Load,
+        "unload-model" => ControlLifecycleOperation::Unload,
+        "ensure-model" => ControlLifecycleOperation::Ensure,
+        "drain-model" => ControlLifecycleOperation::Drain,
+        _ => {
+            return respond_error(
+                stream,
+                400,
+                "unknown fleet command; expected load-model, unload-model, ensure-model, or drain-model",
+            )
+            .await;
+        }
+    };
+
+    let lifecycle_request = ControlLifecycleModelRequest {
+        endpoint: None,
+        model: request.model.clone(),
+        instance_id: request.instance_id.clone(),
+        profile: request.profile.clone(),
+    };
+    let target = match validate_control_lifecycle_target(operation, lifecycle_request) {
+        Ok(t) => t,
+        Err(msg) => return respond_error(stream, 400, msg).await,
+    };
+
+    // Fan out in parallel with bounded concurrency
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut pending = 0usize;
+    let mut results: Vec<FleetNodeResult> = Vec::with_capacity(filtered_peers.len());
+    let total = filtered_peers.len();
+
+    let peers_with_endpoints: Vec<(String, Option<String>, String)> = filtered_peers
+        .iter()
+        .map(|peer| {
+            let node_id = hex::encode(peer.id.as_bytes());
+            let hostname = peer.hostname.clone();
+            let endpoint = encode_endpoint_addr_token(&peer.addr);
+            (node_id, hostname, endpoint)
+        })
+        .collect();
+
+    // We need to pass state's owner key path; clone what we need
+    let owner_key_path = state.owner_key_path().await;
+
+    for (node_id, hostname, endpoint) in peers_with_endpoints {
+        let node_id_clone = node_id.clone();
+        let hostname_clone = hostname.clone();
+        let endpoint_clone = endpoint.clone();
+        let owner_key_path_clone = owner_key_path.clone();
+        // Clone target fields for each task
+        let model = target.model.clone();
+        let instance_id = target.instance_id.clone();
+        let profile = target.profile.clone();
+
+        join_set.spawn(async move {
+            let t0 = std::time::Instant::now();
+            let fleet_target = ControlLifecycleTarget {
+                model,
+                instance_id,
+                profile,
+            };
+            let result = execute_fleet_node_lifecycle(
+                owner_key_path_clone,
+                endpoint_clone,
+                operation,
+                fleet_target,
+            )
+            .await;
+            let duration_ms = t0.elapsed().as_millis() as u64;
+            match result {
+                Ok(_) => FleetNodeResult {
+                    node_id: node_id_clone,
+                    hostname: hostname_clone,
+                    success: true,
+                    error: None,
+                    duration_ms,
+                },
+                Err(error) => FleetNodeResult {
+                    node_id: node_id_clone,
+                    hostname: hostname_clone,
+                    success: false,
+                    error: Some(error),
+                    duration_ms,
+                },
+            }
+        });
+        pending += 1;
+
+        // Drain if we hit concurrency limit
+        if pending >= FLEET_CONCURRENCY {
+            if let Some(Ok(node_result)) = join_set.join_next().await {
+                results.push(node_result);
+                pending -= 1;
+            }
+        }
+    }
+    // Drain remaining
+    while let Some(Ok(node_result)) = join_set.join_next().await {
+        results.push(node_result);
+    }
+
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let failed = results.iter().filter(|r| !r.success).count();
+    respond_json(
+        stream,
+        200,
+        &FleetControlResponse {
+            results,
+            total,
+            succeeded,
+            failed,
+        },
+    )
+    .await
+}
+
+async fn execute_fleet_node_lifecycle(
+    owner_key_path: Option<std::path::PathBuf>,
+    endpoint: String,
+    operation: ControlLifecycleOperation,
+    target: ControlLifecycleTarget,
+) -> Result<serde_json::Value, LocalControlErrorPayload> {
+    let owner_keypair =
+        load_local_owner_keypair(owner_key_path.as_deref()).map_err(control_error_from_anyhow)?;
+    let client = ClientBuilder::new(owner_keypair, InviteToken("local-control".to_string()))
+        .build()
+        .map_err(|error| control_error_from_anyhow(anyhow::anyhow!(error.to_string())))?;
+    let connection = client
+        .connect_control_plane(ControlPlaneBootstrapOptions::new().with_control_endpoint(&endpoint))
+        .await
+        .map_err(control_error_from_client)?;
+    match connection {
+        ControlPlaneConnection::OwnerControl(owner_client) => {
+            let result = invoke_control_lifecycle(&owner_client, operation, target).await;
+            owner_client.close().await;
+            result.map_err(control_error_from_client)
+        }
+    }
+}
+
+// ─── Fleet metrics (Phase 1.3) ──────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct FleetMetricsResponse {
+    nodes: Vec<FleetNodeMetrics>,
+    fleet_total_avg_tokens_per_second: f64,
+    fleet_cumulative_completion_tokens: u64,
+    fleet_cumulative_prompt_tokens: u64,
+    model_totals: Vec<FleetModelThroughput>,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetNodeMetrics {
+    node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<String>,
+    role: String,
+    total_avg_tokens_per_second: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cumulative_completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cumulative_prompt_tokens: Option<u64>,
+    models: Vec<FleetModelThroughput>,
+}
+
+#[derive(Debug, Serialize)]
+struct FleetModelThroughput {
+    model: String,
+    avg_tokens_per_second: f64,
+    samples: u64,
+}
+
+async fn handle_fleet_metrics(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    let peers = state.node().await.peers().await;
+    let mut fleet_total_tps = 0f64;
+    let mut fleet_cumulative_completion = 0u64;
+    let mut fleet_cumulative_prompt = 0u64;
+    let mut model_aggregate: std::collections::HashMap<String, (f64, u64)> =
+        std::collections::HashMap::new();
+    let mut nodes = Vec::with_capacity(peers.len());
+
+    for peer in &peers {
+        let role_str = match &peer.role {
+            mesh_llm_membership::NodeRole::Worker => "Worker",
+            mesh_llm_membership::NodeRole::Host { .. } => "Host",
+            mesh_llm_membership::NodeRole::Client => "Client",
+        };
+        let mut node_total_tps = 0f64;
+        let mut node_models = Vec::new();
+        for hint in &peer.advertised_model_throughput {
+            let tps = hint.avg_tokens_per_second_milli as f64 / 1000.0;
+            node_total_tps += tps;
+            fleet_total_tps += tps;
+            let entry = model_aggregate
+                .entry(hint.model_name.clone())
+                .or_insert((0.0, 0));
+            entry.0 += tps;
+            entry.1 += hint.throughput_samples;
+            node_models.push(FleetModelThroughput {
+                model: hint.model_name.clone(),
+                avg_tokens_per_second: tps,
+                samples: hint.throughput_samples,
+            });
+        }
+        // cumulative tokens from gossip
+        let cumulative_completion = peer.cumulative_completion_tokens;
+        let cumulative_prompt = peer.cumulative_prompt_tokens;
+        fleet_cumulative_completion += cumulative_completion.unwrap_or(0);
+        fleet_cumulative_prompt += cumulative_prompt.unwrap_or(0);
+
+        nodes.push(FleetNodeMetrics {
+            node_id: hex::encode(peer.id.as_bytes()),
+            hostname: peer.hostname.clone(),
+            role: role_str.to_string(),
+            total_avg_tokens_per_second: node_total_tps,
+            cumulative_completion_tokens: cumulative_completion,
+            cumulative_prompt_tokens: cumulative_prompt,
+            models: node_models,
+        });
+    }
+
+    let model_totals = {
+        let mut totals: Vec<FleetModelThroughput> = model_aggregate
+            .into_iter()
+            .map(|(model, (tps, samples))| FleetModelThroughput {
+                model,
+                avg_tokens_per_second: tps,
+                samples,
+            })
+            .collect();
+        totals.sort_by(|a, b| a.model.cmp(&b.model));
+        totals
+    };
+
+    respond_json(
+        stream,
+        200,
+        &FleetMetricsResponse {
+            nodes,
+            fleet_total_avg_tokens_per_second: fleet_total_tps,
+            fleet_cumulative_completion_tokens: fleet_cumulative_completion,
+            fleet_cumulative_prompt_tokens: fleet_cumulative_prompt,
+            model_totals,
+        },
+    )
+    .await
+}
+
+// ─── Mesh policy (Phase 2.2) ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct SetMeshPolicyRequest {
+    policy_payload_bytes: String, // base64
+    signature: String,            // base64
+}
+
+#[derive(Debug, Serialize)]
+struct SetMeshPolicyResponse {
+    accepted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_gen: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+async fn handle_set_mesh_policy(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    body: &str,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    let request: SetMeshPolicyRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    use base64::Engine;
+    let payload_bytes = match base64::engine::general_purpose::STANDARD
+        .decode(&request.policy_payload_bytes)
+    {
+        Ok(b) => b,
+        Err(_) => return respond_error(stream, 400, "Invalid base64 for policy_payload_bytes").await,
+    };
+    let signature = match base64::engine::general_purpose::STANDARD.decode(&request.signature) {
+        Ok(b) => b,
+        Err(_) => return respond_error(stream, 400, "Invalid base64 for signature").await,
+    };
+    let policy = crate::proto::node::SignedMeshPolicy {
+        policy_payload_bytes: payload_bytes,
+        signature,
+    };
+    let policy_store = state.policy_store();
+    let result = policy_store.update(policy).await;
+    let response = match &result {
+        crate::policy::PolicyUpdateResult::Accepted { policy_gen } => SetMeshPolicyResponse {
+            accepted: true,
+            active_gen: Some(*policy_gen),
+            reason: None,
+        },
+        crate::policy::PolicyUpdateResult::Stale { current_gen } => SetMeshPolicyResponse {
+            accepted: false,
+            active_gen: Some(*current_gen),
+            reason: Some(format!("policy_gen <= current gen {current_gen}")),
+        },
+        crate::policy::PolicyUpdateResult::Invalid(msg) => SetMeshPolicyResponse {
+            accepted: false,
+            active_gen: None,
+            reason: Some(msg.clone()),
+        },
+    };
+    // Phase 3.2: persist accepted policy so it survives a restart.
+    if matches!(result, crate::policy::PolicyUpdateResult::Accepted { .. }) {
+        let state_dir = state
+            .inner
+            .lock()
+            .await
+            .node
+            .identity_state_dir
+            .clone();
+        if let Some(state_dir) = state_dir {
+            if let Err(error) = policy_store.persist(&state_dir).await {
+                tracing::warn!("fleet policy: persist failed: {error:#}");
+            }
+        }
+    }
+    respond_json(stream, 200, &response).await
+}
+
+#[derive(Debug, Serialize)]
+struct GetMeshPolicyResponse {
+    has_policy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_gen: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issued_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_intents: Option<Vec<GetMeshPolicyIntent>>,
+}
+
+#[derive(Debug, Serialize)]
+struct GetMeshPolicyIntent {
+    canonical_model_ref: String,
+    action: String,
+}
+
+async fn handle_get_mesh_policy(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    let current = state.policy_store().current().await;
+    let response = match current {
+        None => GetMeshPolicyResponse {
+            has_policy: false,
+            policy_gen: None,
+            owner_id: None,
+            issued_at_unix_ms: None,
+            expires_at_unix_ms: None,
+            model_intents: None,
+        },
+        Some(stored) => {
+            use crate::proto::node::MeshModelIntentAction;
+            let intents = stored
+                .payload
+                .model_intents
+                .iter()
+                .map(|i| GetMeshPolicyIntent {
+                    canonical_model_ref: i.canonical_model_ref.clone(),
+                    action: match MeshModelIntentAction::try_from(i.action) {
+                        Ok(MeshModelIntentAction::Ensure) => "ensure".to_string(),
+                        Ok(MeshModelIntentAction::Drain) => "drain".to_string(),
+                        _ => "unspecified".to_string(),
+                    },
+                })
+                .collect();
+            GetMeshPolicyResponse {
+                has_policy: true,
+                policy_gen: Some(stored.payload.policy_gen),
+                owner_id: Some(stored.payload.owner_id.clone()),
+                issued_at_unix_ms: Some(stored.payload.issued_at_unix_ms),
+                expires_at_unix_ms: Some(stored.payload.expires_at_unix_ms),
+                model_intents: Some(intents),
+            }
+        }
+    };
+    respond_json(stream, 200, &response).await
 }
 
 #[cfg(test)]

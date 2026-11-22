@@ -51,6 +51,8 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     }
 }
 
@@ -594,6 +596,8 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     let proto_pa = local_ann_to_proto_ann(&local_ann);
@@ -1013,6 +1017,8 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
@@ -1115,6 +1121,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee), NOW);
@@ -1189,6 +1197,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
     apply_transitive_ann(
         &mut existing,

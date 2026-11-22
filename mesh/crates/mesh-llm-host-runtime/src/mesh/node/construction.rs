@@ -256,6 +256,8 @@ impl Node {
             unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,
+            policy_store: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            policy_applicator: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
         node.maybe_start_control_listener(

@@ -315,6 +315,8 @@ impl Node {
             persistent_lane_marker_supported: true,
             refuses_peer_model_downloads: !self.peer_stage_source_fetch.allows_fetch(),
             advertised_model_throughput: data.advertised_model_throughput,
+            cumulative_completion_tokens: None,
+            cumulative_prompt_tokens: None,
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

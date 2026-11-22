@@ -237,6 +237,7 @@ impl MeshApi {
         );
         MeshApi {
             capture_node: node.clone(),
+            policy_store: crate::policy::PolicyStore::new(),
             inner: Arc::new(Mutex::new(ApiInner {
                 node,
                 plugin_manager,
@@ -474,6 +475,10 @@ impl MeshApi {
         owner_control_token: Option<zeroize::Zeroizing<String>>,
     ) {
         self.inner.lock().await.owner_control_token = owner_control_token;
+    }
+
+    pub(crate) fn policy_store(&self) -> std::sync::Arc<crate::policy::PolicyStore> {
+        self.policy_store.clone()
     }
 
     pub(crate) async fn status_snapshot_string(&self) -> String {

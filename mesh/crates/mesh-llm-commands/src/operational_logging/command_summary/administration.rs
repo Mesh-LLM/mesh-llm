@@ -142,3 +142,27 @@ fn format_plugin_name(name: &str, assembly: &mut SummaryAssembly) {
     assembly.command.push_str(name);
     assembly.redact("name", true);
 }
+
+pub(super) fn format_policy(
+    command: &mesh_llm_cli::PolicyCommand,
+    assembly: &mut SummaryAssembly,
+) {
+    use mesh_llm_cli::PolicyCommand;
+    match command {
+        PolicyCommand::Set { port, .. } => {
+            assembly.command.push_str(" policy set");
+            assembly.port(*port, DEFAULT_LOCAL_PORT);
+            assembly.redact("payload", true);
+        }
+        PolicyCommand::Get { port, json } => {
+            assembly.command.push_str(" policy get");
+            assembly.port(*port, DEFAULT_LOCAL_PORT);
+            assembly.flag("json", *json);
+        }
+        PolicyCommand::Clear { port, json } => {
+            assembly.command.push_str(" policy clear");
+            assembly.port(*port, DEFAULT_LOCAL_PORT);
+            assembly.flag("json", *json);
+        }
+    }
+}

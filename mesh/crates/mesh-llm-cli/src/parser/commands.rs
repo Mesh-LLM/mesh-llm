@@ -769,9 +769,53 @@ pub enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage the fleet mesh policy (fleet M2M signed config gossip).
+    #[command(name = "policy", hide = true)]
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
     /// Run a CLI command contributed by a configured plugin.
     #[command(external_subcommand)]
     ExternalPlugin(Vec<OsString>),
+}
+
+/// Fleet mesh-policy commands.
+#[derive(Subcommand, Debug)]
+pub enum PolicyCommand {
+    /// Push a signed mesh policy to the local node.
+    Set {
+        /// Base64-encoded signed policy payload bytes.
+        #[arg(long)]
+        payload: String,
+        /// Base64-encoded Ed25519 signature over the payload.
+        #[arg(long)]
+        signature: String,
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the current mesh policy on the local node.
+    Get {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear the current mesh policy from the local node.
+    Clear {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Anonymous usage reporting controls.

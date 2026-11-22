@@ -116,7 +116,7 @@ mod stage_transport_bridge;
 mod stun;
 mod weights_digest;
 
-pub(crate) use connections::parse_invite_token;
+pub(crate) use connections::{encode_endpoint_addr_token, parse_invite_token};
 use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;

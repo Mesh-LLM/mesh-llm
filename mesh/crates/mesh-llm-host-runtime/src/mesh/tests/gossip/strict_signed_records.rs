@@ -14,6 +14,7 @@ async fn unsigned_relay_cannot_replace_verified_models_or_cache() {
             announcements: Vec::new(),
             signed_records: vec![signed_worker_record(0x61, 1, "signed-model")],
             signed_cache_affinity: vec![signed_cache_affinity(0x61, 1, "signed-model", 1)],
+        signed_mesh_policy: None,
         },
     )
     .await;
@@ -148,6 +149,7 @@ async fn verification_completes_while_membership_is_locked() {
         announcements: Vec::new(),
         signed_records: vec![signed_worker_record(0x61, 1, "signed-model")],
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
     };
     let prepared = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -170,6 +172,7 @@ async fn deferred_verification_does_not_erase_previously_verified_sender_records
             announcements: Vec::new(),
             signed_records: vec![record.clone()],
             signed_cache_affinity: vec![signed_cache_affinity(0x62, 1, "relay-model", 1)],
+        signed_mesh_policy: None,
         },
     )
     .await;

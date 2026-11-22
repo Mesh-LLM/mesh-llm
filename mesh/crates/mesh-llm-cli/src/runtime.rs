@@ -117,14 +117,27 @@ pub enum RuntimeCommand {
     /// Load a model on a remote node through owner-control.
     LoadModel {
         /// Explicit owner-control endpoint token for the target node.
-        #[arg(long)]
-        endpoint: String,
+        /// Mutually exclusive with --fleet.
+        #[arg(long, conflicts_with = "fleet")]
+        endpoint: Option<String>,
         /// Model canonical reference to load.
         #[arg(long)]
         model: String,
         /// Optional runtime profile to apply.
         #[arg(long)]
         profile: Option<String>,
+        /// Fan out to all peers in the mesh (requires owner-control bearer).
+        #[arg(long, conflicts_with = "endpoint")]
+        fleet: bool,
+        /// Filter fleet targets by role (repeatable; Worker|Host). Ignored without --fleet.
+        #[arg(long = "role")]
+        fleet_role_filter: Vec<String>,
+        /// Filter fleet targets by node ID prefix (repeatable). Ignored without --fleet.
+        #[arg(long = "node")]
+        fleet_node_filter: Vec<String>,
+        /// Print targets without executing (dry run). Ignored without --fleet.
+        #[arg(long)]
+        dry_run: bool,
         /// Console/API port of the local mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
@@ -135,18 +148,31 @@ pub enum RuntimeCommand {
     /// Unload a model on a remote node through owner-control.
     UnloadModel {
         /// Explicit owner-control endpoint token for the target node.
-        #[arg(long)]
-        endpoint: String,
+        /// Mutually exclusive with --fleet.
+        #[arg(long, conflicts_with = "fleet")]
+        endpoint: Option<String>,
         /// Model canonical reference to unload.
         #[arg(
             long,
-            required_unless_present = "instance_id",
+            required_unless_present_any = ["instance_id", "fleet"],
             conflicts_with = "instance_id"
         )]
         model: Option<String>,
         /// Exact instance ID to unload.
-        #[arg(long, required_unless_present = "model", conflicts_with = "model")]
+        #[arg(long, required_unless_present_any = ["model", "fleet"], conflicts_with = "model")]
         instance_id: Option<String>,
+        /// Fan out to all peers in the mesh (requires owner-control bearer).
+        #[arg(long, conflicts_with = "endpoint")]
+        fleet: bool,
+        /// Filter fleet targets by role (repeatable; Worker|Host). Ignored without --fleet.
+        #[arg(long = "role")]
+        fleet_role_filter: Vec<String>,
+        /// Filter fleet targets by node ID prefix (repeatable). Ignored without --fleet.
+        #[arg(long = "node")]
+        fleet_node_filter: Vec<String>,
+        /// Print targets without executing (dry run). Ignored without --fleet.
+        #[arg(long)]
+        dry_run: bool,
         /// Console/API port of the local mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
@@ -157,14 +183,27 @@ pub enum RuntimeCommand {
     /// Ensure a model is loaded on a remote node through owner-control.
     EnsureModel {
         /// Explicit owner-control endpoint token for the target node.
-        #[arg(long)]
-        endpoint: String,
+        /// Mutually exclusive with --fleet.
+        #[arg(long, conflicts_with = "fleet")]
+        endpoint: Option<String>,
         /// Model canonical reference to ensure loaded.
         #[arg(long)]
         model: String,
         /// Optional runtime profile to maintain.
         #[arg(long)]
         profile: Option<String>,
+        /// Fan out to all peers in the mesh (requires owner-control bearer).
+        #[arg(long, conflicts_with = "endpoint")]
+        fleet: bool,
+        /// Filter fleet targets by role (repeatable; Worker|Host). Ignored without --fleet.
+        #[arg(long = "role")]
+        fleet_role_filter: Vec<String>,
+        /// Filter fleet targets by node ID prefix (repeatable). Ignored without --fleet.
+        #[arg(long = "node")]
+        fleet_node_filter: Vec<String>,
+        /// Print targets without executing (dry run). Ignored without --fleet.
+        #[arg(long)]
+        dry_run: bool,
         /// Console/API port of the local mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
@@ -175,18 +214,31 @@ pub enum RuntimeCommand {
     /// Drain and unload a model on a remote node through owner-control.
     DrainModel {
         /// Explicit owner-control endpoint token for the target node.
-        #[arg(long)]
-        endpoint: String,
+        /// Mutually exclusive with --fleet.
+        #[arg(long, conflicts_with = "fleet")]
+        endpoint: Option<String>,
         /// Model canonical reference to drain.
         #[arg(
             long,
-            required_unless_present = "instance_id",
+            required_unless_present_any = ["instance_id", "fleet"],
             conflicts_with = "instance_id"
         )]
         model: Option<String>,
         /// Exact instance ID to drain.
-        #[arg(long, required_unless_present = "model", conflicts_with = "model")]
+        #[arg(long, required_unless_present_any = ["model", "fleet"], conflicts_with = "model")]
         instance_id: Option<String>,
+        /// Fan out to all peers in the mesh (requires owner-control bearer).
+        #[arg(long, conflicts_with = "endpoint")]
+        fleet: bool,
+        /// Filter fleet targets by role (repeatable; Worker|Host). Ignored without --fleet.
+        #[arg(long = "role")]
+        fleet_role_filter: Vec<String>,
+        /// Filter fleet targets by node ID prefix (repeatable). Ignored without --fleet.
+        #[arg(long = "node")]
+        fleet_node_filter: Vec<String>,
+        /// Print targets without executing (dry run). Ignored without --fleet.
+        #[arg(long)]
+        dry_run: bool,
         /// Console/API port of the local mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
