@@ -1,4 +1,4 @@
-version: "2"
+version: 2
 reviews:
   auto_review:
     enabled: true
