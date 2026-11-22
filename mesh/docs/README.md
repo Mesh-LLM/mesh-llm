@@ -49,6 +49,7 @@ Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serv
 
 | Doc or directory | What belongs there |
 |---|---|
+| [BENCHMARKS.md](BENCHMARKS.md) | Historical benchmark numbers from before the engine moved to Skippy |
 | [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
 | [design/NATIVE_RUNTIMES.md](../../skippy/docs/design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
