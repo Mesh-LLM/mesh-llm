@@ -725,7 +725,8 @@ pub(crate) async fn build_local_mesh_listing(
     region: Option<String>,
     max_clients: Option<usize>,
 ) -> nostr::MeshListing {
-    let peers = node.peers().await;
+    let mut peers = node.peers().await;
+    node.filter_current_peer_evidence(&mut peers).await;
     let client_count = lan_client_count(&peers);
     let actually_serving = lan_served_models(node, &peers).await;
     let served_set = actually_serving

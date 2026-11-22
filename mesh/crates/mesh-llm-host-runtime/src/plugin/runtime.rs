@@ -49,7 +49,7 @@ use self::status_publication::StatusDeclaration;
 const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(crate) struct ExternalPlugin {
-    spec: ExternalPluginSpec,
+    pub(super) spec: ExternalPluginSpec,
     installed_artifact_sha256: Option<String>,
     authenticated_peer: Arc<AtomicBool>,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
@@ -76,6 +76,9 @@ pub(crate) struct ExternalPlugin {
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
     in_process: Option<super::InProcessPluginRunner>,
+    /// The peer evidence verifier its first initialized generation declared,
+    /// which every later generation must declare too.
+    peer_evidence_verifier: std::sync::OnceLock<Option<proto::PeerEvidenceVerifierManifest>>,
 }
 
 pub(crate) struct PluginRuntime {
@@ -178,6 +181,7 @@ impl ExternalPlugin {
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
+            peer_evidence_verifier: Default::default(),
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
@@ -392,6 +396,7 @@ impl ExternalPlugin {
                         mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
                         mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.to_string(),
                         mesh_llm_plugin::host_capabilities::REQUEST_TRANSFORM.to_string(),
+                        mesh_llm_plugin::peer_evidence::HOST_CAPABILITY.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -445,6 +450,12 @@ impl ExternalPlugin {
                 PROTOCOL_VERSION
             );
         }
+        let verifier = super::peer_evidence::validate_startup(&self.spec, init.manifest.as_ref())?;
+        super::peer_evidence::validate_generation(
+            verifier,
+            self.authenticated_peer.load(Ordering::Acquire),
+            &self.peer_evidence_verifier,
+        )?;
         if let Some(manifest) = &init.manifest {
             socket_auth::validate_lifecycle_declaration(
                 manifest.openai_exchange_hook.is_some(),
@@ -885,6 +896,28 @@ impl ExternalPlugin {
             }
         }
         bail!("Plugin '{}' is not accepting {}", self.spec.name, kind)
+    }
+
+    /// Runs `f` while connection `generation` is the running one, holding the
+    /// runtime so that it cannot be replaced or stopped meanwhile.
+    pub(crate) async fn while_running<R>(
+        &self,
+        generation: u64,
+        f: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let runtime = self.runtime.lock().await;
+        runtime
+            .as_ref()
+            .filter(|runtime| runtime.generation == generation)?;
+        Some(f())
+    }
+
+    /// The peer evidence verifier this plugin's first initialized generation
+    /// declared.
+    pub(crate) fn declared_peer_evidence_verifier(
+        &self,
+    ) -> Option<&proto::PeerEvidenceVerifierManifest> {
+        self.peer_evidence_verifier.get().and_then(Option::as_ref)
     }
 
     async fn runtime_handles(

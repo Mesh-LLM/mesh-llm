@@ -391,6 +391,8 @@ refusal, and the owner, genesis-policy and release attestations. It leaves out:
 - data that only goes to direct peers (`demand`, `claimed_log_head`,
   `direct_admission_proof`), which stays on the sender's own unsigned entry.
 
+`NodeRecord.peer_evidence` (protobuf field 27) carries up to eight opaque evidence references, each with a nonempty namespace of at most 64 bytes and a value of at most 1,024 bytes. The origin signature covers these references together with provider claims; local verifier plugins decide eligibility.
+
 Receivers apply these rules to every kind:
 
 1. A record must verify against the `endpoint_id` in its header under its
@@ -432,6 +434,8 @@ entry for connection-authenticated state, merged demand, admission proof,
 claimed log head, and plugin keys. Merged demand continues to propagate
 through that entry; it is not origin-signed per-node demand. Hop measurements
 remain the relay's observations, not assertions authenticated by the origin.
+
+A host with a [peer evidence verifier](../../crates/mesh-llm-host-runtime/README.md#provider-evidence) receives gossip this way in either mode, but still sends third-party copies when the mesh does not require signed gossip. It relays neither copies nor signed records of a provider whose evidence it has not accepted.
 
 The cutover is explicit mesh creation, after all intended participants support
 this requirement. Set `[mesh_requirements] require_signed_gossip = true`,

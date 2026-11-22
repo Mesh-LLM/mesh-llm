@@ -672,6 +672,9 @@ impl Node {
         }
 
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
+        // Keep the verifier registry until work entry points have closed, then
+        // release runner references before an embedded restart.
+        drop(self.take_plugin_manager().await);
         // Release an accept task parked before startup so it observes closure.
         self.accepting
             .1

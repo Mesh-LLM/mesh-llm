@@ -42,4 +42,5 @@ mod split_coverage {
 }
 
 mod model_requirements;
+mod peer_evidence;
 mod private_scope;

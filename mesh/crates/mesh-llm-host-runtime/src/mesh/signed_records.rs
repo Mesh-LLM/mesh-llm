@@ -38,7 +38,7 @@ impl Node {
     pub(super) async fn collect_outbound_gossip(&self) -> OutboundGossip {
         let mut announcements = self.collect_announcements().await;
         let (signed_records, signed_cache_affinity) =
-            self.collect_signed_records(&announcements).await;
+            self.collect_signed_records(&mut announcements).await;
         if self.requires_signed_gossip().await {
             // The direct entry retains merged demand, admission proof and
             // plugin keys. Third-party descriptions travel only as signed bytes.
@@ -55,9 +55,9 @@ impl Node {
     /// records, with no rebroadcast of other peers.
     pub(super) async fn collect_own_outbound_gossip(&self) -> OutboundGossip {
         let local = self.snapshot_local_announcement_data().await;
-        let announcements = vec![self.build_local_announcement(local)];
+        let mut announcements = vec![self.build_local_announcement(local)];
         let (signed_records, signed_cache_affinity) =
-            self.collect_signed_records(&announcements).await;
+            self.collect_signed_records(&mut announcements).await;
         OutboundGossip {
             announcements,
             signed_records,
@@ -67,20 +67,24 @@ impl Node {
 
     /// This node's own records plus every held record for a peer we are
     /// rebroadcasting. Each relayed node record carries our latency view of
-    /// that peer as unsigned hop data.
+    /// that peer as unsigned hop data. While a verifier is loaded, a provider
+    /// is rebroadcast only once its evidence is accepted, so an unverified
+    /// provider reaches only its direct peers.
     async fn collect_signed_records(
         &self,
-        announcements: &[PeerAnnouncement],
+        announcements: &mut Vec<PeerAnnouncement>,
     ) -> (Vec<SignedNodeRecord>, Vec<SignedCacheAffinity>) {
+        let gate = self.evidence_gate().await;
+        let manager = self.plugin_manager().await;
         let local_id = self.endpoint.id();
         let now = current_time_unix_ms();
         let local_wire = announcements
             .iter()
             .find(|ann| ann.addr.id == local_id)
             .map(|ann| (local_ann_to_proto_ann(ann), &ann.addr));
-        let node_body = local_wire
+        let node_record = local_wire
             .as_ref()
-            .map(|(wire, addr)| node_record_from_wire_ann(wire, addr).encode_to_vec());
+            .map(|(wire, addr)| node_record_from_wire_ann(wire, addr));
         let cache_body = local_wire
             .as_ref()
             .and_then(|(wire, _)| wire.cache_affinity.as_ref())
@@ -88,6 +92,24 @@ impl Node {
         let signing_key =
             ed25519_dalek::SigningKey::from_bytes(&self.endpoint_secret_key.to_bytes());
         let mut state = self.state.lock().await;
+        // Read under the state lock, which orders the signing, so the record
+        // signed last carries the newest publication when collections race.
+        let node_body = node_record.map(|mut record| {
+            if let Some(manager) = &manager {
+                record.peer_evidence = manager.peer_evidence().publications();
+            }
+            record.encode_to_vec()
+        });
+        if let Some(gate) = &gate {
+            // Judged on the records relayed below, under the same lock, so a
+            // replaced record is not relayed before its evidence is verified.
+            announcements.retain(|ann| {
+                ann.addr.id == local_id
+                    || state.peers.get(&ann.addr.id).is_some_and(|peer| {
+                        gate.admits(peer, state.node_records.fresh(&ann.addr.id, now))
+                    })
+            });
+        }
         let mut node_records = Vec::with_capacity(announcements.len());
         let mut cache_records = Vec::with_capacity(announcements.len());
         if let Some(body) = node_body {
@@ -122,13 +144,15 @@ impl Node {
     }
 
     /// Verify off the membership lock and commit against the current sequence.
-    /// Strict meshes accept unsigned data only from the authenticated origin.
+    /// Strict meshes, and nodes that verify peer evidence, accept unsigned data
+    /// only from the authenticated origin.
     pub(super) async fn resolve_inbound_gossip(
         &self,
         remote: EndpointId,
         mut inbound: InboundGossip,
     ) -> Vec<Announcement> {
-        let strict = self.requires_signed_gossip().await;
+        let strict_mesh = self.requires_signed_gossip().await;
+        let strict = strict_mesh || self.has_peer_evidence_verifier().await;
         let record_count = inbound.signed_records.len();
         let cache_count = inbound.signed_cache_affinity.len();
         let prepared = self.prepare_gossip_records(remote, &mut inbound).await;
@@ -155,10 +179,10 @@ impl Node {
             // A sender that no longer signs its own records (for example, it
             // was downgraded) is described only by its unsigned entry, so
             // stop relaying the records we hold for it.
-            if !strict && verification_completed && !prepared.sender_node_record_present {
+            if !strict_mesh && verification_completed && !prepared.sender_node_record_present {
                 state.node_records.remove(&remote);
             }
-            if !strict && verification_completed && !prepared.sender_cache_record_present {
+            if !strict_mesh && verification_completed && !prepared.sender_cache_record_present {
                 state.cache_affinity_records.remove(&remote);
             }
             (node_records, cache_affinity)
