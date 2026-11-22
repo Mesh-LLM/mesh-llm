@@ -192,21 +192,9 @@ installed virtual-model plugin can override `mesh` the same way.
 
 ## Supported model families
 
-Mesh LLM's Skippy runtime tracks llama.cpp family parity with reviewed GGUF
-representatives. The current reviewed support set covers 72 P0/P1 family rows,
-with 89 certified rows in the full parity inventory, including Qwen, Llama,
-Gemma, Mistral, DeepSeek, GLM, MiniMax, Phi, Granite, Hunyuan, EXAONE, Cohere,
-Falcon, RWKV, and many others.
-
-Split multimodal serving is certified for Qwen2-VL, Qwen3-VL,
-Qwen3-VL-MoE, HunyuanOCR/Hunyuan-VL, and DeepSeek-OCR using real GGUF plus
-projector fixtures. DeepSeek3 and EXAONE-MoE use package-backed stages because
-the full GGUFs are too large for the cheap local baseline.
-
-See [docs/skippy/FAMILY_STATUS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_STATUS.md) for the full
-artifact, split, wire dtype, cache policy, and exception matrix. See
-[docs/skippy/LLAMA_PARITY.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LLAMA_PARITY.md) for the remaining
-llama.cpp parity queue.
+Model-family support, certification and inference performance are Skippy's.
+See [FAMILY_STATUS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_STATUS.md) for the certified families and
+[LLAMA_PARITY.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LLAMA_PARITY.md) for the llama.cpp parity queue.
 
 ## Install and build notes
 
