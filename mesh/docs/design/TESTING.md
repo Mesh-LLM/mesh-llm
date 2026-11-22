@@ -197,6 +197,10 @@ For terminal restoration QA:
 
 ### 0d. Agent tool-call reliability
 
+> **Unavailable.** The `cargo xtool` commands were removed from this repository
+> with `tools/xtask`, and nothing replaces them. The text below describes the
+> workflow as it was, for reference only. Do not try to run it.
+
 Run the direct tool-call probe when changing OpenAI chat-completions routing,
 agent integrations, MoA reducer behavior, or anything that may affect
 `tools` / `tool_calls` / tool-result continuation:
@@ -520,7 +524,7 @@ mesh-llm serve \
 > `--port`, `--console`. There is no `--layer-range` flag — layer placement
 > is normally decided by the runtime from advertised VRAM. Maintainer runs that
 > require exact placement can supply a complete topology manifest with
-> `--split-topology-lock <path>`; see `skippy/docs/SKIPPY_SPLITS.md`.
+> `--split-topology-lock <path>`; see [SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md).
 
 #### Multi-interface Docker/Linux bind-IP validation
 
@@ -1364,15 +1368,16 @@ without relying on a pre-existing user runtime:
 
 ```bash
 just release-host-build
-just release-runtime-build metal # choose the platform backend
+# Put a Skippy runtime bundle for this platform in dist/native-runtimes;
+# runtimes are built in the Skippy repository.
 product_out="$(mktemp -d)"
 just release-bundle "v$(./target/release/mesh-llm --version | awk '{print $NF}')" "$product_out"
 ```
 
 Required evidence:
 
-- `cargo xtool native verify-host-dependencies target/release/mesh-llm` reports no
-  rejected backend imports.
+- `scripts/check-host-imports.sh` reports no rejected backend imports for
+  `target/release/mesh-llm`.
 - Extracting the product archive yields one host, one runtime tree,
   `product-manifest.json`, and `host-imports.json`; all recorded digests match.
 - With isolated `HOME`, XDG cache, and
@@ -1401,8 +1406,10 @@ It reuses `smollm2-q8-inference` from the shared
 also used by product, scripted-binary and SDK smoke tests: SmolLM2-135M-Instruct
 Q8_0 (about 138 MiB). The registry owns the pinned revision, filename and digest.
 
-Build the local runtime with `just skippy` (or select a backend, such as
-`just skippy metal` on macOS), then run from the repository root:
+Build or download a runtime bundle from the Skippy repository, then run from
+the repository root. The `cargo xtool models resolve` step and the
+`ci/model-artifacts` manifest below were removed from this repository; place
+the fixture GGUF yourself or set `MESH_LLM_HOT_LOAD_TEST_GGUF`.
 
 Restore that shared fixture into the usual `$HOME/.models` cache and verify it
 against the manifest before execution:
