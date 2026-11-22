@@ -23,6 +23,8 @@ skippy-native-runtime = { workspace = true }
 skippy-hardware-profile = { workspace = true }
 mesh-llm-release-footer.workspace = true
 skippy-runtime-install = { workspace = true }
+# Not used directly: selects skippy-ffi's dynamic mode for skippy-runtime-install.
+skippy-ffi = { workspace = true }
 reqwest = { version = "0.13", features = ["stream", "json", "query"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }

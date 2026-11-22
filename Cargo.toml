@@ -66,16 +66,19 @@ mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", versio
 mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.80.0" }
 # Skippy is an external project, pinned to one revision here and in Cargo.lock.
 # To build against a local Skippy checkout or another branch: scripts/skippy-source.sh.
+# MeshLLM loads Skippy's native runtime at run time and never links llama.cpp:
+# the dynamic features below keep skippy-ffi from compiling it, whichever crate
+# is built.
 # TEMPORARY PIN: Skippy branch micn/mesh-main-compat (main + Mesh-LLM/skippy#113 + #138).
 # Repin to Skippy main once both have merged there.
 hf_hub = { package = "skippy-hf-hub", git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", default-features = false }
-skippy-api = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
+skippy-api = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", features = ["dynamic-native-runtime"] }
 skippy-cache = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
-skippy-commands = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
+skippy-commands = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", features = ["dynamic-native-runtime"] }
 skippy-config = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-coordinator = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-events = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
-skippy-ffi = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", default-features = false }
+skippy-ffi = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", default-features = false, features = ["dynamic-runtime"] }
 skippy-gpu-bench = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-guardrails = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-hardware-profile = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
@@ -88,9 +91,9 @@ skippy-model-resolver = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6
 skippy-native-runtime = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-package-format = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-protocol = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
-skippy-runtime = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
+skippy-runtime = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", features = ["dynamic-native-runtime"] }
 skippy-runtime-install = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
-skippy-serving = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
+skippy-serving = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0", features = ["dynamic-native-runtime"] }
 skippy-tokenizer = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 skippy-topology = { git = "https://github.com/Mesh-LLM/skippy", rev = "5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9", version = "0.80.0" }
 serde = { version = "1", features = ["derive"] }

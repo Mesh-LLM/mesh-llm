@@ -169,22 +169,12 @@ fresh clone needs none of this.
 
 ### Testing crates on native Windows
 
-`just test-rust` works on a bare Windows checkout: built as a whole, the
-workspace turns on `skippy-ffi`'s `dynamic-runtime` feature, so nothing native
-is compiled.
+Nothing native is compiled on any platform, so `just test-rust` and
+single-crate commands work on a bare Windows checkout. MeshLLM always selects
+`skippy-ffi`'s `dynamic-runtime` mode (see the Skippy entries in the root
+`Cargo.toml`); it never links llama.cpp.
 
-Testing one crate on its own can lose that feature. `mesh-llm-system` reaches
-`skippy-ffi` through `skippy-runtime-install` with `default-features = false`,
-which selects `skippy-ffi`'s static link mode. Its build script then looks for
-patched llama.cpp archives and fails on Windows
-(`automatic native preparation is not supported for Windows from build.rs yet`).
-On macOS and Linux the same build does not fail: it builds llama.cpp inside
-Cargo's checkout of Skippy, which is slow and takes about 1 GB.
-
-For crate suites that do not exercise the native runtime, enable
-`dynamic-native-runtime`: feature unification turns on `skippy-ffi`'s
-`dynamic-runtime`, whose build script returns early. The `mesh-llm-system`
-gates then run without a native build:
+The `mesh-llm-system` gates, with the device code enabled:
 
 ```powershell
 cargo test --locked -p mesh-llm-system --lib --features dynamic-native-runtime
