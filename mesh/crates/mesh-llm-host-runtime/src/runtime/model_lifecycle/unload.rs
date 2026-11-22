@@ -343,6 +343,9 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     ctx.node.unregister_runtime_instance_lifecycle(port);
     remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
     handle.shutdown().await;
+    if let Some(service) = ctx.node.native_model_lifecycle.get() {
+        service.record_unloaded(&unload.instance_id);
+    }
     // Native/process-supervision reconciliation: a racing exit-watcher event
     // may have already marked this instance Failed before this orderly
     // unload reached here. Read the state BEFORE the Stopped transition
@@ -452,6 +455,9 @@ pub(crate) async fn run_auto_handle_runtime_exit(
         }
         remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
         handle.shutdown().await;
+        if let Some(service) = ctx.node.native_model_lifecycle.get() {
+            service.record_unloaded(&instance_id);
+        }
         drop(capacity_reservation);
         unregister_local_source_policy_if_unused(ctx, &model, &profile);
     }

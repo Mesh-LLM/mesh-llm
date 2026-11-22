@@ -137,23 +137,6 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
 
     let plugin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let plugin_addr = plugin_listener.local_addr().unwrap();
-    let unloaded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let unloaded_check = unloaded.clone();
-
-    let plugin_task = tokio::spawn(async move {
-        let (mut stream, _) = plugin_listener.accept().await.unwrap();
-        assert!(
-            unloaded_check.load(std::sync::atomic::Ordering::SeqCst),
-            "plugin endpoint must not receive request until native model unload finishes"
-        );
-        let _req = proxy::read_http_request(&mut stream).await.unwrap();
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
-            )
-            .await
-            .unwrap();
-    });
 
     let dispatch_node = node.clone();
     let dispatch =
@@ -171,8 +154,20 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
         panic!("expected unload intent");
     };
     assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
+
+    // Keep unload completion unsent and confirm dispatch has not connected to
+    // the plugin listener while the native model is still unloading.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            plugin_listener.accept()
+        )
+        .await
+        .is_err(),
+        "plugin endpoint must not receive a connection before unload completes"
+    );
+
     targets_tx.send_modify(|t| t.targets.clear());
-    unloaded.store(true, std::sync::atomic::Ordering::SeqCst);
     completion
         .send(Ok(RuntimeUnloadResponse {
             model: NATIVE_MODEL.into(),
@@ -181,8 +176,20 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
         }))
         .unwrap();
 
+    let (mut stream, _) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), plugin_listener.accept())
+            .await
+            .expect("dispatch should connect to plugin after unload completes")
+            .unwrap();
+    let _req = proxy::read_http_request(&mut stream).await.unwrap();
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+        )
+        .await
+        .unwrap();
+
     let (response, outcome) = dispatch.await.unwrap();
-    plugin_task.await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert_responded_status(outcome, 200);
     node.endpoint.close().await;

@@ -381,6 +381,27 @@ mod requests {
     }
 
     #[tokio::test]
+    async fn record_unloaded_clears_only_matching_instance_and_allows_subsequent_handoff() {
+        let (lifecycle, mut intents, _targets) = fixture(300);
+        lifecycle.record_loaded("test", "runtime-1", "loaded-test", 1234);
+
+        // Teardown of a different instance must not disturb the active record.
+        lifecycle.record_unloaded("runtime-other");
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_some());
+
+        // Teardown of the tracked instance clears the record so exclusive_gpu
+        // handoff does not try to unload a vanished instance.
+        lifecycle.record_unloaded("runtime-1");
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_none());
+
+        let _handoff = lifecycle.acquire_exclusive_gpu_handoff().await.unwrap();
+        assert!(
+            intents.try_recv().is_err(),
+            "exited instance must not trigger a stale unload intent"
+        );
+    }
+
+    #[tokio::test]
     async fn exclusive_gpu_handoff_propagates_unload_failure_without_dropping_instance() {
         let (lifecycle, mut intents, _targets) = fixture(300);
         *lifecycle.models["test"].instance.lock().unwrap() =

@@ -239,9 +239,16 @@ async fn dispatch_cold(
     }
     // Scope the held lease so selected-instance admission reuses it instead of
     // taking a second read lock on the same write-preferring residency gate.
-    // Release it up front if no local candidate remains after scope filtering.
-    let lease = targets
-        .candidates(&execution_model)
+    // Release it up front if no local candidate remains after scope and
+    // workload filtering.
+    let eligible = workload_routing::ingress_candidates(
+        ctx.node,
+        &execution_model,
+        &request.client_path,
+        &targets,
+    )
+    .await;
+    let lease = eligible
         .iter()
         .any(|target| matches!(target, election::InferenceTarget::Local(_)))
         .then_some(lease)

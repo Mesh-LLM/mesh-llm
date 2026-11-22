@@ -251,6 +251,16 @@ impl NativeModelLifecycle {
         }
     }
 
+    /// Clear a tracked residency record once teardown has completed for `instance_id`.
+    pub(crate) fn record_unloaded(&self, instance_id: &str) {
+        for residency in self.models.values() {
+            let mut slot = residency.instance.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.as_ref().is_some_and(|(id, _, _)| id == instance_id) {
+                *slot = None;
+            }
+        }
+    }
+
     async fn acquire_gate_read(
         &self,
         residency: &Residency,
