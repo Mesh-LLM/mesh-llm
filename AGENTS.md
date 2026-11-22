@@ -21,7 +21,7 @@ The canonical repo-local skills live under `.agents/skills/`; the selectable rel
 
 ## Building
 
-Always use `just`. Never build manually. Bare `just` (or `just build`) builds the MeshLLM host and its console. `just release-build` builds the release host. Neither builds an inference runtime.
+Always use `just`. Never build manually. Bare `just` (or `just build`) builds the Skippy runtime from the pinned Skippy commit (into `target/debug/native-runtimes`), then the MeshLLM host and its console; `just mesh` builds the host alone. `just release-build` builds the release host and no runtime.
 
 `cargo check` and `cargo build` do not count as complete product builds: they skip the console, and `cargo check` produces no binary. See `mesh/AGENTS.md` for packaging commands and `CONTRIBUTING.md` for the full workflow.
 

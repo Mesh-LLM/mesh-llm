@@ -1,5 +1,5 @@
-# Build only the backend-neutral MeshLLM host and its console. The complete
-# default build runs Skippy first, but this product can be rebuilt on its own.
+# Build only the backend-neutral MeshLLM host and its console. `just build`
+# also builds the Skippy runtime first; this rebuilds the host on its own.
 [unix]
 mesh profile="debug":
     @scripts/build-host.sh --profile "{{ profile }}"

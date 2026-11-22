@@ -33,25 +33,36 @@ with-lld *COMMAND:
     exit $LASTEXITCODE
 
 
-# Build the MeshLLM host and console. Skippy is external: link a checkout with
-# scripts/skippy-source.sh and supply its packaged runtime at run time.
+# Build everything needed to run a model from source, as before Skippy moved
+# out: the Skippy runtime, from the Skippy commit pinned in Cargo.toml, then
+# the MeshLLM host and console. The host finds the runtime beside it.
+#   just build                               backend detected for this machine
+#   just build backend=cpu
+#   just build backend=cuda cuda_arch='120;86'
+#   just build backend=rocm rocm_arch='gfx942;gfx90a'
+#   just build backend=vulkan
+# `just mesh` builds the host alone. Windows needs Git Bash for the runtime.
 [unix]
-build:
+build backend="" cuda_arch="" rocm_arch="": (runtime "debug" backend cuda_arch rocm_arch)
     @scripts/build-host.sh --profile debug
 
 # Fast local iteration build.
 [unix]
-build-dev:
+build-dev backend="" cuda_arch="" rocm_arch="": (runtime "dev" backend cuda_arch rocm_arch)
     @scripts/build-host.sh --profile dev
 
 [windows]
-build:
+build backend="" cuda_arch="" rocm_arch="": (runtime "debug" backend cuda_arch rocm_arch)
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
 # Fast local iteration build.
 [windows]
-build-dev:
+build-dev backend="" cuda_arch="" rocm_arch="": (runtime "dev" backend cuda_arch rocm_arch)
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile dev
+
+# Build only the Skippy runtime, into target/<profile>/native-runtimes.
+runtime profile="debug" backend="" cuda_arch="" rocm_arch="":
+    @bash scripts/build-skippy-runtime.sh --profile "{{ profile }}" --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Build the installable host-private OpenAI lifecycle observer exemplar.
 build-openai-exchange-exemplar message_format="human":

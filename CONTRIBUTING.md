@@ -48,19 +48,27 @@ LLVM.LLVM`.
 
 ## Build from source
 
-Build the MeshLLM host and console:
+Build the Skippy runtime, then the MeshLLM host and console:
 
 ```bash
 just
 ```
 
-This produces `target/debug/mesh-llm`. `just build` is the same thing, and
+This produces `target/debug/mesh-llm` and `target/debug/native-runtimes`. `just build` is the same thing, and
 `just build-dev` is a faster build for local iteration.
 
-The build does not produce an inference runtime. MeshLLM builds against the
-Skippy revision pinned in `Cargo.toml` and loads a packaged Skippy runtime at
-run time: one it downloads, or one you built from a Skippy checkout with
-Skippy's `scripts/package-native-runtime.sh`.
+`just build` also builds the inference runtime from source. It fetches the
+Skippy revision pinned in `Cargo.toml` into `.deps/skippy`, builds Skippy's
+native runtime for this machine, and puts it in `target/debug/native-runtimes`,
+where the host finds it with no settings. The backend is detected (Metal on
+macOS; CUDA, ROCm or Vulkan on Linux when their tools are installed; otherwise
+CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. A runtime
+already built from the same pin and backend is reused. `just mesh` rebuilds the
+host alone, and `just runtime` the runtime alone. On Windows the runtime step
+needs Git Bash.
+
+MeshLLM itself never links llama.cpp: it loads that packaged runtime at run
+time, or one it downloads from a Skippy release.
 
 For work that spans both repositories, point the build at a local Skippy
 checkout, and go back to the pin when done:

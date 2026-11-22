@@ -23,10 +23,12 @@ same Skippy serving implementation.
 
 This repository holds Mesh only: the host, console, website and SDKs. It uses
 the Skippy crates as Git dependencies pinned in the root `Cargo.toml`, and loads
-Skippy's native runtime at run time instead of building it here.
+Skippy's native runtime at run time instead of linking it.
 
-Bare `just` (or `just build`) builds the MeshLLM host and console. A native
-runtime can be supplied with `--runtime-bundle`. See
+Bare `just` (or `just build`) builds everything needed to run a model from
+source: it fetches the pinned Skippy commit, builds its native runtime for this
+machine, then builds the MeshLLM host and console. Another runtime can be
+supplied with `--runtime-bundle`. See
 [Skippy configuration](https://github.com/Mesh-LLM/skippy/blob/main/docs/CONFIGURATION.md)
 and [split serving](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md).
 

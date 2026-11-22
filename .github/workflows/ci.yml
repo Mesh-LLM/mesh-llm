@@ -161,7 +161,8 @@ jobs:
       - name: Build MeshLLM
         env:
           MESH_LLM_SKIP_UI: "1"
-        run: just build
+        # Host only: the runtime was built or restored above.
+        run: just mesh
 
       - name: Run inference
         run: just smoke skippy-runtime smoke-model.gguf
