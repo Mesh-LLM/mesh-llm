@@ -55,6 +55,12 @@ Two more things stop a release before it publishes:
 
 ## Dispatch
 
+Merge a pull request that sets the new version first (run
+`scripts/release-version.sh v0.81.0` and commit the result), as for 0.79.0 and
+0.80.0. The rules on `main` require a pull request, and the workflow's token
+may not bypass them, so the workflow cannot push the version commit itself.
+With the version already on `main` it has nothing to commit and carries on.
+
 ```bash
 just release v0.81.0            # real release, from main
 just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes and publishes nothing
@@ -65,7 +71,8 @@ just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes
 
 1. **Prepares the source.** It sets the version with
    `scripts/release-version.sh`, commits `<tag>: prepare release source`, and
-   pushes it to `main`. A canary leaves `main` alone.
+   pushes it to `main`. After the version pull request above there is nothing
+   to commit. A canary leaves `main` alone.
 2. **Builds each platform.** It downloads that platform's default runtime with
    MeshLLM's own installer, builds the host with `just release-build`, signs
    and packages it with `just release-bundle`, then unpacks the archive it will
