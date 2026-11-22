@@ -1,7 +1,7 @@
 use super::{
-    health_probe_client_builder, is_loopback_host,
-    probe_openai_compatible_http_endpoint_for_protocol,
+    build_health_probe_client, is_loopback_host, probe_openai_compatible_http_endpoint_for_protocol,
 };
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
@@ -13,6 +13,7 @@ fn is_loopback_host_classifies_loopback_and_remote_urls() {
     for url in [
         "http://127.0.0.1:8000/v1/models",
         "http://[::1]:8000/v1/models",
+        "http://[::ffff:127.0.0.1]:8000/v1/models",
         "http://localhost:8000/v1/models",
         "http://LOCALHOST.:8000/v1/models",
     ] {
@@ -23,6 +24,7 @@ fn is_loopback_host_classifies_loopback_and_remote_urls() {
     }
     for url in [
         "http://192.0.2.1:8000/v1/models",
+        "http://[::ffff:192.0.2.1]:8000/v1/models",
         "http://plugin.internal:8000/v1/models",
         "https://api.example.com/v1/models",
     ] {
@@ -84,11 +86,16 @@ async fn probe_http_endpoint_without_ca_bundle_child() {
         return;
     }
 
-    // Non-loopback plain HTTP must also build without system CA certificates.
+    // Non-loopback plain HTTP falls back when no system CA certificates exist.
+    #[cfg(target_os = "linux")]
+    assert!(
+        reqwest::Client::builder().build().is_err(),
+        "child environment should lack system CA certificates on Linux"
+    );
     let remote_http = Url::parse("http://192.0.2.1:8000/v1/models").expect("parse remote http url");
     assert!(
-        health_probe_client_builder(&remote_http).build().is_ok(),
-        "non-loopback plain-HTTP probe client should build without CA certs"
+        build_health_probe_client(&remote_http, Duration::from_secs(3)).is_ok(),
+        "non-loopback plain-HTTP probe client should fall back cleanly without CA certs"
     );
 
     let listener = TcpListener::bind("127.0.0.1:0")

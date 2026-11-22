@@ -387,7 +387,9 @@ async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthR
 fn is_loopback_host(url: &Url) -> bool {
     match url.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
         Some(url::Host::Domain(host)) => {
             host.trim_end_matches('.').eq_ignore_ascii_case("localhost")
         }
@@ -395,19 +397,31 @@ fn is_loopback_host(url: &Url) -> bool {
     }
 }
 
-/// Plain-HTTP probes never talk TLS, so skip loading system CA certificates;
-/// loopback probes also bypass proxy settings and redirects, matching
-/// `network::local_http::local_http_client`.
-fn health_probe_client_builder(url: &Url) -> reqwest::ClientBuilder {
+/// Build an HTTP client for plugin endpoint health probes.
+///
+/// Loopback `http://` probes reuse `local_http_client_builder()` (no TLS roots,
+/// no proxy, no redirects). Non-loopback `http://` probes try the default
+/// builder first so system roots stay available for HTTPS proxies and redirects,
+/// falling back to `tls_certs_only([])` when the host has no CA bundle.
+fn build_health_probe_client(
+    url: &Url,
+    timeout: std::time::Duration,
+) -> Result<reqwest::Client, reqwest::Error> {
     if url.scheme() == "http" {
         if is_loopback_host(url) {
-            mesh_llm_system::local_http::local_http_client_builder()
-        } else {
-            reqwest::Client::builder().tls_certs_only([])
+            return mesh_llm_system::local_http::local_http_client_builder()
+                .timeout(timeout)
+                .build();
         }
-    } else {
-        reqwest::Client::builder()
+        if let Ok(client) = reqwest::Client::builder().timeout(timeout).build() {
+            return Ok(client);
+        }
+        return reqwest::Client::builder()
+            .tls_certs_only([])
+            .timeout(timeout)
+            .build();
     }
+    reqwest::Client::builder().timeout(timeout).build()
 }
 
 async fn probe_openai_compatible_http_endpoint_for_protocol(
@@ -426,10 +440,7 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
         }
     };
 
-    let client = match health_probe_client_builder(&models_url)
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-    {
+    let client = match build_health_probe_client(&models_url, std::time::Duration::from_secs(3)) {
         Ok(client) => client,
         Err(err) => {
             return EndpointHealthRecord {
