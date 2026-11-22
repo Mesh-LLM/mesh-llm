@@ -1110,6 +1110,7 @@ gpu_id = "pci:0000:65:00.0"
             source_runtime,
             include_str!("managed_models.rs"),
             include_str!("openai_exchange.rs"),
+            include_str!("model/request_tiers.rs"),
         ];
         let occurrences = [
             ("MeshConfig", 1usize),
@@ -1142,8 +1143,10 @@ gpu_id = "pci:0000:65:00.0"
             ("LoggingConfig", 1),
             ("LoggingArtifactConfig", 1),
             ("LoggingWebhookConfig", 1),
+            ("RequestTiersConfig", 1),
         ];
         let nested = [
+            "RequestTiersConfig",
             "GpuConfig",
             "MeshRequirementsConfig",
             "OwnerControlConfig",

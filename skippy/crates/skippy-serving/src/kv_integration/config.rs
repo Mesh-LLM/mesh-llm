@@ -19,30 +19,25 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
-use super::cache_payload::{durable_cache_payload, effective_cache_payload};
+use super::{
+    cache_payload::{durable_cache_payload, effective_cache_payload},
+    exact_state::exact_state_admission_total_for_lanes,
+};
 
 pub(super) mod durable_spill;
 mod exact_state_limits;
+mod exact_state_retention;
 mod resident_policy;
 mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 use exact_state_limits::exact_state_byte_limits;
+use exact_state_retention::enforce_exact_state_limits;
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
 const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
-
-// Exact-state snapshots are indivisible and carry architecture-specific state
-// (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
-// cannot see, because that estimate is derived from attention KV metadata
-// alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
-// many snapshots (subject to the configured entry limit) before the soft cap
-// evicts anything: falling to one entry
-// turns the catalog into a single-entry cache, where two concurrent sessions
-// on the same stage evict each other on every request.
-const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
 
 // Operator override for the limit above, in bytes, for workers whose memory
 // headroom does not match the attention-derived estimate. The last indivisible
@@ -221,8 +216,11 @@ impl KvStageIntegration {
         );
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
+        let admission_total_cap = exact_state_admission_total_for_lanes(config.lane_count);
+        // All admitted captures can reach the queue before the recorder receives one.
+        let record_queue_capacity = EXACT_STATE_RECORD_CAPACITY.max(admission_total_cap);
         let (exact_state_record_tx, exact_state_record_rx) =
-            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
+            std::sync::mpsc::sync_channel::<PendingExactStateRecord>(record_queue_capacity);
         let worker_radix = radix.clone();
         let worker_exact_blobs = exact_blobs.clone();
         let worker_l3 = l3.clone();
@@ -391,6 +389,7 @@ impl KvStageIntegration {
             exact_state_records_pending,
             admission_outstanding,
             admission_best_effort_outstanding,
+            admission_total_cap,
             #[cfg(test)]
             exact_state_captures_outstanding: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -744,6 +743,7 @@ fn store_exact_radix_record_with_codec(
         payload,
         extra,
         namespace,
+        retention_priority,
         token_ids,
         l3_fill_claim: _,
         write_through_l3,
@@ -774,7 +774,8 @@ fn store_exact_radix_record_with_codec(
                 payload.clone(),
                 extra.clone(),
                 write_through_l3,
-            ),
+            )
+            .with_retention_priority(retention_priority),
         );
         match insert_result {
             Err(error) => Err(error),
@@ -783,7 +784,9 @@ fn store_exact_radix_record_with_codec(
                     released.push(replaced.payload);
                 }
                 while radix.stats().recurrent_entries > max_entries {
-                    let Some(evicted) = radix.evict_lru_recurrent() else {
+                    let Some(evicted) = radix.evict_lru_superseded_recurrent().or_else(|| {
+                        radix.evict_recurrent_by_retention(RadixExactEntry::retention_priority)
+                    }) else {
                         break;
                     };
                     released.push(evicted.value.payload);
@@ -808,22 +811,7 @@ fn store_exact_radix_record_with_codec(
             payload.release_from(&mut blobs)?;
         }
     }
-    // Exact snapshots are indivisible, and the soft cap is estimated from
-    // attention KV metadata that cannot include architecture-specific
-    // recurrent state, so one snapshot can legitimately exceed it. Hold a small
-    // working set past the soft cap (never more than the configured entry
-    // limit) so concurrent sessions on a stage stop evicting each other, then
-    // apply the hard limit so that allowance stays bounded apart from one
-    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
-    // self-evicts disables exact prefix caching for the stage entirely, which
-    // is the regression this retention policy exists to prevent.
-    evict_exact_entries_over(
-        radix,
-        blobs,
-        limits.soft_bytes,
-        EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
-    )?;
-    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
+    enforce_exact_state_limits(radix, blobs, limits, max_entries, logical_bytes)?;
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
 
@@ -897,50 +885,6 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
             | (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F16)
             | (skippy_runtime::GGML_TYPE_F16, skippy_runtime::GGML_TYPE_F32)
     )
-}
-
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
-fn evict_exact_entries_over(
-    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
-    blobs: &Mutex<CacheBlobStore>,
-    limit_bytes: u64,
-    min_retained_entries: usize,
-) -> Result<()> {
-    if limit_bytes == 0 {
-        return Ok(());
-    }
-    let floor = min_retained_entries.max(1);
-    loop {
-        let over_bytes = blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .physical_bytes()
-            > limit_bytes;
-        let above_floor = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .stats()
-            .recurrent_entries
-            > floor;
-        if !over_bytes || !above_floor {
-            break;
-        }
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
-        let Some(evicted) = evicted else {
-            break;
-        };
-        evicted.value.payload.release_from(
-            &mut blobs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
-    }
-    Ok(())
 }
 
 /// Either kill-switch variable resolving to `off` disables the cache, so an
@@ -1024,12 +968,15 @@ mod tests {
 
     mod cache_admission;
     mod durable_spill;
+    mod exact_state_retention;
+    mod reserved_admission;
     mod runtime_admission;
 
     fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
         ExactStateByteLimits {
             soft_bytes,
             hard_bytes,
+            hard_is_explicit: false,
         }
     }
 
@@ -1053,6 +1000,7 @@ mod tests {
             crate::kv_integration::exact_state::ExactStateAdmissionCredit::acquire(
                 &self.total,
                 &self.best_effort,
+                crate::kv_integration::exact_state::EXACT_STATE_ADMISSION_TOTAL,
                 crate::kv_integration::exact_state::CaptureAdmission::Continuation,
             )
             .expect("a fresh per-test budget must admit")
@@ -1072,6 +1020,7 @@ mod tests {
             payload: skippy_cache::ExactStatePayload::full_state(bytes.to_vec()),
             extra: super::super::ExactStateExtra::default(),
             namespace: "model".to_string(),
+            retention_priority: 0,
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
@@ -1124,6 +1073,7 @@ mod tests {
                 kv_desc: Some(desc),
             },
             namespace: "model".to_string(),
+            retention_priority: 0,
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
@@ -1546,15 +1496,21 @@ mod tests {
     }
 
     #[test]
-    fn exact_working_set_is_bounded_by_the_hard_ceiling() {
+    fn exact_working_set_is_bounded_by_the_retention_floor_not_the_ceiling() {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
         let budget = StorageBudget::new();
 
+        // Six sessions' snapshots against byte limits smaller than one
+        // snapshot, as happens when the attention-derived estimate cannot see
+        // hybrid recurrent state.
         for (page_id, tokens, bytes) in [
-            ("first", [1, 2], b"aaaabbbb"),
-            ("second", [1, 3], b"ccccdddd"),
-            ("third", [1, 4], b"eeeeffff"),
+            ("s1", [1, 2], b"aaaabbbb"),
+            ("s2", [1, 3], b"ccccdddd"),
+            ("s3", [1, 4], b"eeeeffff"),
+            ("s4", [1, 5], b"gggghhhh"),
+            ("s5", [1, 6], b"iiiijjjj"),
+            ("s6", [1, 7], b"kkkkllll"),
         ] {
             store_exact_radix_record(
                 &radix,
@@ -1568,14 +1524,21 @@ mod tests {
             .unwrap();
         }
 
-        // The retention floor yields to the ceiling, leaving the most recent
-        // snapshot rather than an unbounded working set.
+        // The ceiling still bounds the working set above the retention floor:
+        // the two least-recently-used snapshots go. At the floor the ceiling
+        // yields, because collapsing to a single entry made concurrent
+        // sessions evict each other on every request.
         let mut radix = radix.lock().unwrap();
-        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert_eq!(radix.stats().recurrent_entries, 4);
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
         assert!(radix.lookup_recurrent("model", &[1, 3]).is_none());
-        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
-        assert_eq!(blobs.lock().unwrap().physical_bytes(), 8);
+        for tokens in [[1, 4], [1, 5], [1, 6], [1, 7]] {
+            assert!(
+                radix.lookup_recurrent("model", &tokens).is_some(),
+                "the retention floor must keep the newest four sessions"
+            );
+        }
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 32);
     }
 
     #[test]
@@ -1671,462 +1634,5 @@ mod tests {
             retention: Default::default(),
         });
         config
-    }
-}
-
-#[cfg(test)]
-mod reserved_admission_harness {
-    use super::*;
-    use crate::kv_integration::exact_state::{CaptureAdmission, ExactStateAdmissionCredit};
-    use crate::kv_integration::{ExactStateExtra, ExactStateRecordAdmission};
-    use crate::runtime_state::RuntimeState;
-    use skippy_cache::ExactStatePayload;
-    use skippy_protocol::MessageBase;
-    use std::sync::atomic::Ordering as AtomicOrdering;
-
-    const NAMESPACE: &str = "reserved-admission-test";
-    const SESSION: &str = "harness-session";
-    const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-
-    fn harness_config() -> StageConfig {
-        StageConfig {
-            stage_id: "stage-0".to_string(),
-            model_id: NAMESPACE.to_string(),
-            kv_cache: Some(StageKvCacheConfig {
-                exact_max_bytes: None,
-                mode: StageKvCacheMode::LookupRecord,
-                max_entries: 8,
-                max_bytes: 0,
-                l2_max_bytes: 0,
-                codec: skippy_protocol::StageKvCacheCodec::Native,
-                min_tokens: 1,
-                shared_prefix_stride_tokens: 1,
-                shared_prefix_record_limit: 0,
-                prefill_admission: Default::default(),
-                retention: Default::default(),
-            }),
-            ..StageConfig::default()
-        }
-    }
-
-    fn harness() -> (Arc<KvStageIntegration>, StageConfig) {
-        let config = harness_config();
-        let kv = KvStageIntegration::from_test_state(&config, ModelStateKind::Recurrent)
-            .expect("kv integration init")
-            .expect("kv integration must be enabled for LookupRecord/KvRecurrent");
-        (Arc::new(kv), config)
-    }
-
-    fn message_base() -> MessageBase {
-        MessageBase {
-            schema_version: skippy_protocol::SCHEMA_VERSION,
-            run_id: NAMESPACE.to_string(),
-            request_id: "harness-request".to_string(),
-            session_id: SESSION.to_string(),
-            stage_id: "stage-0".to_string(),
-            stage_index: 0,
-            topology_id: NAMESPACE.to_string(),
-            model_id: Some(NAMESPACE.to_string()),
-            tokenizer_id: None,
-            chat_template_id: None,
-            seq: None,
-        }
-    }
-
-    fn identity(
-        kv: &KvStageIntegration,
-        config: &StageConfig,
-        token_ids: &[i32],
-    ) -> crate::kv_integration::PrefillKvIdentity {
-        kv.prefill_identity(config, &message_base(), 0, token_ids)
-    }
-
-    fn record(
-        page_id: &str,
-        token_ids: Vec<i32>,
-        admission_credit: ExactStateAdmissionCredit,
-    ) -> PendingExactStateRecord {
-        PendingExactStateRecord {
-            page_id: page_id.to_string(),
-            payload: ExactStatePayload::full_state(vec![1, 2, 3]),
-            extra: ExactStateExtra::default(),
-            namespace: NAMESPACE.to_string(),
-            token_ids,
-            l3_fill_claim: None,
-            write_through_l3: true,
-            l2_promotion_digest: None,
-            l3_cost: None,
-            admission_credit,
-        }
-    }
-
-    fn acquire(
-        kv: &KvStageIntegration,
-        class: CaptureAdmission,
-    ) -> Option<ExactStateAdmissionCredit> {
-        ExactStateAdmissionCredit::acquire(
-            &kv.admission_outstanding,
-            &kv.admission_best_effort_outstanding,
-            class,
-        )
-    }
-
-    fn outstanding(kv: &KvStageIntegration) -> usize {
-        kv.admission_outstanding.load(AtomicOrdering::Acquire)
-    }
-
-    fn best_effort_outstanding(kv: &KvStageIntegration) -> usize {
-        kv.admission_best_effort_outstanding
-            .load(AtomicOrdering::Acquire)
-    }
-
-    fn stored(kv: &KvStageIntegration, token_ids: &[i32]) -> bool {
-        kv.radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .recurrent_exact(NAMESPACE, token_ids)
-            .is_some()
-    }
-
-    /// Reserved-credit delivery end-to-end under an EXPLICITLY paused
-    /// recorder worker (no radix contention): the BestEffort payload is
-    /// received worker-side and paused BEFORE storage, the Continuation
-    /// payload is actually ENQUEUED behind it, both classes decline overflow,
-    /// and unpausing stores BOTH identities and drains every real credit; the
-    /// budget then admits and stores a recovery record.
-    #[test]
-    fn reserved_credits_deliver_continuation_payloads_and_recover_after_drain() {
-        let (kv, _config) = harness();
-        kv.exact_state_worker_pause
-            .store(true, AtomicOrdering::Release);
-
-        let be1 = acquire(&kv, CaptureAdmission::BestEffort).expect("first BestEffort admitted");
-        assert_eq!(
-            kv.enqueue_exact_state_record(record("be1", vec![1, 2, 3], be1)),
-            ExactStateRecordAdmission::Queued,
-        );
-        kv.wait_for_exact_state_worker_received(1, WAIT)
-            .expect("worker received the BestEffort record before storage");
-        assert_eq!(outstanding(&kv), 1, "credit held by the paused worker");
-        assert!(
-            !stored(&kv, &[1, 2, 3]),
-            "paused worker must not have stored yet"
-        );
-
-        assert!(
-            acquire(&kv, CaptureAdmission::BestEffort).is_none(),
-            "second BestEffort declined at the reserved cap"
-        );
-        assert_eq!(best_effort_outstanding(&kv), 1);
-
-        let pd1 = acquire(&kv, CaptureAdmission::Continuation)
-            .expect("Continuation admitted into the reserved share");
-        assert_eq!(
-            kv.enqueue_exact_state_record(record("pd1", vec![4, 5, 6], pd1)),
-            ExactStateRecordAdmission::Queued,
-            "the Continuation payload must be enqueued, never dropped by the harness"
-        );
-        assert_eq!(outstanding(&kv), 2);
-        assert!(
-            acquire(&kv, CaptureAdmission::Continuation).is_none(),
-            "total budget exhausted"
-        );
-
-        kv.exact_state_worker_pause
-            .store(false, AtomicOrdering::Release);
-        kv.wait_for_exact_state_recording(WAIT)
-            .expect("recorder drained both records without drops or panics");
-        assert_eq!(
-            outstanding(&kv),
-            0,
-            "credits released by real worker completion"
-        );
-        assert_eq!(best_effort_outstanding(&kv), 0);
-        assert!(stored(&kv, &[1, 2, 3]), "BestEffort identity stored");
-        assert!(stored(&kv, &[4, 5, 6]), "Continuation identity stored");
-
-        let recovered =
-            acquire(&kv, CaptureAdmission::Continuation).expect("budget recovers after the drain");
-        assert_eq!(
-            kv.enqueue_exact_state_record(record("recovered", vec![7, 8], recovered)),
-            ExactStateRecordAdmission::Queued,
-        );
-        kv.wait_for_exact_state_recording(WAIT)
-            .expect("recovered record stored");
-        assert_eq!(outstanding(&kv), 0);
-        assert!(stored(&kv, &[7, 8]), "recovered identity stored");
-    }
-
-    /// Unhealthy recorder releases real credits on BOTH release paths: the
-    /// enqueue-level WorkerStopped drop, and the record_exact_state
-    /// try_begin_record decline that happens after acquisition.
-    #[test]
-    fn unhealthy_worker_releases_credits_on_both_release_paths() {
-        let (kv, config) = harness();
-        kv.exact_state_record_worker_healthy
-            .store(false, AtomicOrdering::Release);
-
-        let credit = acquire(&kv, CaptureAdmission::BestEffort)
-            .expect("budget admits before the health gate");
-        assert_eq!(
-            kv.enqueue_exact_state_record(record("stopped", vec![1], credit)),
-            ExactStateRecordAdmission::WorkerStopped,
-        );
-        assert_eq!(
-            outstanding(&kv),
-            0,
-            "enqueue-level WorkerStopped released the real credit"
-        );
-
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        let begin_record = crate::frontend::capture_trace::POST_DECODE_NONE_BEGIN_RECORD
-            .load(AtomicOrdering::Acquire);
-        let result = kv.record_exact_state(
-            &mut runtime,
-            SESSION,
-            &chat_identity,
-            CaptureAdmission::BestEffort,
-        );
-        assert!(
-            matches!(result, Ok(None)),
-            "unhealthy worker must decline recording"
-        );
-        assert_eq!(
-            crate::frontend::capture_trace::POST_DECODE_NONE_BEGIN_RECORD
-                .load(AtomicOrdering::Acquire),
-            begin_record + 1,
-            "the decline happened at try_begin_record, i.e. after acquisition"
-        );
-        assert_eq!(
-            outstanding(&kv),
-            0,
-            "record_exact_state released the credit on the try_begin_record decline"
-        );
-    }
-
-    /// record_exact_state releases its real credit when the radix lock is
-    /// busy: the capture is skipped without waiting and the inflight page is
-    /// released.
-    /// A sliding-window cache can reuse rows below the boundary before the
-    /// session ends, so its stage copies them with the recurrent state.
-    #[test]
-    fn a_sliding_window_stage_does_not_defer_its_kv_copy() {
-        let (kv, _) = harness();
-        assert_eq!(
-            kv.exact_state_payload(),
-            Some(StagePrefixCachePayload::KvRecurrent)
-        );
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        assert!(kv.defers_kv_copy(&mut runtime, SESSION, 3));
-
-        runtime.sliding_window_kv_for_test = true;
-        assert!(!kv.defers_kv_copy(&mut runtime, SESSION, 3));
-    }
-
-    #[test]
-    fn record_exact_state_releases_credit_when_radix_is_busy() {
-        let (kv, config) = harness();
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        let radix_guard = kv.radix.lock().unwrap();
-        let result = kv.record_exact_state(
-            &mut runtime,
-            SESSION,
-            &chat_identity,
-            CaptureAdmission::BestEffort,
-        );
-        drop(radix_guard);
-        assert!(
-            matches!(result, Ok(None)),
-            "busy radix skips without waiting"
-        );
-        assert_eq!(outstanding(&kv), 0, "credit released on the busy skip");
-        assert!(
-            kv.inflight_records.lock().unwrap().is_empty(),
-            "inflight page released on the busy skip"
-        );
-    }
-
-    /// retained_exact_identity requires the EXACT radix node: a retained
-    /// shorter entry must not certify a longer identity, and a longer entry
-    /// must not certify its own prefix.
-    #[test]
-    fn retained_exact_identity_requires_the_exact_radix_node() {
-        let (kv, config) = harness();
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        kv.radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert_recurrent(
-                chat_identity.namespace.clone(),
-                &chat_identity.token_ids,
-                32,
-                RadixExactEntry::new(
-                    "exact".to_string(),
-                    ExactStatePayload::full_state(vec![9]),
-                    ExactStateExtra::default(),
-                    true,
-                ),
-            )
-            .expect("seeding the radix must succeed");
-
-        assert!(
-            kv.retained_exact_identity(&chat_identity.namespace, &[1, 2, 3]),
-            "the exact node is retained"
-        );
-        assert!(
-            !kv.retained_exact_identity(&chat_identity.namespace, &[1, 2]),
-            "a shorter query must not be certified by the longer retained entry"
-        );
-        assert!(
-            !kv.retained_exact_identity(&chat_identity.namespace, &[1, 2, 3, 4]),
-            "a longer identity must not be certified by a retained shorter prefix"
-        );
-        assert!(
-            !kv.retained_exact_identity(&chat_identity.namespace, &[9, 9, 9]),
-            "an unrelated identity is absent"
-        );
-    }
-
-    /// record_exact_state releases its real credit when the identity is
-    /// already recorded.
-    #[test]
-    fn record_exact_state_releases_credit_when_already_recorded() {
-        let (kv, config) = harness();
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        kv.radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert_recurrent(
-                chat_identity.namespace.clone(),
-                &chat_identity.token_ids,
-                32,
-                RadixExactEntry::new(
-                    "pre-existing".to_string(),
-                    ExactStatePayload::full_state(vec![9]),
-                    ExactStateExtra::default(),
-                    true,
-                ),
-            )
-            .expect("pre-seeding the radix must succeed");
-        let result = kv.record_exact_state(
-            &mut runtime,
-            SESSION,
-            &chat_identity,
-            CaptureAdmission::BestEffort,
-        );
-        assert!(
-            matches!(result, Ok(None)),
-            "already-recorded identity skips"
-        );
-        assert_eq!(
-            outstanding(&kv),
-            0,
-            "credit released on the already-recorded skip"
-        );
-        assert!(kv.inflight_records.lock().unwrap().is_empty());
-    }
-
-    fn seed_exact_state(
-        kv: &KvStageIntegration,
-        identity: &crate::kv_integration::PrefillKvIdentity,
-    ) {
-        kv.radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert_recurrent(
-                identity.namespace.clone(),
-                &identity.token_ids,
-                32,
-                RadixExactEntry::new(
-                    "pre-existing".to_string(),
-                    ExactStatePayload::full_state(vec![9]),
-                    ExactStateExtra::default(),
-                    true,
-                ),
-            )
-            .expect("pre-seeding the radix must succeed");
-    }
-
-    fn record_at_session_end(
-        kv: &Arc<KvStageIntegration>,
-        runtime: &mut RuntimeState,
-        identity: &crate::kv_integration::PrefillKvIdentity,
-    ) -> anyhow::Result<crate::kv_integration::SessionEndCapture> {
-        kv.record_exact_state_at_session_end(
-            runtime,
-            SESSION,
-            identity,
-            CaptureAdmission::BestEffort,
-            None,
-            true,
-        )
-    }
-
-    /// A deferred capture of a checkpoint the cache already holds copies
-    /// nothing at registration. (The modelless runtime fails any export, so
-    /// reaching one would return an error.)
-    #[test]
-    fn a_deferred_capture_of_a_cached_checkpoint_skips_at_registration() {
-        let (kv, config) = harness();
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        seed_exact_state(&kv, &chat_identity);
-
-        let captured = record_at_session_end(&kv, &mut runtime, &chat_identity);
-
-        assert!(
-            matches!(
-                captured,
-                Ok(crate::kv_integration::SessionEndCapture::Skipped)
-            ),
-            "{captured:?}"
-        );
-        assert_eq!(outstanding(&kv), 0);
-        assert!(kv.inflight_records.lock().unwrap().is_empty());
-    }
-
-    /// A miss, and a radix too busy to say, both go on to copy the
-    /// recurrent state; session-end admission checks the radix again.
-    #[test]
-    fn a_deferred_capture_goes_ahead_on_a_miss_or_a_busy_radix() {
-        let (kv, config) = harness();
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-
-        assert!(
-            record_at_session_end(&kv, &mut runtime, &chat_identity).is_err(),
-            "a miss reaches the recurrent export"
-        );
-
-        seed_exact_state(&kv, &chat_identity);
-        let radix_guard = kv.radix.lock().unwrap();
-        let captured = record_at_session_end(&kv, &mut runtime, &chat_identity);
-        drop(radix_guard);
-        assert!(
-            captured.is_err(),
-            "a busy radix reaches the recurrent export"
-        );
-        assert_eq!(outstanding(&kv), 0);
-    }
-
-    /// record_exact_state releases its real credit when the payload export
-    /// fails (unknown session here), and nothing is enqueued.
-    #[test]
-    fn record_exact_state_releases_credit_when_export_fails() {
-        let (kv, config) = harness();
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        let chat_identity = identity(&kv, &config, &[1, 2, 3]);
-        let result = kv.record_exact_state(
-            &mut runtime,
-            "missing-session",
-            &chat_identity,
-            CaptureAdmission::BestEffort,
-        );
-        assert!(result.is_err(), "exporting an unknown session must fail");
-        assert_eq!(outstanding(&kv), 0, "credit released when the export fails");
-        assert!(kv.inflight_records.lock().unwrap().is_empty());
     }
 }

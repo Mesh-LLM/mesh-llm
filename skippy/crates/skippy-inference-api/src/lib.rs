@@ -18,6 +18,7 @@ pub mod lifecycle;
 pub mod models;
 pub mod realtime;
 mod request_lifecycle;
+mod request_tier;
 pub mod rerank;
 pub mod responses;
 pub mod router;
@@ -80,6 +81,10 @@ pub use lifecycle::{
     request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
+pub use request_tier::{
+    CACHE_PARTITION_HEADER, InferenceRequestClass, InferenceRequestTier, PRIVATE_CACHE_PARTITION,
+    REQUEST_TIER_HEADER,
+};
 pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};
 pub use responses::{
     NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,

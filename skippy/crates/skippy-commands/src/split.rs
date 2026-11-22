@@ -206,6 +206,7 @@ pub fn run(args: PlanSplitCommand) -> Result<()> {
             upstream: index.checked_sub(1).map(peer),
             downstream: (index + 1 < args.workers.len()).then(|| peer(index + 1)),
             admission: admission.clone(),
+            max_request_tier: None,
         };
         configs.push(stage_load::admitted_stage_config(&load, None, names)?);
     }

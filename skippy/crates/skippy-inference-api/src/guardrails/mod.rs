@@ -322,6 +322,14 @@ impl InferenceBackend for GuardedInferenceBackend {
         self.backend.system_one(request).await
     }
 
+    async fn system_one_with_context(
+        &self,
+        request: SystemOneRequest,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<SystemOneResponse> {
+        self.backend.system_one_with_context(request, context).await
+    }
+
     async fn chat_completion(
         &self,
         request: GenerationRequest,

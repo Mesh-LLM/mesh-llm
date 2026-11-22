@@ -428,6 +428,8 @@ impl EmbeddedServingController {
             prompt_cache_retention: None,
             stream_options: None,
             extra: BTreeMap::new(),
+            // The embedding app's own request.
+            request_class: Default::default(),
         };
         let handle = loaded
             .handle

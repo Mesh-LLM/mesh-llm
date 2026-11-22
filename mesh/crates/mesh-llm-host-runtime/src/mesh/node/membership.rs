@@ -391,6 +391,7 @@ impl Node {
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,
             private_nodes: self.private_nodes.clone(),
+            request_tier_owners: self.request_tier_owners.clone(),
             enumerate_host: config.enumerate_host,
             public_mesh: false,
             // The serving state it shares with this node.

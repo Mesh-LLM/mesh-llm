@@ -11,6 +11,9 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::Instant;
 
+mod hardware_probe;
+pub use hardware_probe::HardwareReport;
+
 /// Whether this process is an internal plugin service rather than something a
 /// person started.
 ///
@@ -199,10 +202,9 @@ fn is_post_update_restart() -> bool {
 ///
 /// Hardware probes shell out to platform tools, so this runs on a blocking
 /// thread and reports whenever it finishes. Startup never waits for it. The
-/// returned handle lets a caller that is about to shut analytics down wait a
-/// bounded time for the report first; dropping it leaves the task running.
-pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn_blocking(|| {
+/// returned owner cancels and joins probes before runtime teardown.
+pub fn report_hardware_profile() -> HardwareReport {
+    HardwareReport::start(|| {
         use mesh_llm_system::hardware::Metric;
 
         // Note the metric *not* requested: `Metric::Hostname` would name the
@@ -215,6 +217,9 @@ pub fn report_hardware_profile() -> tokio::task::JoinHandle<()> {
             Metric::IsSoc,
         ]);
         let profile = skippy_hardware_profile::host_runtime_profile();
+        if skippy_hardware_profile::probe::is_cancelled() {
+            return;
+        }
         let flavors = &profile.available_flavors;
         mesh_llm_analytics::capture(
             Event::HardwareProfile,

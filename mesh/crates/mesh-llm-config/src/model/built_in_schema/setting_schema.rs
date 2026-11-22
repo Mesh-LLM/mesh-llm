@@ -34,6 +34,22 @@ fn private_nodes_setting() -> ConfigSettingSchema {
     setting
 }
 
+/// Read again whenever the config file changes, like `private.nodes`.
+fn request_tier_owners_setting() -> ConfigSettingSchema {
+    let mut setting = basic_setting("request_tiers.owners", ConfigValueSchema::object());
+    setting.apply_mode = ConfigApplyMode::DynamicApply;
+    setting.restart_scope = ConfigRestartScope::None;
+    setting
+}
+
+/// Sizes each model's admission budget when the model loads.
+fn local_kv_reserve_setting() -> ConfigSettingSchema {
+    basic_setting(
+        "request_tiers.local_kv_reserve_percent",
+        ConfigValueSchema::Integer,
+    )
+}
+
 fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];

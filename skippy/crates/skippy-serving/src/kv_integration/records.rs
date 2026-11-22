@@ -11,6 +11,17 @@ pub struct PrefillKvIdentity {
     pub token_ids: Vec<i32>,
 }
 
+impl PrefillKvIdentity {
+    /// Eviction order for entries recorded under this identity: the tier
+    /// priority of the request class its cache namespace was built for.
+    pub fn retention_priority(&self) -> u64 {
+        let namespace = Some(self.identity.chat_template_id.as_str()).filter(|ns| !ns.is_empty());
+        skippy_inference_api::InferenceRequestClass::from_cache_namespace(namespace)
+            .tier()
+            .priority()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LookupBatchOutcome {
     pub pages: Vec<KvPageManifest>,

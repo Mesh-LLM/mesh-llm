@@ -1115,3 +1115,36 @@ async fn scan_timeout_releases_caller_while_reconciliation_finishes() -> Result<
     );
     Ok(())
 }
+
+/// A legacy snapshot has no field for `[private]` or `[request_tiers]`, so
+/// applying one keeps the node's own.
+#[tokio::test]
+async fn a_legacy_snapshot_keeps_the_private_list_and_request_tiers() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("config.toml");
+    let (private_node, owner) = (hex::encode([1u8; 32]), hex::encode([2u8; 32]));
+    std::fs::write(
+        &path,
+        format!(
+            "[private]\nnodes = [\"{private_node}\"]\n\n[request_tiers]\n\
+             local_kv_reserve_percent = 25\n\n[request_tiers.owners]\n\"{owner}\" = \"mesh\"\n"
+        ),
+    )?;
+    *node.config_state.lock().await = crate::runtime::config_state::ConfigState::load(&path)?;
+
+    let mut applied = crate::plugin::MeshConfig::default();
+    node.restore_unsent_settings(
+        &mut applied,
+        &crate::proto::node::NodeConfigSnapshot::default(),
+    )
+    .await;
+
+    assert_eq!(applied.private.nodes, [private_node]);
+    assert_eq!(applied.request_tiers.local_kv_reserve_percent, 25);
+    assert_eq!(
+        applied.request_tiers.owners.get(&owner),
+        Some(&mesh_llm_config::RequestTierName::Mesh)
+    );
+    Ok(())
+}

@@ -20,6 +20,7 @@ mesh-llm-events = { path = "../mesh-llm-events", version = "0.80.0" }
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.80.0" }
 skippy-gpu-bench = { path = "../../../skippy/crates/skippy-gpu-bench", version = "0.80.0"  }
 skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.80.0" }
+skippy-hardware-profile = { path = "../../../skippy/crates/skippy-hardware-profile", version = "0.80.0" }
 mesh-llm-release-footer.workspace = true
 skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.80.0" }
 reqwest = { version = "0.13", features = ["stream", "json", "query"] }

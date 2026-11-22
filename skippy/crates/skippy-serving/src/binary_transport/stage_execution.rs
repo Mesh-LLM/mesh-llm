@@ -449,7 +449,7 @@ pub(in crate::binary_transport) fn binary_message_base(
         topology_id: config.topology_id.clone(),
         model_id: Some(config.model_id.clone()),
         tokenizer_id: None,
-        chat_template_id: None,
+        chat_template_id: crate::stage_request_class::stage_cache_namespace(config, message.state),
         seq: Some(message.state.seq_id.max(0) as u64),
     }
 }

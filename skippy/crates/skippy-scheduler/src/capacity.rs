@@ -7,6 +7,10 @@ pub struct EvictableCacheEntry {
     pub units: u64,
     pub recompute_cost: u64,
     pub last_used: u64,
+    /// Entries with a lower retention priority are evicted first, before
+    /// recompute value is considered. Serving uses the request tier's
+    /// priority, so mesh entries go before trusted ones and those before local.
+    pub retention_priority: u64,
 }
 
 /// Current occupancy for one independently constrained memory component.
@@ -144,9 +148,13 @@ pub fn rank_eviction_candidates(entries: &mut [EvictableCacheEntry]) {
 fn compare_eviction_value(left: &EvictableCacheEntry, right: &EvictableCacheEntry) -> Ordering {
     let left_units = left.units.max(1);
     let right_units = right.units.max(1);
-    u128::from(left.recompute_cost)
-        .saturating_mul(u128::from(right_units))
-        .cmp(&u128::from(right.recompute_cost).saturating_mul(u128::from(left_units)))
+    left.retention_priority
+        .cmp(&right.retention_priority)
+        .then_with(|| {
+            u128::from(left.recompute_cost)
+                .saturating_mul(u128::from(right_units))
+                .cmp(&u128::from(right.recompute_cost).saturating_mul(u128::from(left_units)))
+        })
         .then_with(|| left.last_used.cmp(&right.last_used))
         .then_with(|| left.recompute_cost.cmp(&right.recompute_cost))
         .then_with(|| left.id.cmp(&right.id))
@@ -162,6 +170,7 @@ mod tests {
             units,
             recompute_cost,
             last_used,
+            retention_priority: 0,
         }
     }
 
@@ -253,6 +262,27 @@ mod tests {
         assert!(!plan.admitted);
         assert_eq!(plan.admission_deficit_units, 1);
         assert!(plan.victim_ids.is_empty());
+    }
+
+    #[test]
+    fn evicts_lower_retention_priority_before_cheaper_entries() {
+        let mut entries = vec![
+            EvictableCacheEntry {
+                retention_priority: 2,
+                ..entry("local-cheap", 30, 1, 1)
+            },
+            entry("mesh-expensive", 30, 300, 2),
+            EvictableCacheEntry {
+                retention_priority: 1,
+                ..entry("trusted-cheap", 30, 1, 0)
+            },
+        ];
+        rank_eviction_candidates(&mut entries);
+        let order = entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(order, ["mesh-expensive", "trusted-cheap", "local-cheap"]);
     }
 
     #[test]

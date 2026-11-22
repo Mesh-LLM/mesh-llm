@@ -120,6 +120,7 @@ fn identity_test_load_request() -> crate::inference::skippy::StageLoadRequest {
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
         }),
+        max_request_tier: None,
     }
 }
 

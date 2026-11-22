@@ -1525,6 +1525,27 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+Exhaustive coverage does not force hosted placement. The planner keeps
+`runner_contract_required` true for main/manual-full diagnostics and derives
+`hosted_runner_required` from actual `ci-control` or `runner-infra` changes,
+including the `__force_all__` fallback for unavailable change information.
+All five lanes force hosted unless that placement signal is boolean false.
+Manual-full compares the controller's resolved first-parent base and immutable
+source, retaining hosted fallback when the comparison cannot be completed.
+Its profile still selects every diagnostic slice and matrix row.
+
+This restores reachability under existing gates. When `DEPOT_RUNNERS_ENABLED`
+is already the exact string `true`, eligible trusted-main jobs select Depot as
+soon as this change reaches main, with no further administrator action. When
+the gate is unset or false, an administrator enables it, or explicitly selects
+`use_depot=true` on the manual controller for its existing supported calls.
+Activation is separate from #2789's live qualification, which measures each
+role against hosted and verifies the rollback. Unset/false gates with no
+manual opt-in remain hosted. No repository variable, runner group, Depot setting,
+PR exception deadline, cache permission or provider allowlist changes here.
+The Linux CPU runtime cache producer remains hosted even when other eligible
+Linux jobs select Depot. Live qualification belongs to #2789.
+
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
 gate checks freshness. Hosted version 2 keys bind the actual hosted image as
@@ -1816,6 +1837,7 @@ The implemented policy uses that isolation selectively:
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `mesh/website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
+| Kotlin SDK Gradle downloads | Restore-only for PRs; the Kotlin smoke row of a trusted `main` run saves an exact `mesh-llm-kotlin-sdk-gradle-v1` key (OS/arch, Gradle wrapper properties, example build/settings scripts, cache-version) on a miss | A warm restore makes no Maven Central or plugin-portal requests; a cold run that gets HTTP 429 retries `gradlew run` once after 60 s, and every other failure fails immediately |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
 On a restore-key (partial) hit, `Swatinem/rust-cache` cleans the restored

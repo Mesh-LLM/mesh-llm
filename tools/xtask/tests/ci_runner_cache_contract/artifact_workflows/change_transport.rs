@@ -46,6 +46,86 @@ fn command(f: &support::Fixture, source: &str) -> Command {
 }
 
 #[test]
+fn manual_full_preserves_comparison_paths_and_unknown_diff_stays_conservative() {
+    let action = support::action("compute-changes");
+    let super::Node::Seq(steps) = action.get("runs").unwrap().get("steps").unwrap() else {
+        panic!("steps")
+    };
+    let files = steps
+        .iter()
+        .find(|step| step.get("id").and_then(Node::text) == Some("files"))
+        .unwrap();
+    for (base, git_failure, expected) in [
+        (
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "",
+            "README.md\n",
+        ),
+        ("", "", "__force_all__\n"),
+        (
+            "0000000000000000000000000000000000000000",
+            "",
+            "__force_all__\n",
+        ),
+        (
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cat-file",
+            "__force_all__\n",
+        ),
+        (
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "diff",
+            "__force_all__\n",
+        ),
+    ] {
+        let f = fixture();
+        f.executable(
+            "git",
+            r#"
+if [[ "$1" == "$GIT_FAILURE" ]]; then exit 1; fi
+case "$1" in
+  cat-file) exit 0 ;;
+  diff) printf 'README.md\n' ;;
+  *) exit 90 ;;
+esac"#,
+        );
+        let path = f.path().join("changed.txt");
+        let source = files
+            .get("run")
+            .and_then(Node::text)
+            .unwrap()
+            .replace("${{ inputs.event_name }}", "workflow_dispatch")
+            .replace("${{ inputs.base_sha }}", base)
+            .replace(
+                "${{ inputs.head_sha }}",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .replace("/tmp/changed_files.txt", &format!("\"{}\"", path.display()));
+        let mut collect = command(&f, &source);
+        collect.env("GIT_FAILURE", git_failure);
+        let output = f.run(collect);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        f.executable("automation", r#"
+/bin/cat > planner-input.json
+jq -e '.profile == "manual-full" and .event_name == "workflow_dispatch"' planner-input.json >/dev/null
+/bin/cat golden.json"#);
+        let (_, source) = plan_source();
+        let source = source.replace("/tmp/changed_files.txt", &format!("\"{}\"", path.display()));
+        let mut project = command(&f, &source);
+        project
+            .env("EVENT_NAME", "workflow_dispatch")
+            .env("BASE_SHA", base);
+        let output = f.run(project);
+        assert!(output.status.success(), "{output:?}");
+        let input: serde_json::Value =
+            serde_json::from_slice(&fs::read(f.path().join("planner-input.json")).unwrap())
+                .unwrap();
+        assert_eq!(input["changed_files"], serde_json::json!([expected.trim()]));
+    }
+}
+
+#[test]
 fn artifact_plan_large_file_input_survives_without_bulk_argv_or_environment() {
     let (plan, source) = plan_source();
     assert!(plan.get("env").unwrap().get("CHANGED_FILES").is_none());

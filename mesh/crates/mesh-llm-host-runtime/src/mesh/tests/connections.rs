@@ -332,6 +332,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         upstream: None,
         downstream: None,
+        max_request_tier: None,
     }
 }
 
@@ -470,6 +471,7 @@ async fn make_configured_test_node(
         trust_store: Arc::new(Mutex::new(TrustStore::default())),
         trust_policy: TrustPolicy::Off,
         private_nodes: Default::default(),
+        request_tier_owners: Default::default(),
         enumerate_host: false,
         gpu_name: None,
         hostname: None,

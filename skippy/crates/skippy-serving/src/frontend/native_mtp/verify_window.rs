@@ -140,6 +140,7 @@ impl StageOpenAiBackend {
             tokens: &verify_inputs,
             sampling: wire_sampling.clone(),
             native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+            request_class: request.ids.request_class(),
         })?;
         message.state.set_split_dflash(request.split_dflash());
         message

@@ -24,6 +24,38 @@ use crate::*;
 use anyhow::Result;
 use skippy_native_runtime::{NativeRuntimeBackendKind, RuntimeSelection};
 
+/// `[request_tiers]`: owner keys must be owner ids, each named once, and the
+/// reserve a percentage.
+fn validate_request_tiers_config(request_tiers: &RequestTiersConfig) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if let Some(owner) = request_tiers.invalid_owner() {
+        diagnostics.push(validation_diagnostic(
+            "request_tiers.owners",
+            format!(
+                "request_tiers.owners key {owner:?} is not an owner id (64 hex characters, as `mesh-llm auth status` prints it)"
+            ),
+        ));
+    }
+    if let Some(owner) = request_tiers.repeated_owner() {
+        diagnostics.push(validation_diagnostic(
+            "request_tiers.owners",
+            format!(
+                "request_tiers.owners names owner {owner:?} more than once (owner ids are not case-sensitive)"
+            ),
+        ));
+    }
+    if request_tiers.local_kv_reserve_percent > 100 {
+        diagnostics.push(validation_diagnostic(
+            "request_tiers.local_kv_reserve_percent",
+            format!(
+                "request_tiers.local_kv_reserve_percent must be between 0 and 100, got {}",
+                request_tiers.local_kv_reserve_percent
+            ),
+        ));
+    }
+    diagnostics
+}
+
 pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -98,6 +130,7 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
             ),
         ));
     }
+    diagnostics.extend(validate_request_tiers_config(&config.request_tiers));
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }

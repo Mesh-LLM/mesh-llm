@@ -8,9 +8,7 @@ use crate::frontend::generation::{
 use crate::frontend::iteration_scheduler::readout::ReadoutIteration;
 use crate::frontend::util::openai_io_error;
 use crate::frontend::wire_messages::{OpenAiPrefillChunk, embedded_prefill_message};
-use skippy_protocol::binary::{
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
-};
+use skippy_protocol::binary::{StageStateHeader, WireMessageKind, WireReplyKind, recv_reply};
 use std::net::Shutdown;
 
 pub(super) struct DecisionSequence<'a> {
@@ -184,11 +182,16 @@ impl<'a> DecisionSequence<'a> {
             tokens,
             request_id: self.ids.request_id,
             session_id: self.ids.session_id,
+            request_class: self.ids.request_class(),
         })?;
         message.kind = WireMessageKind::PrefillReadout;
         message.state = StageStateHeader::new(message.kind);
         message.state.prompt_token_count = i32::try_from(self.prompt_tokens)
             .map_err(|_| InferenceError::invalid_request("decision prompt exceeds wire bounds"))?;
+        crate::stage_request_class::stamp_request_class(
+            &mut message.state,
+            self.ids.request_class(),
+        );
         message.readout_tokens = selected.to_vec();
         let forwarded = forwarded_stage_message(config, &message, activation, *activation_width)
             .map_err(openai_backend_error)?;
@@ -210,8 +213,11 @@ impl<'a> DecisionSequence<'a> {
     /// Close the sequence's downstream connection and remove local session state.
     fn close(&mut self) -> InferenceResult<()> {
         if let Some((pool, mut lane)) = self.lane.take() {
-            let stop =
-                StageWireMessage::stop_with_identity(self.ids.request_id, self.ids.session_id);
+            let stop = crate::frontend::wire_messages::stop_message(
+                self.ids.request_id,
+                self.ids.session_id,
+                self.ids.request_class(),
+            );
             skippy_protocol::binary::write_stage_message(&mut lane.stream, &stop)
                 .map_err(openai_io_error)?;
             let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;

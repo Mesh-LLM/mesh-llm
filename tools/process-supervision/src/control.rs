@@ -11,6 +11,10 @@ mod tests;
 #[path = "stop_tests.rs"]
 mod stop_tests;
 
+#[cfg(all(test, unix))]
+#[path = "pre_force_tests.rs"]
+mod pre_force_tests;
+
 pub(super) const POLL: Duration = Duration::from_millis(5);
 
 pub(super) trait Leader {
@@ -18,6 +22,7 @@ pub(super) trait Leader {
 }
 
 pub(super) trait Tree: Leader {
+    fn pre_force(&mut self) -> super::PreForceObservation;
     fn active(&mut self) -> Result<bool, Failure>;
     fn graceful(&mut self) -> Result<(), Failure>;
     fn force(&mut self) -> Result<(), Failure>;
@@ -73,11 +78,12 @@ fn shutdown_owned(
             cleanup.forced = true;
         }
     }
-    if cleanup.forced
-        && let Err(error) = tree.force()
-    {
-        cleanup.failure = Some(error);
-        return (cleanup, None, request);
+    if cleanup.forced {
+        cleanup.pre_force = Some(Box::new(tree.pre_force()));
+        if let Err(error) = tree.force() {
+            cleanup.failure = Some(error);
+            return (cleanup, None, request);
+        }
     }
     let until = Instant::now() + limits.forced_shutdown;
     match wait_empty(tree, until, &mut drain) {
@@ -157,6 +163,9 @@ impl Leader for super::platform::OwnedChild {
 }
 
 impl Tree for super::platform::OwnedChild {
+    fn pre_force(&mut self) -> super::PreForceObservation {
+        self.pre_force()
+    }
     fn active(&mut self) -> Result<bool, Failure> {
         self.active()
     }

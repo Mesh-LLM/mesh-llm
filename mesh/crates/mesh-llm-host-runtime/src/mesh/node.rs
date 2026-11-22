@@ -204,6 +204,8 @@ pub struct Node {
     pub(crate) trust_policy: TrustPolicy,
     /// Nodes besides this one that may serve its private requests.
     pub(crate) private_nodes: super::private_nodes::PrivateNodes,
+    /// Per-owner overrides of the tier this node serves requests at.
+    pub(crate) request_tier_owners: super::request_tier::RequestTierOwners,
     pub enumerate_host: bool,
     pub gpu_name: Option<String>,
     pub hostname: Option<String>,
@@ -822,6 +824,7 @@ impl Node {
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
             private_nodes: Default::default(),
+            request_tier_owners: Default::default(),
             enumerate_host: false,
             gpu_name: None,
             hostname: None,

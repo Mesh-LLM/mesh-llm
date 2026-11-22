@@ -9,6 +9,7 @@ use skippy_inference_api::{
     PrefillHookSignals, chat_skippy_hooks_enabled, first_chat_media, generation::GenerationRequest,
 };
 
+use crate::mesh::request_tier::with_request_tier;
 use crate::{inference::virtual_llm, mesh};
 
 const PREFILL_ENTROPY_THRESHOLD: f64 = 3.0;
@@ -39,13 +40,21 @@ impl MeshAutoHookPolicy {
     }
 }
 
+/// Whether a request may start hook consultations. A private request never
+/// does: the server runs outside the request's private scope, so a
+/// consultation would pick peers unscoped. Its class comes from a header
+/// only the node sets, so a body cannot turn hooks back on.
+fn mesh_hooks_allowed(request: &GenerationRequest) -> bool {
+    chat_skippy_hooks_enabled(request) && !request.request_class.is_private()
+}
+
 #[async_trait]
 impl InferenceHookPolicy for MeshAutoHookPolicy {
     async fn before_chat_completion(
         &self,
         request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
-        if !chat_skippy_hooks_enabled(request) {
+        if !mesh_hooks_allowed(request) {
             return Ok(ChatHookOutcome::none());
         }
 
@@ -58,10 +67,12 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
         };
 
         let trigger = media_trigger(media.kind);
-        let response = self
-            .executor
-            .handle_image(trigger, &request.model, &media.url, &media.user_text)
-            .await;
+        let response = with_request_tier(
+            request.request_class.tier(),
+            self.executor
+                .handle_image(trigger, &request.model, &media.url, &media.user_text),
+        )
+        .await;
         Ok(virtual_media_hook_response_to_outcome(&response, media))
     }
 
@@ -70,7 +81,7 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
         request: &mut GenerationRequest,
         signals: PrefillHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
-        if !chat_skippy_hooks_enabled(request) {
+        if !mesh_hooks_allowed(request) {
             return Ok(ChatHookOutcome::none());
         }
 
@@ -85,15 +96,16 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
         }
 
         let messages = chat_messages_as_values(&request.messages);
-        let response = self
-            .executor
-            .handle_uncertain(
+        let response = with_request_tier(
+            request.request_class.tier(),
+            self.executor.handle_uncertain(
                 &request.model,
                 &messages,
                 signals.first_token_entropy,
                 signals.first_token_margin,
-            )
-            .await;
+            ),
+        )
+        .await;
         Ok(virtual_hook_response_to_outcome(&response))
     }
 
@@ -102,7 +114,7 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
         request: &mut GenerationRequest,
         signals: GenerationHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
-        if !chat_skippy_hooks_enabled(request) {
+        if !mesh_hooks_allowed(request) {
             return Ok(ChatHookOutcome::none());
         }
 
@@ -117,10 +129,12 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
         }
 
         let messages = chat_messages_as_values(&request.messages);
-        let response = self
-            .executor
-            .handle_drift(&request.model, &messages, signals.n_decoded)
-            .await;
+        let response = with_request_tier(
+            request.request_class.tier(),
+            self.executor
+                .handle_drift(&request.model, &messages, signals.n_decoded),
+        )
+        .await;
         Ok(virtual_hook_response_to_outcome(&response))
     }
 
@@ -371,11 +385,20 @@ mod tests {
     #[derive(Default)]
     struct RecordingHookExecutor {
         calls: Mutex<Vec<RecordedHookCall>>,
+        /// The tier each call ran at.
+        tiers: Mutex<Vec<skippy_inference_api::InferenceRequestTier>>,
     }
 
     impl RecordingHookExecutor {
         fn calls(&self) -> Vec<RecordedHookCall> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn record_tier(&self) {
+            self.tiers
+                .lock()
+                .unwrap()
+                .push(crate::mesh::request_tier::current_request_tier());
         }
     }
 
@@ -388,6 +411,7 @@ mod tests {
             media_url: &str,
             user_text: &str,
         ) -> Value {
+            self.record_tier();
             self.calls.lock().unwrap().push(RecordedHookCall::Image {
                 trigger: trigger.to_string(),
                 model: model.to_string(),
@@ -404,6 +428,7 @@ mod tests {
             entropy: f64,
             margin: f64,
         ) -> Value {
+            self.record_tier();
             self.calls
                 .lock()
                 .unwrap()
@@ -417,6 +442,7 @@ mod tests {
         }
 
         async fn handle_drift(&self, model: &str, messages: &[Value], n_decoded: i64) -> Value {
+            self.record_tier();
             self.calls.lock().unwrap().push(RecordedHookCall::Drift {
                 model: model.to_string(),
                 n_decoded,
@@ -817,5 +843,60 @@ mod tests {
                 repetition_count: 0,
             }
         ));
+    }
+
+    /// Hooks run on the local server's task, not the ingress task, so the
+    /// tier of the consultations they start comes from the request itself.
+    #[tokio::test]
+    async fn hook_consultations_run_at_the_request_tier() {
+        use skippy_inference_api::{InferenceRequestClass, InferenceRequestTier};
+        let (policy, executor) = policy_with_recorder(HookDebugConfig::default());
+
+        let mut mesh_request = text_request(true);
+        mesh_request.request_class = InferenceRequestClass::new(InferenceRequestTier::Mesh, false);
+        policy
+            .after_prefill(&mut mesh_request, uncertain_signals())
+            .await
+            .unwrap();
+        let mut image = image_request(true);
+        image.request_class = InferenceRequestClass::new(InferenceRequestTier::Trusted, false);
+        policy.before_chat_completion(&mut image).await.unwrap();
+        let mut local_request = text_request(true);
+        policy
+            .after_prefill(&mut local_request, uncertain_signals())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *executor.tiers.lock().unwrap(),
+            [
+                InferenceRequestTier::Mesh,
+                InferenceRequestTier::Trusted,
+                InferenceRequestTier::Local
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_private_request_starts_no_hook_consultation() {
+        use skippy_inference_api::{InferenceRequestClass, InferenceRequestTier};
+        let (policy, executor) = policy_with_recorder(HookDebugConfig::default());
+        let private = InferenceRequestClass::new(InferenceRequestTier::Local, true);
+
+        let mut text = text_request(true);
+        text.request_class = private;
+        policy
+            .after_prefill(&mut text, uncertain_signals())
+            .await
+            .unwrap();
+        policy
+            .mid_generation(&mut text, drift_signals())
+            .await
+            .unwrap();
+        let mut image = image_request(true);
+        image.request_class = private;
+        policy.before_chat_completion(&mut image).await.unwrap();
+
+        assert!(executor.calls().is_empty());
     }
 }

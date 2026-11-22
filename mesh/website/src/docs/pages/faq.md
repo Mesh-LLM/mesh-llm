@@ -84,7 +84,7 @@ A layer package is a prepared model artifact Mesh can use for multi-machine serv
 
 ## Should I use the public mesh first?
 
-Use a private mesh first if you are testing your install. Use the public mesh when you specifically want public discovery behavior.
+Start with one node using the [Quickstart](/docs/pages/quickstart/) if you are testing your install. Use the public mesh when you specifically want public discovery behavior.
 
 ## Can I use existing agent tools?
 
