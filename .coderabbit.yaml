@@ -1,0 +1,21 @@
+version: "2"
+reviews:
+  auto_review:
+    enabled: true
+    drafts: true
+    base_branches:
+      - main
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: "mesh/crates/**/*.rs"
+      instructions: "This is a Rust 2024 workspace. Focus on correctness, safety, and adherence to the project's one-way dependency rule (Skippy must not depend on Mesh crates). Note: node.proto is source of truth; node.rs is manually-maintained (no build.rs)."
+    - path: "mesh/crates/mesh-llm-host-runtime/src/policy/**"
+      instructions: "New policy module. Check PolicyStore per-owner generation tracking, PolicyApplicator self-endpoint wiring, and disk persistence atomicity."
+    - path: "mesh/crates/mesh-llm-host-runtime/src/api/routes/runtime.rs"
+      instructions: "New fleet endpoints: POST /api/runtime/control/fleet, GET /api/runtime/fleet/metrics, POST/GET/DELETE /api/runtime/control/mesh-policy. Verify auth guard coverage and filter logic."
+chat:
+  auto_reply: true
