@@ -138,7 +138,7 @@ just ui-dev http://127.0.0.1:3131 5174
 ## Useful commands
 
 ```bash
-just stop             # stop mesh/rpc/llama processes
+just stop             # stop mesh-llm processes
 just test             # quick test against :9337
 just lint             # format, Clippy, and shell checks
 just test-rust        # Rust tests for the whole workspace
@@ -151,12 +151,10 @@ just --list           # list all recipes
 
 `.gitattributes` checks every text file out with LF on every platform. A
 checkout created before that landed, with `core.autocrlf=true`, keeps its CRLF
-working copy until the files are re-extracted, and five host-runtime tests
+working copy until the files are re-extracted, and four host-runtime tests
 still fail locally on content they read verbatim: both `config_schema`
-snapshots, the `plugin::config` fixture, `inference::skippy::topology`, which
-greps its own source, and `inference::skippy::split_certification`, whose
-`build.rs` patch-queue digest is hashed from the bytes of the llama.cpp
-patches and gates production split certification rather than tests alone.
+snapshots, the `plugin::config` fixture, and `inference::skippy::topology`,
+which greps its own source.
 
 Renormalise once, after committing or stashing anything in progress, since the
 second command discards uncommitted work:
@@ -171,18 +169,22 @@ fresh clone needs none of this.
 
 ### Testing crates on native Windows
 
-A bare Windows checkout cannot build the test targets of crates that pull in
-`skippy-ffi`'s static link mode (`mesh-llm-system` does, through
-`skippy-runtime-install`, which depends on `skippy-ffi` with
-`default-features = false`), because `skippy-ffi/build.rs` then requires
-the llama.cpp ABI archives to be prepared
+`just test-rust` works on a bare Windows checkout: built as a whole, the
+workspace turns on `skippy-ffi`'s `dynamic-runtime` feature, so nothing native
+is compiled.
+
+Testing one crate on its own can lose that feature. `mesh-llm-system` reaches
+`skippy-ffi` through `skippy-runtime-install` with `default-features = false`,
+which selects `skippy-ffi`'s static link mode. Its build script then looks for
+patched llama.cpp archives and fails on Windows
 (`automatic native preparation is not supported for Windows from build.rs yet`).
-`just test-all` needs the same native preparation, through its Bash pipeline.
+On macOS and Linux the same build does not fail: it builds llama.cpp inside
+Cargo's checkout of Skippy, which is slow and takes about 1 GB.
 
 For crate suites that do not exercise the native runtime, enable
 `dynamic-native-runtime`: feature unification turns on `skippy-ffi`'s
 `dynamic-runtime`, whose build script returns early. The `mesh-llm-system`
-gates then run on a machine without a prepared native build:
+gates then run without a native build:
 
 ```powershell
 cargo test --locked -p mesh-llm-system --lib --features dynamic-native-runtime
@@ -193,9 +195,9 @@ cargo fmt --check -p mesh-llm-system
 `--no-deps` keeps Clippy scoped to the package you are changing. `cfg`-gated
 code can be dead on one platform only, so if a platform-specific warning
 appears that your diff does not touch, compare the run against the same
-command on `main` before attributing it to your change. Running the
-native-runtime suites still needs a prepared build (`LLAMA_STAGE_BUILD_DIR`
-or `SKIPPY_LLAMA_BUILD_DIR` pointing at one), which this section does not cover.
+command on `main` before attributing it to your change. The tests that call
+into a native runtime need a packaged Skippy runtime and run through
+`just test-with-runtime <runtime-dir>`, which is not available on Windows.
 The Rust MSVC toolchain needs the Visual Studio Build Tools with the
 "Desktop development with C++" workload installed.
 
@@ -245,13 +247,13 @@ mesh-llm gpus detect
 
 Internally, mesh-llm runs a hidden `benchmark` subcommand in a narrow subprocess boundary so native backend hangs and stdout capture stay isolated from the main process.
 
-Standard builds support benchmark execution only for the backends wired into the normal build flow:
+The benchmark runs through the installed Skippy native runtime, so it is available only for backends that have one:
 
 - macOS Apple Silicon: Metal
 - Linux / Windows NVIDIA: CUDA
 - Linux / Windows AMD: HIP / ROCm
 
-Intel GPU benchmark execution is not currently supported in standard `just build` flows, so runtime benchmark selection intentionally skips Intel GPUs.
+Intel GPUs have no published native-runtime benchmark tool, so runtime benchmark selection intentionally skips them.
 
 ## Protocol Backward Compatibility
 
