@@ -182,3 +182,23 @@ jobs:
               echo "Runtime:       $(jq -r '.runtime.id' "$manifest") manifest sha256 $(sha256sum "$manifest" | cut -d ' ' -f 1)"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The merge rule for main requires these five check names, which the old
+  # per-platform workflows used to report. Each one passes only when every
+  # job above passed. If the rule is changed to name the jobs above, delete
+  # this job.
+  required:
+    name: PR / ${{ matrix.lane }}
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: [lint, test, ui, smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        lane: [Quality, Linux, macOS, Windows, Website]
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "lint, test, ui, smoke: $RESULTS"
+          [[ "$RESULTS" == "success success success success" ]]
