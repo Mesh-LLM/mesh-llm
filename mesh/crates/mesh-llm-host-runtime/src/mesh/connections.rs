@@ -650,8 +650,9 @@ impl Node {
     pub(crate) async fn accept_loop(&self) {
         // Wait until start_accepting() is called before processing any connections.
         // Check flag first to handle the case where start_accepting() was called before we got here.
+        let accepting = self.accepting.0.notified();
         if !self.accepting.1.load(std::sync::atomic::Ordering::Acquire) {
-            self.accepting.0.notified().await;
+            accepting.await;
         }
         tracing::info!("Accept loop: now accepting inbound connections");
 

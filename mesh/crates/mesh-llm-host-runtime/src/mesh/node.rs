@@ -672,6 +672,11 @@ impl Node {
         }
 
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
+        // Release an accept task parked before startup so it observes closure.
+        self.accepting
+            .1
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.accepting.0.notify_waiters();
     }
 
     fn spawn_accept_loop(&self) {

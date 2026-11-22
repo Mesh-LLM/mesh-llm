@@ -42,7 +42,6 @@ mod tests {
         node.set_stage_control_handle(stage).await;
         let accepting_node = node.clone();
         let accept_loop = tokio::spawn(async move { accepting_node.accept_loop().await });
-        node.start_accepting();
         assert!(!node.endpoint.is_closed());
         assert!(!control_endpoint.is_closed());
 
