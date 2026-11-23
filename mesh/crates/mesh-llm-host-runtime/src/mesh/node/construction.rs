@@ -89,8 +89,10 @@ impl Node {
             Some(identity) => identity.key.clone(),
             None => startup_secret_key(&role).await?,
         };
+        let config_state_init = super::startup::load_config_state(config_path)?;
+        let dns_fallback = config_state_init.config().network.effective_dns_fallback();
         let (endpoint, public_addr) =
-            bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind).await?;
+            bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind, dns_fallback).await?;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
@@ -98,7 +100,6 @@ impl Node {
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
         super::startup::end_if_stopping(&endpoint).await?;
-        let config_state_init = super::startup::load_config_state(config_path)?;
         let config = config_state_init.config();
         let reload = identity.is_none();
         let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());
@@ -337,8 +338,9 @@ async fn bind_discoverable_endpoint(
     secret_key: SecretKey,
     relay: RelayConfig<'_>,
     quic_bind: QuicBindSelection,
+    dns_fallback: Option<mesh_llm_config::DnsFallbackMode>,
 ) -> Result<(Endpoint, Option<crate::mesh::stun::PublicAddr>)> {
-    let endpoint = bind_mesh_endpoint(secret_key, relay, quic_bind).await?;
+    let endpoint = bind_mesh_endpoint(secret_key, relay, quic_bind, dns_fallback).await?;
     if relay.policy.uses_relay() {
         // Ensure invite tokens can include the relay; sinkholed networks still
         // proceed with direct UDP after the bounded wait.

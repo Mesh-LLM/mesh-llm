@@ -23,6 +23,7 @@ fn config_sync_full_config_roundtrip() {
             check: Some(false),
             ..Default::default()
         },
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {

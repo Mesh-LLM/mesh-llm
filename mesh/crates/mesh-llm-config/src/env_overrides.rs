@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 
 use anyhow::{Result, bail};
 
-use crate::{LifecycleLogParserMode, MeshConfig, RuntimeConfig};
+use crate::{DnsFallbackMode, LifecycleLogParserMode, MeshConfig, RuntimeConfig};
 
 pub const MESH_LLM_LIFECYCLE_LOG_PARSER_ENV: &str = "MESH_LLM_LIFECYCLE_LOG_PARSER";
 pub const MESH_LLM_CONFIG_ENV: &str = "MESH_LLM_CONFIG";
@@ -11,6 +11,8 @@ pub const MESH_LLM_NO_UPDATE_CHECK_ENV: &str = "MESH_LLM_NO_UPDATE_CHECK";
 /// Overrides `runtime.native_runtime.download`: `1` turns runtime downloads
 /// at startup off, `0` on.
 pub const MESH_LLM_NO_RUNTIME_DOWNLOAD_ENV: &str = "MESH_LLM_NO_RUNTIME_DOWNLOAD";
+/// Overrides `network.dns_fallback`: accepts `never`, `if-system-empty`, or `deferred`.
+pub const MESH_LLM_DNS_FALLBACK_ENV: &str = "MESH_LLM_DNS_FALLBACK";
 /// Hidden, undocumented, TEST-ONLY gate -- see [`benchmark_tune_trial_enabled`].
 pub const MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV: &str = "MESH_LLM_BENCHMARK_TUNE_TRIAL";
 /// Hidden, undocumented, TEST-ONLY selector -- see [`event_system_trial_mode`].
@@ -30,6 +32,7 @@ pub const CONFIG_OVERRIDE_ENV_NAMES: &[&str] = &[
     MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
     MESH_LLM_NO_UPDATE_CHECK_ENV,
     MESH_LLM_NO_RUNTIME_DOWNLOAD_ENV,
+    MESH_LLM_DNS_FALLBACK_ENV,
     MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV,
     MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV,
 ];
@@ -140,7 +143,32 @@ pub fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
     )? {
         config.runtime.native_runtime.download_override = Some(download);
     }
+    if let Some(dns_fallback) =
+        resolve_dns_fallback_override(std::env::var_os(MESH_LLM_DNS_FALLBACK_ENV).as_deref())?
+    {
+        config.network.dns_fallback_override = Some(dns_fallback);
+    }
     Ok(())
+}
+
+/// The `network.dns_fallback` value [`MESH_LLM_DNS_FALLBACK_ENV`] sets, if any.
+/// Accepts `never`, `if-system-empty`, or `deferred`.
+pub fn resolve_dns_fallback_override(
+    environment: Option<&OsStr>,
+) -> Result<Option<DnsFallbackMode>> {
+    let Some(environment) = environment else {
+        return Ok(None);
+    };
+    match environment.to_str() {
+        Some("never") => Ok(Some(DnsFallbackMode::Never)),
+        Some("if-system-empty") => Ok(Some(DnsFallbackMode::IfSystemEmpty)),
+        Some("deferred") => Ok(Some(DnsFallbackMode::Deferred)),
+        _ => bail!(
+            "{} must be 'never', 'if-system-empty', or 'deferred', got {:?}",
+            MESH_LLM_DNS_FALLBACK_ENV,
+            environment
+        ),
+    }
 }
 
 /// The `updates.check` value [`MESH_LLM_NO_UPDATE_CHECK_ENV`] sets, if any.
@@ -468,6 +496,7 @@ mod tests {
                 "MESH_LLM_LIFECYCLE_LOG_PARSER",
                 "MESH_LLM_NO_UPDATE_CHECK",
                 "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+                "MESH_LLM_DNS_FALLBACK",
                 "MESH_LLM_BENCHMARK_TUNE_TRIAL",
                 "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
             ]
@@ -488,6 +517,29 @@ mod tests {
         for value in ["", "true", "yes"] {
             assert!(
                 resolve_no_update_check_override(Some(OsStr::new(value))).is_err(),
+                "{value:?} must be rejected, never silently defaulted"
+            );
+        }
+    }
+
+    #[test]
+    fn dns_fallback_override_accepts_only_valid_modes() {
+        assert_eq!(resolve_dns_fallback_override(None).unwrap(), None);
+        assert_eq!(
+            resolve_dns_fallback_override(Some(OsStr::new("never"))).unwrap(),
+            Some(DnsFallbackMode::Never)
+        );
+        assert_eq!(
+            resolve_dns_fallback_override(Some(OsStr::new("if-system-empty"))).unwrap(),
+            Some(DnsFallbackMode::IfSystemEmpty)
+        );
+        assert_eq!(
+            resolve_dns_fallback_override(Some(OsStr::new("deferred"))).unwrap(),
+            Some(DnsFallbackMode::Deferred)
+        );
+        for value in ["", "true", "eager", "Never"] {
+            assert!(
+                resolve_dns_fallback_override(Some(OsStr::new(value))).is_err(),
                 "{value:?} must be rejected, never silently defaulted"
             );
         }

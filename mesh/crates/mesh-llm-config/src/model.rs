@@ -1,5 +1,6 @@
 mod built_in_schema;
 mod multimodal;
+mod network;
 mod private;
 mod profile;
 mod request_tiers;
@@ -14,6 +15,7 @@ pub use built_in_schema::{
 };
 pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
+pub use network::{DnsFallbackMode, NetworkConfig};
 pub use private::{PrivateConfig, is_node_id};
 pub use request_tiers::{RequestTierName, RequestTiersConfig};
 pub use runtime::{
@@ -57,6 +59,8 @@ pub struct MeshConfig {
     pub analytics: AnalyticsConfig,
     #[serde(default)]
     pub updates: UpdatesConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -1244,6 +1248,8 @@ struct RawMeshConfig {
     #[serde(default)]
     updates: UpdatesConfig,
     #[serde(default)]
+    network: NetworkConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1370,6 +1376,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             telemetry: raw.telemetry,
             analytics: raw.analytics,
             updates: raw.updates,
+            network: raw.network,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,

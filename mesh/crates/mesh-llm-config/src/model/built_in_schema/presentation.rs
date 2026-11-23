@@ -238,6 +238,12 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             40,
         )
         .hint("toggle")),
+        "network.dns_fallback" => Some(sp(
+            "DNS fallback mode",
+            "Control whether iroh falls back to public DNS resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9) when the system resolver fails or has no nameservers. `MESH_LLM_DNS_FALLBACK` overrides it.",
+            MESHLLM_CATEGORY,
+            50,
+        )),
         "telemetry.enabled" => Some(sp(
             "Telemetry export",
             "Enable opt-in metrics export. Ambient OTel environment variables do not enable export by themselves.",

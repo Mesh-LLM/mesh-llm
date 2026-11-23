@@ -1014,6 +1014,7 @@ mod tests {
             request_tiers: Default::default(),
             telemetry: Default::default(),
             analytics: Default::default(),
+            network: Default::default(),
             updates: Default::default(),
             logging: Default::default(),
             defaults: None,
