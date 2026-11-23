@@ -729,6 +729,52 @@ fn child_env_removes_web_ui_dir_without_valid_asset_root() {
     ));
 }
 
+#[test]
+fn child_env_includes_resolved_hf_cache_dir() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let plugin = plugin_for_spec(plugin_spec(
+        &temp_dir,
+        None,
+        InstalledPluginWebUiValidationStatus::Valid,
+        None,
+    ));
+
+    let command = plugin.configured_child_command("endpoint", "unix");
+
+    assert_eq!(
+        command_env_value(&command, "MESH_LLM_PLUGIN_HF_CACHE_DIR"),
+        Some(
+            skippy_model_hf::huggingface_hub_cache_dir()
+                .display()
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn child_env_allows_plugin_spec_to_override_hf_cache_dir() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let custom_cache = temp_dir.path().join("custom-hf-cache");
+    let mut spec = plugin_spec(
+        &temp_dir,
+        None,
+        InstalledPluginWebUiValidationStatus::Valid,
+        None,
+    );
+    spec.env.insert(
+        "MESH_LLM_PLUGIN_HF_CACHE_DIR".into(),
+        custom_cache.display().to_string(),
+    );
+    let plugin = plugin_for_spec(spec);
+
+    let command = plugin.configured_child_command("endpoint", "unix");
+
+    assert_eq!(
+        command_env_value(&command, "MESH_LLM_PLUGIN_HF_CACHE_DIR"),
+        Some(custom_cache.display().to_string())
+    );
+}
+
 #[tokio::test]
 async fn invalid_web_ui_assets_do_not_clear_running_plugin_capabilities() {
     let temp_dir = TempDir::new().expect("temp dir should be created");

@@ -70,12 +70,13 @@ The `stapler` is the host projection layer that turns plugin manifests into expo
 When `mesh-llm` launches an external plugin, it provides the host connection
 details through environment variables:
 
-| Variable                    | Meaning                                     |
-| --------------------------- | ------------------------------------------- |
-| `MESH_LLM_PLUGIN_ENDPOINT`  | Local IPC endpoint the plugin connects to   |
-| `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe`    |
-| `MESH_LLM_PLUGIN_NAME`      | Configured plugin name                      |
-| `MESH_LLM_PLUGIN_URL`       | Optional `[[plugin]].url` value from config |
+| Variable                        | Meaning                                                    |
+| ------------------------------- | ---------------------------------------------------------- |
+| `MESH_LLM_PLUGIN_ENDPOINT`      | Local IPC endpoint the plugin connects to                  |
+| `MESH_LLM_PLUGIN_TRANSPORT`     | Transport kind, such as `unix` or `pipe`                   |
+| `MESH_LLM_PLUGIN_NAME`          | Configured plugin name                                     |
+| `MESH_LLM_PLUGIN_URL`           | Optional `[[plugin]].url` value from config                |
+| `MESH_LLM_PLUGIN_HF_CACHE_DIR`  | Host's resolved Hugging Face Hub cache directory           |
 
 An HTTP or HTTPS URL configures a locally launched adapter plugin and is
 provided through `MESH_LLM_PLUGIN_URL`. `plugin.url` does not support `tcp://`

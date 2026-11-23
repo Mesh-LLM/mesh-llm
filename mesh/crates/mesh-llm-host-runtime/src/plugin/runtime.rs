@@ -275,6 +275,10 @@ impl ExternalPlugin {
         if let Some(ref url) = self.spec.url {
             child.env("MESH_LLM_PLUGIN_URL", url);
         }
+        child.env(
+            "MESH_LLM_PLUGIN_HF_CACHE_DIR",
+            skippy_model_hf::huggingface_hub_cache_dir(),
+        );
         for (key, value) in &self.spec.env {
             child.env(key, value);
         }
