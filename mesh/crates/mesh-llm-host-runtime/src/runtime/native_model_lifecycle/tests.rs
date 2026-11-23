@@ -279,11 +279,18 @@ mod requests {
 
         // 4. Even after the outer scope exits, the `InstanceRequestGuard` still
         // holds the shared read lease so handoff stays blocked until response end.
+        tokio::task::yield_now().await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), intents.recv())
-                .await
-                .is_err(),
+            lifecycle.models["test"].gate.try_write().is_err(),
+            "InstanceRequestGuard must still hold the shared read lease"
+        );
+        assert!(
+            intents.try_recv().is_err(),
             "handoff must remain blocked while InstanceRequestGuard holds the reused lease"
+        );
+        assert!(
+            !handoff_task.is_finished(),
+            "handoff task must remain parked until InstanceRequestGuard drops"
         );
 
         // 5. Dropping `selected` releases the last lease reference and lets handoff unload.

@@ -261,36 +261,42 @@ impl NativeModelLifecycle {
         }
     }
 
+    #[cfg(test)]
     async fn acquire_gate_read(
         &self,
         residency: &Residency,
-        #[cfg_attr(not(test), allow(unused_variables))] label: &'static str,
+        label: &'static str,
     ) -> OwnedRwLockReadGuard<()> {
-        let fut = residency.gate.clone().read_owned();
-        #[cfg(test)]
-        {
-            self.await_gate_with_checkpoint(fut, label).await
-        }
-        #[cfg(not(test))]
-        {
-            fut.await
-        }
+        self.await_gate_with_checkpoint(residency.gate.clone().read_owned(), label)
+            .await
     }
 
+    #[cfg(not(test))]
+    async fn acquire_gate_read(
+        &self,
+        residency: &Residency,
+        _label: &'static str,
+    ) -> OwnedRwLockReadGuard<()> {
+        residency.gate.clone().read_owned().await
+    }
+
+    #[cfg(test)]
     async fn acquire_gate_write(
         &self,
         residency: &Residency,
-        #[cfg_attr(not(test), allow(unused_variables))] label: &'static str,
+        label: &'static str,
     ) -> OwnedRwLockWriteGuard<()> {
-        let fut = residency.gate.clone().write_owned();
-        #[cfg(test)]
-        {
-            self.await_gate_with_checkpoint(fut, label).await
-        }
-        #[cfg(not(test))]
-        {
-            fut.await
-        }
+        self.await_gate_with_checkpoint(residency.gate.clone().write_owned(), label)
+            .await
+    }
+
+    #[cfg(not(test))]
+    async fn acquire_gate_write(
+        &self,
+        residency: &Residency,
+        _label: &'static str,
+    ) -> OwnedRwLockWriteGuard<()> {
+        residency.gate.clone().write_owned().await
     }
 
     /// Lease the actual selected local port, including routes bypassing HTTP ingress.

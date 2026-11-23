@@ -25,6 +25,7 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
 mod missing_model;
+mod plugin_gpu_handoff;
 #[cfg(test)]
 #[path = "ingress/private_scope_tests.rs"]
 mod private_scope_tests;
@@ -789,27 +790,13 @@ async fn route_to_plugin_endpoint(
     model_name: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
-    let _gpu_handoff = if ctx
-        .node
-        .plugin_exclusive_gpu_enabled(&endpoint.plugin_name)
-        .await
-        && let Some(lifecycle) = ctx.node.native_model_lifecycle.get()
-    {
-        match lifecycle.acquire_exclusive_gpu_handoff().await {
-            Ok(lease) => Some(lease),
-            Err(error) => {
-                tracing::warn!(
-                    plugin = %endpoint.plugin_name,
-                    model = %model_name,
-                    %error,
-                    "exclusive_gpu handoff failed before forwarding to plugin endpoint"
-                );
-                return proxy::RouteDispatchOutcome::Failed("plugin_gpu_handoff_failed");
-            }
-        }
-    } else {
-        None
-    };
+    let _gpu_handoff =
+        match plugin_gpu_handoff::acquire_for_plugin(ctx.node, &endpoint.plugin_name, model_name)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(reason) => return proxy::RouteDispatchOutcome::Failed(reason),
+        };
     let tiered_call = plugin_manager.begin_tiered_invocation(
         &endpoint.plugin_name,
         crate::mesh::request_tier::current_request_tier(),

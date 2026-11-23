@@ -155,17 +155,24 @@ async fn exclusive_gpu_plugin_unloads_native_model_before_forwarding_request() {
     };
     assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
 
-    // Keep unload completion unsent and confirm dispatch has not connected to
-    // the plugin listener while the native model is still unloading.
+    // Keep unload completion unsent and confirm dispatch stays parked on the
+    // unload completion without dialing the plugin listener.
+    tokio::task::yield_now().await;
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            plugin_listener.accept()
-        )
-        .await
-        .is_err(),
-        "plugin endpoint must not receive a connection before unload completes"
+        !completion.is_closed(),
+        "handoff must still be awaiting unload completion"
     );
+    assert!(
+        !dispatch.is_finished(),
+        "dispatch must not finish before unload completes"
+    );
+    tokio::select! {
+        biased;
+        accepted = plugin_listener.accept() => {
+            panic!("plugin endpoint must not receive a connection before unload completes: {accepted:?}");
+        }
+        _ = tokio::task::yield_now() => {}
+    }
 
     targets_tx.send_modify(|t| t.targets.clear());
     completion
