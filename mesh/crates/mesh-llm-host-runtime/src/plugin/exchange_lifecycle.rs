@@ -685,8 +685,8 @@ struct EmissionState {
     /// The request id the session's lifecycle callbacks carry; every event of
     /// the exchange, `backend_selected` included, reports this one.
     request_id: String,
-    /// Exchange id of the dispatch that served: the latest `backend_selected`
-    /// event's. Unlike `attempt_history`, never capped.
+    /// Exchange id of the dispatch that served: the latest admitted (not
+    /// denied) `backend_selected` event's. Unlike `attempt_history`, never capped.
     served_exchange_id: Option<String>,
     endpoint: String,
     headers: Vec<(String, String)>,
