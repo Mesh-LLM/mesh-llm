@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use mesh_llm_plugin_manager::sets::{read_set_offer, record_set_offer};
+use mesh_llm_plugin_manager::sets::{SetOffer, read_set_offer, record_set_offer};
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressReporter,
     catalog::sets_url_for,
@@ -77,7 +77,7 @@ pub async fn install_set_command(
     if catalog.find_set(set_name).is_none() {
         bail!("{}", no_set_reason(&catalog, set_name, problem));
     }
-    install_set(&catalog, set_name, &[], options, progress).await
+    install_set(&catalog, set_name, &SetOffer::default(), options, progress).await
 }
 
 /// Setup's plugin step. Every failure (offline, a slow catalog host, no such
@@ -116,13 +116,17 @@ async fn install_set_for_setup(
             Ok(read) => read,
             Err(error) => return SetupPluginsOutcome::Unavailable(format!("{error:#}")),
         };
-        if catalog.find_set(set_name).is_none() {
+        let Some(set) = catalog.find_set(set_name) else {
             return SetupPluginsOutcome::Unavailable(no_set_reason(&catalog, set_name, problem));
-        }
-        match install_set(&catalog, set_name, &offer.members, options, progress).await {
+        };
+        let set_members = set.plugins.clone();
+        match install_set(&catalog, set_name, &offer, options, progress).await {
             Ok(result) => {
-                let recorded =
-                    record_set_offer(&options.store_root, set_name, offer.after(&result));
+                let recorded = record_set_offer(
+                    &options.store_root,
+                    set_name,
+                    offer.after(&set_members, &result),
+                );
                 if let Err(error) = recorded {
                     return SetupPluginsOutcome::Unavailable(format!("{error:#}"));
                 }
@@ -151,7 +155,6 @@ async fn install_set_for_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_plugin_manager::sets::SetOffer;
     use std::{
         io::{BufRead, BufReader, Write},
         net::TcpListener,

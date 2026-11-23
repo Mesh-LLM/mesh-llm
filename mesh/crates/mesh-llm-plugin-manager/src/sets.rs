@@ -64,6 +64,11 @@ pub struct SetOffer {
     /// True once an offer finished with no failed member: setup then leaves
     /// the set alone without reading the catalog.
     pub complete: bool,
+    /// The set's membership when it was first offered. Later runs only
+    /// retry members of this snapshot, so a member added to the set after the
+    /// one offer is never installed by setup, even while a failed one retries.
+    #[serde(default)]
+    pub snapshot: Vec<String>,
     /// Members installed, already present, or unavailable here when offered.
     pub members: Vec<String>,
 }
@@ -72,15 +77,21 @@ impl SetOffer {
     /// The offer after `result`: a member that landed, was already there or
     /// has no release here counts as offered; a failed one is not, so the
     /// next setup retries it, and the set is complete only when none failed.
-    pub fn after(&self, result: &SetInstallResult) -> SetOffer {
+    pub fn after(&self, set_members: &[String], result: &SetInstallResult) -> SetOffer {
         let mut members = self.members.clone();
         members.extend(result.installed.iter().map(|o| o.metadata.name.clone()));
         members.extend(result.already_installed.iter().cloned());
         members.extend(result.unavailable.iter().map(|(name, _)| name.clone()));
         members.sort();
         members.dedup();
+        let snapshot = if self.snapshot.is_empty() {
+            set_members.to_vec()
+        } else {
+            self.snapshot.clone()
+        };
         SetOffer {
             complete: result.failed.is_empty(),
+            snapshot,
             members,
         }
     }
@@ -102,8 +113,12 @@ pub fn record_set_offer(
     std::fs::create_dir_all(store_root)
         .with_context(|| format!("create plugin store {}", store_root.display()))?;
     let path = store_root.join(OFFERED_FILE);
-    std::fs::write(&path, serde_json::to_vec(&offers)?)
-        .with_context(|| format!("write {}", path.display()))
+    // Write beside the record and rename over it, so a crash never leaves a
+    // torn file.
+    let temp = store_root.join(format!("{OFFERED_FILE}.tmp"));
+    std::fs::write(&temp, serde_json::to_vec(&offers)?)
+        .with_context(|| format!("write {}", temp.display()))?;
+    std::fs::rename(&temp, &path).with_context(|| format!("replace {}", path.display()))
 }
 
 fn read_offers(
@@ -111,15 +126,23 @@ fn read_offers(
 ) -> Result<std::collections::BTreeMap<String, SetOffer>> {
     let path = store_root.join(OFFERED_FILE);
     match std::fs::read(&path) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
-        }
+        // An unreadable record counts as none: the next setup offers the set
+        // again (members already installed are left alone) instead of warning
+        // forever about a file only setup writes.
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
 }
 
 impl SetResolution {
+    /// Keep only the members of the snapshot the set was first offered with.
+    pub fn only_members(mut self, snapshot: &[String]) -> Self {
+        self.members
+            .retain(|member| snapshot.contains(&member.name));
+        self
+    }
+
     /// Drop the members setup already offered on this machine.
     pub fn without_members(mut self, offered: &[String]) -> Self {
         self.members
@@ -223,12 +246,15 @@ pub async fn install_set_with<P>(
 pub async fn install_set(
     catalog: &PluginCatalog,
     set_name: &str,
-    already_offered: &[String],
+    offer: &SetOffer,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<SetInstallResult> {
-    let resolution =
-        resolve_set(catalog, set_name, options.target.triple())?.without_members(already_offered);
+    let mut resolution = resolve_set(catalog, set_name, options.target.triple())?;
+    if !offer.snapshot.is_empty() {
+        resolution = resolution.only_members(&offer.snapshot);
+    }
+    let resolution = resolution.without_members(&offer.members);
     let store = PluginStore::new(&options.store_root);
     install_set_with(&resolution, &store, progress, async |name, progress| {
         let entry = catalog
@@ -438,6 +464,7 @@ mod tests {
         );
         let offer = SetOffer {
             complete: false,
+            snapshot: vec!["alpha".to_string(), "beta".to_string()],
             members: vec!["alpha".to_string()],
         };
         record_set_offer(&root, "recommended", offer.clone()).unwrap();
@@ -446,6 +473,7 @@ mod tests {
             "extras",
             SetOffer {
                 complete: true,
+                snapshot: vec![],
                 members: vec![],
             },
         )
@@ -467,18 +495,56 @@ mod tests {
             failed: vec![("beta".to_string(), "download failed".to_string())],
             ..SetInstallResult::default()
         };
-        let first = SetOffer::default().after(&result);
+        let set = ["alpha", "beta", "gamma"].map(String::from);
+        let first = SetOffer::default().after(&set, &result);
         assert!(!first.complete);
         assert_eq!(first.members, ["alpha", "gamma"]);
+        assert_eq!(first.snapshot, set);
 
         result.failed.clear();
         result.installed.push(InstallOutcome {
             metadata: installed("beta"),
             changed: true,
         });
-        let second = first.after(&result);
+        // The set gained `delta` since the first offer: the snapshot keeps it
+        // out of the retry.
+        let grown = ["alpha", "beta", "gamma", "delta"].map(String::from);
+        let second = first.after(&grown, &result);
         assert!(second.complete);
         assert_eq!(second.members, ["alpha", "beta", "gamma"]);
+        assert_eq!(second.snapshot, set);
+    }
+
+    /// A torn or corrupt record counts as none instead of wedging setup, and
+    /// recording over it repairs it.
+    #[test]
+    fn a_corrupt_offer_record_counts_as_none_and_is_repaired() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join(OFFERED_FILE), "{torn").unwrap();
+        assert_eq!(
+            read_set_offer(temp.path(), "recommended").unwrap(),
+            SetOffer::default()
+        );
+        let offer = SetOffer {
+            complete: true,
+            ..SetOffer::default()
+        };
+        record_set_offer(temp.path(), "recommended", offer.clone()).unwrap();
+        assert_eq!(read_set_offer(temp.path(), "recommended").unwrap(), offer);
+    }
+
+    #[test]
+    fn a_resolution_keeps_only_the_snapshot_members_that_are_not_offered() {
+        let catalog = catalog(
+            &[("alpha", true), ("beta", true), ("gamma", true)],
+            r#"{"name":"recommended","description":"d","plugins":["alpha","beta","gamma"]}"#,
+        );
+        let resolution = resolve_set(&catalog, "recommended", TARGET)
+            .unwrap()
+            .only_members(&["alpha".to_string(), "beta".to_string()])
+            .without_members(&["alpha".to_string()]);
+        let names: Vec<&str> = resolution.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["beta"]);
     }
 
     #[test]
