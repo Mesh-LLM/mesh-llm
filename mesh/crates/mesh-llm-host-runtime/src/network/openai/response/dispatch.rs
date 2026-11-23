@@ -27,27 +27,71 @@ pub(super) fn is_event_stream_content_type(content_type: Option<&str>) -> bool {
     })
 }
 
+#[derive(Debug)]
+pub(super) enum BodyCopyError {
+    Upstream(std::io::Error),
+    Downstream(std::io::Error),
+}
+
+impl std::fmt::Display for BodyCopyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Upstream(err) => write!(f, "upstream read error: {err}"),
+            Self::Downstream(err) => write!(f, "downstream write error: {err}"),
+        }
+    }
+}
+
+async fn copy_reader_to_client<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    tcp_stream: &mut ClientStream,
+) -> std::result::Result<u64, BodyCopyError> {
+    let mut total = 0u64;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .await
+            .map_err(BodyCopyError::Upstream)?;
+        if n == 0 {
+            return Ok(total);
+        }
+        tcp_stream
+            .write_all(&buf[..n])
+            .await
+            .map_err(BodyCopyError::Downstream)?;
+        total += n as u64;
+    }
+}
+
 pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
     reader: &mut R,
     tcp_stream: &mut ClientStream,
     content_type: Option<&str>,
     body_already_sent: bool,
     route_observer: OpenAiRouteObserver<'_>,
-) -> std::io::Result<u64> {
+) -> std::result::Result<u64, BodyCopyError> {
     if !is_event_stream_content_type(content_type) {
-        return tokio::io::copy(reader, &mut *tcp_stream).await;
+        return copy_reader_to_client(reader, tcp_stream).await;
     }
     if body_already_sent {
         route_observer.inference_observation_first_output();
-        return tokio::io::copy(reader, &mut *tcp_stream).await;
+        return copy_reader_to_client(reader, tcp_stream).await;
     }
     let mut first = [0u8; 4096];
-    match reader.read(&mut first).await? {
+    match reader
+        .read(&mut first)
+        .await
+        .map_err(BodyCopyError::Upstream)?
+    {
         0 => Ok(0),
         n => {
             route_observer.inference_observation_first_output();
-            tcp_stream.write_all(&first[..n]).await?;
-            tokio::io::copy(reader, &mut *tcp_stream)
+            tcp_stream
+                .write_all(&first[..n])
+                .await
+                .map_err(BodyCopyError::Downstream)?;
+            copy_reader_to_client(reader, tcp_stream)
                 .await
                 .map(|rest| rest + n as u64)
         }
@@ -241,32 +285,35 @@ pub(in crate::network::openai::response) async fn relay_attempted_response<R: As
     .await
     {
         Ok(result) => result,
-        Err(err) => {
-            if is_streaming_response_adapter(response_adapter) {
-                if is_client_disconnect_error(&err) {
-                    context.route_observer.stream_cancelled();
-                } else {
-                    context.route_observer.stream_error("stream_relay_failed");
-                }
-            }
-            if is_client_disconnect_error(&err) {
-                tracing::info!("{}", context.disconnect_message);
-                return RouteAttemptResult::ClientDisconnected;
-            }
-            tracing::debug!("{}: {err}", context.commit_message);
-            if is_streaming_response_adapter(response_adapter) {
-                return RouteAttemptResult::CommittedStreamFailure {
-                    status_code: 200,
-                    cause: CommittedStreamFailureCause::Truncated,
-                };
-            }
-            RouteAttemptResult::Delivered {
-                status_code,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
-            }
+        Err(err) => map_relay_attempt_error(status_code, &context, response_adapter, err),
+    }
+}
+
+fn map_relay_attempt_error(
+    status_code: u16,
+    context: &RelayAttemptContext<'_>,
+    response_adapter: ResponseAdapter,
+    err: anyhow::Error,
+) -> RouteAttemptResult {
+    if is_streaming_response_adapter(response_adapter) {
+        if is_client_disconnect_error(&err) {
+            context.route_observer.stream_cancelled();
+        } else {
+            context.route_observer.stream_error("stream_relay_failed");
         }
+    }
+    if is_client_disconnect_error(&err) {
+        tracing::info!("{}", context.disconnect_message);
+        return RouteAttemptResult::ClientDisconnected;
+    }
+    tracing::debug!("{}: {err}", context.commit_message);
+    RouteAttemptResult::CommittedStreamFailure {
+        status_code: if is_streaming_response_adapter(response_adapter) {
+            200
+        } else {
+            status_code
+        },
+        cause: CommittedStreamFailureCause::Truncated,
     }
 }
 

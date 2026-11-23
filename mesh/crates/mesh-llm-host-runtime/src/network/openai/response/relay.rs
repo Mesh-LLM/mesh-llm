@@ -299,11 +299,12 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     )
     .await
     {
-        tcp_stream.record_exchange_outcome("transport_error");
-        tcp_stream.finish_wire_bytes(
-            skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
-        );
-        tracing::debug!("response relay ended after headers were committed: {err}");
+        let _ = tcp_stream.shutdown().await;
+        return Ok(handle_unbounded_body_copy_error(
+            tcp_stream,
+            probe.status_code,
+            err,
+        ));
     }
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
@@ -313,6 +314,27 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
         // Body was too large to bound/buffer for metrics; not digested.
         output_digests: Default::default(),
     })
+}
+
+fn handle_unbounded_body_copy_error(
+    tcp_stream: &mut ClientStream,
+    status_code: u16,
+    err: super::dispatch::BodyCopyError,
+) -> RouteAttemptResult {
+    tcp_stream.record_exchange_outcome("transport_error");
+    tcp_stream
+        .finish_wire_bytes(skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError);
+    tracing::debug!("response relay ended after headers were committed: {err}");
+    if let super::dispatch::BodyCopyError::Downstream(io_err) = err {
+        let anyhow_err = anyhow::Error::new(io_err);
+        if super::common::is_client_disconnect_error(&anyhow_err) {
+            return RouteAttemptResult::ClientDisconnected;
+        }
+    }
+    RouteAttemptResult::CommittedStreamFailure {
+        status_code,
+        cause: super::common::CommittedStreamFailureCause::Truncated,
+    }
 }
 
 #[cfg(test)]
@@ -995,5 +1017,128 @@ mod tests {
             response_text.contains(&format!("x-request-id: {}", request_id.as_uuid())),
             "the OpenAI response must echo the canonical request id: {response_text}"
         );
+    }
+
+    #[tokio::test]
+    async fn unbounded_sse_copy_returns_committed_stream_failure_on_upstream_error() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        struct FailingReader;
+        impl tokio::io::AsyncRead for FailingReader {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "upstream reset",
+                )))
+            }
+        }
+
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let parsed = ParsedResponseHeaders {
+            header_end: header.len(),
+            status_code: 200,
+            content_length: None,
+            content_type: Some("text/event-stream".to_owned()),
+            chunked: false,
+            client_nonce: None,
+            nonce_origin: None,
+            served_model: Default::default(),
+        };
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            let mut reader = FailingReader;
+            relay_success_response(
+                &mut client,
+                &mut reader,
+                probe,
+                parsed,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+                RequestId::new(),
+            )
+            .await
+            .unwrap()
+        });
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut response = Vec::new();
+        let _ = socket.read_to_end(&mut response).await;
+        let result = task.await.unwrap();
+        assert_eq!(
+            result,
+            RouteAttemptResult::CommittedStreamFailure {
+                status_code: 200,
+                cause: super::super::common::CommittedStreamFailureCause::Truncated,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn unbounded_sse_copy_returns_client_disconnected_on_downstream_drop() {
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let parsed = ParsedResponseHeaders {
+            header_end: header.len(),
+            status_code: 200,
+            content_length: None,
+            content_type: Some("text/event-stream".to_owned()),
+            chunked: false,
+            client_nonce: None,
+            nonce_origin: None,
+            served_model: Default::default(),
+        };
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_success_response(
+                &mut client,
+                &mut upstream_reader,
+                probe,
+                parsed,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+                RequestId::new(),
+            )
+            .await
+            .unwrap()
+        });
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut head_buf = [0u8; 256];
+        let _ = socket.read(&mut head_buf).await.unwrap();
+        drop(socket);
+
+        let chunk = vec![b'a'; 16 * 1024];
+        for _ in 0..32 {
+            if upstream_writer.write_all(&chunk).await.is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        drop(upstream_writer);
+        let result = task.await.unwrap();
+        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
     }
 }
