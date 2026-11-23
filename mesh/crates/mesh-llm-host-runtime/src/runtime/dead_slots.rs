@@ -29,6 +29,22 @@ struct SlotOwner {
     mesh_llm_binary: Option<String>,
 }
 
+/// Removes stopped instances' old runtime directories on a thread of its own,
+/// so a root that grew over months never delays startup.
+pub(super) fn spawn_dead_slot_prune(my_pid: u32) {
+    let Ok(root) = super::instance::runtime_root() else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("runtime-slot-prune".to_string())
+        .spawn(move || {
+            prune_dead_runtime_slots(&root, my_pid, SystemTime::now(), DEAD_SLOT_RETENTION);
+        });
+    if let Err(error) = spawned {
+        tracing::debug!(%error, "could not start the runtime directory cleanup");
+    }
+}
+
 /// Removes the slots under `root` whose owner is no longer running and whose
 /// last write is older than `retention` at `now`. Returns how many it removed.
 ///

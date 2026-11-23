@@ -136,34 +136,13 @@ pub(super) fn acquire_instance_runtime(
 
     match crate::runtime::instance::InstanceRuntime::acquire(std::process::id()) {
         Ok(rt) => {
-            spawn_dead_slot_prune(std::process::id());
+            super::dead_slots::spawn_dead_slot_prune(std::process::id());
             Some(Arc::new(rt))
         }
         Err(err) => {
             tracing::warn!("failed to acquire instance runtime: {err}");
             None
         }
-    }
-}
-
-/// Removes stopped instances' old runtime directories on a thread of its own,
-/// so a root that grew over months never delays startup.
-fn spawn_dead_slot_prune(my_pid: u32) {
-    let Ok(root) = crate::runtime::instance::runtime_root() else {
-        return;
-    };
-    let spawned = std::thread::Builder::new()
-        .name("runtime-slot-prune".to_string())
-        .spawn(move || {
-            super::dead_slots::prune_dead_runtime_slots(
-                &root,
-                my_pid,
-                std::time::SystemTime::now(),
-                super::dead_slots::DEAD_SLOT_RETENTION,
-            );
-        });
-    if let Err(error) = spawned {
-        tracing::debug!(%error, "could not start the runtime directory cleanup");
     }
 }
 
