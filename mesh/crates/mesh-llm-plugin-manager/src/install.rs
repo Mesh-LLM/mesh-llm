@@ -7,7 +7,7 @@ use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, stage_plugin_archive},
-    catalog::PluginCatalog,
+    catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     infer_plugin_asset, select_plugin_asset,
@@ -248,15 +248,7 @@ async fn resolve_install_source(
             let entry = catalog
                 .find_exact(&name)
                 .with_context(|| format!("plugin '{name}' was not found in the catalog"))?;
-            let source = GitHubPluginSource::from_url(&entry.github_url)?;
-            let pin = CatalogPin::for_entry(entry, options.target.triple())?;
-            pin.ensure_matches_request(version.as_ref())?;
-            Ok(ResolvedInstallSource {
-                plugin_name: entry.name.clone(),
-                source,
-                version: Some(pin.version().clone()),
-                pin: Some(pin),
-            })
+            resolve_catalog_entry(entry, version.as_ref(), options)
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
             plugin_name: source.plugin_name().to_string(),
@@ -265,6 +257,35 @@ async fn resolve_install_source(
             pin: None,
         }),
     }
+}
+
+fn resolve_catalog_entry(
+    entry: &CatalogEntry,
+    requested: Option<&PluginVersion>,
+    options: &PluginInstallOptions,
+) -> Result<ResolvedInstallSource> {
+    let source = GitHubPluginSource::from_url(&entry.github_url)?;
+    let pin = CatalogPin::for_entry(entry, options.target.triple())?;
+    pin.ensure_matches_request(requested)?;
+    Ok(ResolvedInstallSource {
+        plugin_name: entry.name.clone(),
+        source,
+        version: Some(pin.version().clone()),
+        pin: Some(pin),
+    })
+}
+
+/// Install `entry` at the release the catalog snapshot it came from pins,
+/// without fetching the catalog again. A caller that resolved several entries
+/// from one snapshot installs each through this, so a catalog that changes
+/// mid-operation cannot change what the operation installs.
+pub async fn install_catalog_entry(
+    entry: &CatalogEntry,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let resolved = resolve_catalog_entry(entry, None, options)?;
+    install_resolved_plugin(resolved, options, progress, None).await
 }
 
 async fn install_resolved_plugin(

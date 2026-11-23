@@ -60,6 +60,7 @@ Supported flags:
 - `--service`: request background service setup where supported.
 - `--no-service`: skip background service setup.
 - `--skip-runtime`: skip native-runtime install and prune.
+- `--skip-plugin-install`: skip installing the catalog's `recommended` plugin set.
 - `--verbose`: print detailed setup paths, commands, log locations, and
   status. Default setup output is concise and formatted for interactive use.
 
@@ -83,6 +84,21 @@ duplicate native runtime candidate scoring or hardware detection.
 Runtime install failure is a core setup failure. Runtime prune failure after a
 successful install is reported as a warning because the installed runtime is
 usable.
+
+## Plugin Setup
+
+Unless `--skip-plugin-install` is passed, setup installs the missing members of
+the catalog plugin set named `recommended` (`plugins install --set recommended`).
+It does so with and without prompts, after the runtime and before the service,
+so a node the service starts finds the plugins. The set's membership and each
+member's pinned release and checksums come from the plugin catalog.
+
+Plugin install is optional and never fails setup: an unreachable or slow
+catalog (reads are bounded), a catalog that publishes no `recommended` set, a
+member with no release for this platform or a member that fails to install
+prints a warning with the retry command and setup finishes. A plugin that is
+already installed is left alone, including a disabled one. Each installed
+package's granted access is disclosed as it lands, as for `plugins install`.
 
 ## Service Setup
 

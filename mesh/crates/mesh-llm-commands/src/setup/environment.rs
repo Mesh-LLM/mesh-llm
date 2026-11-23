@@ -5,6 +5,8 @@ pub struct SetupOptions {
     pub service: bool,
     pub no_service: bool,
     pub skip_runtime: bool,
+    /// Opt out of installing the catalog's `recommended` plugin set.
+    pub skip_plugin_install: bool,
     pub verbose: bool,
 }
 

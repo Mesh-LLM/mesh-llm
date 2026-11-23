@@ -62,7 +62,7 @@ There is no separate top-level `services` section in the preferred DSL.
 
 ### 1. Plugins Are Explicit
 
-MeshLLM ships no bundled plugins: a plugin reaches a node only when its operator installs it with `mesh-llm plugins install`.
+MeshLLM ships no bundled plugins: a plugin reaches a node only when it is installed from the catalog. `mesh-llm setup` installs the catalog's `recommended` plugin set by default (`--skip-plugin-install` opts out), and `mesh-llm plugins install` installs any plugin or set (`--set NAME`).
 
 What is not acceptable is embedding one plugin's runtime behavior directly into core mesh logic. Core mesh transport and state should stay generic.
 

@@ -12,11 +12,13 @@ use super::{
     plan_setup,
     service::{ServiceInstallReport, install_service},
 };
+use crate::plugin_sets::{DEFAULT_SET, SetupPluginsOutcome, install_default_set_for_setup};
 use crate::runtime_native::{
     NativeRuntimeConfigSelection, SetupNativeRuntimeOptions, SetupNativeRuntimeOutcome,
     SetupNativeRuntimePruneResult, install_and_prune_native_runtime_for_setup,
 };
 use anyhow::{Result, anyhow};
+use mesh_llm_plugin_manager::PluginInstallOptions;
 use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
@@ -70,9 +72,12 @@ pub(crate) struct CliSetupActions<'a> {
     environment: SetupEnvironment,
     configured: NativeRuntimeConfigSelection<'a>,
     pub(crate) runtime_outcome: Option<SetupNativeRuntimeOutcome>,
+    pub(crate) plugins_outcome: SetupPluginsOutcome,
     service_context: Option<ServiceInstallContext>,
     service_runner: Box<dyn ServiceCommandRunner>,
     github_runner: Box<dyn GhCommandRunner>,
+    /// Where the plugin step reads the catalog; `None` reads the environment's.
+    plugin_options: Option<PluginInstallOptions>,
     pub(crate) service_outcome: SetupServiceOutcome,
     pub(crate) github_outcome: SetupGitHubOutcome,
     verbose: bool,
@@ -106,9 +111,11 @@ impl<'a> CliSetupActions<'a> {
             environment,
             configured,
             runtime_outcome: None,
+            plugins_outcome: SetupPluginsOutcome::NotRequested,
             service_context,
             service_runner,
             github_runner,
+            plugin_options: None,
             service_outcome: SetupServiceOutcome::NotRequested,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
             verbose,
@@ -123,14 +130,24 @@ impl<'a> CliSetupActions<'a> {
         service_runner: Box<dyn ServiceCommandRunner>,
         github_runner: Box<dyn GhCommandRunner>,
     ) -> Self {
-        Self::with_support(
+        let mut actions = Self::with_support(
             environment,
             configured,
             Some(service_context),
             service_runner,
             github_runner,
             false,
-        )
+        );
+        // A refused loopback port: the plugin step fails at once and tests
+        // never reach the network or a real plugin store.
+        actions.plugin_options = Some(PluginInstallOptions {
+            store_root: std::env::temp_dir().join("mesh-llm-setup-test-unused-plugins"),
+            install_root: std::env::temp_dir().join("mesh-llm-setup-test-unused-plugins/installed"),
+            catalog_url: "http://127.0.0.1:9/plugins.jsonl".to_string(),
+            target: mesh_llm_plugin_manager::PluginTarget::current()
+                .expect("tests run on a supported plugin target"),
+        });
+        actions
     }
 
     async fn install_runtime(&mut self) -> Result<()> {
@@ -187,6 +204,27 @@ impl<'a> CliSetupActions<'a> {
         Ok(())
     }
 
+    /// Install the default plugin set. Never fails setup: what went wrong is
+    /// printed with the command that retries it, and kept for the summary.
+    async fn install_plugins(&mut self) -> Result<()> {
+        let options = match self.plugin_options.clone() {
+            Some(options) => Ok(options),
+            None => PluginInstallOptions::from_env(),
+        };
+        let outcome = match options {
+            Ok(options) => {
+                let mut progress = crate::plugin::CliPluginProgress::default();
+                let outcome = install_default_set_for_setup(&options, &mut progress).await;
+                progress.finish();
+                outcome
+            }
+            Err(error) => SetupPluginsOutcome::Unavailable(format!("{error:#}")),
+        };
+        print_plugins_warnings(&outcome);
+        self.plugins_outcome = outcome;
+        Ok(())
+    }
+
     fn install_service(&mut self) -> Result<()> {
         let context = match self.service_context.clone() {
             Some(context) => context,
@@ -204,6 +242,30 @@ impl<'a> CliSetupActions<'a> {
             err,
             "Service not installed. Run `mesh-llm setup --service` to enable it later."
         );
+    }
+}
+
+fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
+    let mut err = mesh_llm_events::console_err();
+    let retry = format!(
+        "Retry with `mesh-llm plugins install --set {DEFAULT_SET}`, or pass --skip-plugin-install to setup to opt out."
+    );
+    match outcome {
+        SetupPluginsOutcome::Unavailable(reason) => {
+            let _ = writeln!(
+                err,
+                "warning: could not install the {DEFAULT_SET} plugins: {reason}. {retry}"
+            );
+        }
+        SetupPluginsOutcome::Finished { failed, .. } => {
+            for (name, reason) in failed {
+                let _ = writeln!(err, "warning: could not install plugin {name}: {reason}");
+            }
+            if !failed.is_empty() {
+                let _ = writeln!(err, "{retry}");
+            }
+        }
+        SetupPluginsOutcome::NotRequested => {}
     }
 }
 
@@ -230,6 +292,7 @@ impl SetupActions for CliSetupActions<'_> {
             match step {
                 SetupStep::InstallRuntime => self.install_runtime().await,
                 SetupStep::PruneInactiveRuntimes => self.report_runtime_prune(),
+                SetupStep::InstallPlugins => self.install_plugins().await,
                 SetupStep::InstallService => self.install_service(),
                 SetupStep::PrintServiceGuidance => {
                     self.service_outcome = SetupServiceOutcome::PrintedGuidance;

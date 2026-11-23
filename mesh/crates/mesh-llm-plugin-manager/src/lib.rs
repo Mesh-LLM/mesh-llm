@@ -7,17 +7,18 @@ pub mod install;
 mod package_identity;
 mod placement;
 pub mod plugin_toml;
+pub mod sets;
 pub mod skills;
 pub mod source_ref;
 pub mod store;
 pub mod target;
 
 pub use asset::{AssetMatchKind, PluginAsset, infer_plugin_asset, select_plugin_asset};
-pub use catalog::{CatalogEntry, PinnedRelease, PluginCatalog};
+pub use catalog::{CatalogEntry, CatalogSet, PinnedRelease, PluginCatalog};
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};
 pub use install::{
     InstallOutcome, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter,
-    install_plugin, update_plugin,
+    install_catalog_entry, install_plugin, update_plugin,
 };
 pub use mesh_llm_skills::{
     SkillAgent, SkillInstallAction, SkillInstallReport, SkillInstallStatus, SkillPackage,

@@ -162,8 +162,10 @@ pub async fn run_plugin_command(
     runtime_rows: Option<&PluginListRows>,
 ) -> Result<bool> {
     match command {
+        PluginCommand::Install { set: Some(set), .. } => install_set_by_name(set).await?,
         PluginCommand::Install {
             reference,
+            set: None,
             archive,
             name,
             version,
@@ -248,6 +250,37 @@ async fn install(
         )?;
     }
     Ok(())
+}
+
+/// `plugins install --set NAME`: install the set's missing members from one
+/// catalog snapshot, then fail if any member failed.
+async fn install_set_by_name(set: &str) -> Result<()> {
+    let options = PluginInstallOptions::from_env()?;
+    let mut progress = CliPluginProgress::default();
+    let result = crate::plugin_sets::install_set_command(set, &options, &mut progress).await;
+    progress.finish();
+    let result = result?;
+    let mut err = mesh_llm_events::console_err();
+    for outcome in &result.installed {
+        writeln!(
+            err,
+            "✅ Installed {} {}",
+            outcome.metadata.name, outcome.metadata.installed_version
+        )?;
+    }
+    for (name, reason) in &result.skipped {
+        writeln!(err, "Skipped {name}: {reason}")?;
+    }
+    if result.failed.is_empty() {
+        return Ok(());
+    }
+    for (name, reason) in &result.failed {
+        writeln!(err, "Failed {name}: {reason}")?;
+    }
+    bail!(
+        "{} of the plugins in set '{set}' failed to install; rerun `mesh-llm plugins install --set {set}` to retry the rest",
+        result.failed.len()
+    )
 }
 
 async fn update(name: &str) -> Result<()> {
@@ -520,14 +553,14 @@ fn list(runtime_rows: &PluginListRows) -> Result<()> {
 }
 
 #[derive(Default)]
-struct CliPluginProgress {
+pub(crate) struct CliPluginProgress {
     spinner: Option<SpinnerHandle>,
     active_download: Option<String>,
     last_percent: Option<u64>,
 }
 
 impl CliPluginProgress {
-    fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         if let Some(mut spinner) = self.spinner.take() {
             spinner.finish();
         }

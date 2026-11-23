@@ -28,6 +28,7 @@ fn setup_command_args<'a>(
         service,
         no_service,
         skip_runtime,
+        skip_plugin_install,
         verbose,
     }) = cmd
     else {
@@ -41,6 +42,7 @@ fn setup_command_args<'a>(
             service: *service,
             no_service: *no_service,
             skip_runtime: *skip_runtime,
+            skip_plugin_install: *skip_plugin_install,
             verbose: *verbose,
         },
         environment: SetupEnvironment {
@@ -77,6 +79,7 @@ mod tests {
                 service: true,
                 no_service: false,
                 skip_runtime: true,
+                skip_plugin_install: true,
                 verbose: true,
             }),
             mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection::default(),
@@ -91,6 +94,7 @@ mod tests {
                 service: true,
                 no_service: false,
                 skip_runtime: true,
+                skip_plugin_install: true,
                 verbose: true,
             }
         );

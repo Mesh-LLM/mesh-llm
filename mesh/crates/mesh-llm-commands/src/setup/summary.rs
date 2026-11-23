@@ -1,6 +1,7 @@
 use super::SetupPlan;
 use super::command::{CliSetupActions, SetupServiceOutcome};
 use super::service::ServiceInstallStatus;
+use crate::plugin_sets::SetupPluginsOutcome;
 use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
 };
@@ -53,6 +54,7 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
     if verbose {
         let _ = writeln!(err, "Setup summary");
         let _ = writeln!(err, "- Runtime: {}", runtime_summary(plan, actions));
+        let _ = writeln!(err, "- Plugins: {}", plugins_summary(plan, actions));
         let _ = writeln!(err, "- Service: {}", service_summary(plan, actions));
         let _ = writeln!(
             err,
@@ -65,11 +67,46 @@ pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_
 
     let _ = writeln!(err, "{} Mesh setup complete", style_ok("✓"));
     let _ = writeln!(err, "  Runtime  {}", runtime_brief(plan, actions));
+    let _ = writeln!(err, "  Plugins  {}", plugins_summary(plan, actions));
     let _ = writeln!(err, "  Service  {}", service_brief(plan, actions));
     if let Some(github) = github_brief(actions) {
         let _ = writeln!(err, "  GitHub star  {github}");
     }
     let _ = writeln!(err, "  Next     {}", next_step(actions));
+}
+
+/// One line for the plugin step: what landed, or why nothing did.
+fn plugins_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
+    plugins_line(plan.plugins, &actions.plugins_outcome)
+}
+
+fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) -> String {
+    match (plan, outcome) {
+        (super::SetupPluginsPlan::Skip, _) => "skipped by --skip-plugin-install".to_string(),
+        (_, SetupPluginsOutcome::NotRequested) => "not recorded".to_string(),
+        (_, SetupPluginsOutcome::Unavailable(_)) => {
+            "not installed; see the warning above".to_string()
+        }
+        (
+            _,
+            SetupPluginsOutcome::Finished {
+                installed, failed, ..
+            },
+        ) => {
+            let mut parts = Vec::new();
+            if !installed.is_empty() {
+                parts.push(format!("installed {}", installed.join(", ")));
+            }
+            if !failed.is_empty() {
+                parts.push(format!("{} failed; see the warning above", failed.len()));
+            }
+            if parts.is_empty() {
+                "nothing to install".to_string()
+            } else {
+                parts.join("; ")
+            }
+        }
+    }
 }
 
 /// What to run after setup. An installed service runs `serve` on the default

@@ -125,6 +125,9 @@ pub struct SetupArgs {
     /// Skip downloading or configuring the native runtime.
     #[arg(long = "skip-runtime")]
     pub skip_runtime: bool,
+    /// Do not install the catalog's `recommended` plugin set.
+    #[arg(long = "skip-plugin-install")]
+    pub skip_plugin_install: bool,
     /// Print detailed setup paths, commands, and follow-up guidance.
     #[arg(long)]
     pub verbose: bool,

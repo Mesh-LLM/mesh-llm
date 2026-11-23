@@ -301,6 +301,15 @@ handlers for pages and config sections.
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author
   types; do not import private types from `mesh/crates/mesh-llm-ui`
 
+Install a catalog plugin set (a curated group, such as `recommended`) with
+`mesh-llm plugins install --set recommended`. Sets are named in
+`plugin-sets.jsonl`, next to the catalog's `plugins.jsonl`; a set carries only
+member names, and each member's catalog entry stays the authority for its
+release and checksums. `mesh-llm setup` installs `recommended` by default
+(`--skip-plugin-install` opts out). A set install only adds what is missing: it
+never updates, enables or re-enables a plugin that is already installed, and
+membership changes later install nothing on their own.
+
 Install multiple independent plugins in one command using catalog names,
 GitHub `owner/repo` references, or GitHub URLs:
 

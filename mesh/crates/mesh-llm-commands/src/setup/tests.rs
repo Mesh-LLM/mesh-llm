@@ -46,6 +46,7 @@ fn interactive_unix_enter_accepts_default_yes_service_prompt() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins,
             SetupStep::InstallService,
         ]
     );
@@ -66,7 +67,11 @@ fn interactive_unix_explicit_no_skips_service_prompt() {
     assert_eq!(plan.service, SetupServicePlan::Skip);
     assert_eq!(
         plan.core_steps,
-        vec![SetupStep::InstallRuntime, SetupStep::PruneInactiveRuntimes]
+        vec![
+            SetupStep::InstallRuntime,
+            SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins,
+        ]
     );
     assert_eq!(prompter.prompts.len(), 1);
 }
@@ -95,6 +100,7 @@ fn non_interactive_unix_never_prompts_and_prints_service_guidance() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins,
             SetupStep::PrintServiceGuidance,
         ]
     );
@@ -186,7 +192,10 @@ fn skip_runtime_omits_install_and_prune_steps() {
     let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
 
     assert_eq!(plan.runtime, SetupRuntimePlan::Skip);
-    assert_eq!(plan.core_steps, vec![SetupStep::InstallService]);
+    assert_eq!(
+        plan.core_steps,
+        vec![SetupStep::InstallPlugins, SetupStep::InstallService]
+    );
 }
 
 #[test]
@@ -233,7 +242,87 @@ fn yes_and_no_service_keeps_explicit_service_skip_without_prompt() {
     );
     assert_eq!(
         plan.core_steps,
-        vec![SetupStep::InstallRuntime, SetupStep::PruneInactiveRuntimes]
+        vec![
+            SetupStep::InstallRuntime,
+            SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins,
+        ]
     );
     assert!(prompter.prompts.is_empty());
+}
+
+fn plugin_steps(options: SetupOptions, interactive: bool) -> (Vec<SetupStep>, usize) {
+    let mut prompter = FakePrompter::default();
+    let plan = plan_setup(
+        options,
+        SetupEnvironment {
+            platform: SetupPlatform::Linux,
+            interactive,
+        },
+        &mut prompter,
+    )
+    .expect("setup plan");
+    (plan.core_steps, prompter.prompts.len())
+}
+
+/// The recommended set installs by default, attended or not, and never asks.
+#[test]
+fn the_default_plugin_set_installs_without_a_prompt_in_every_mode() {
+    let base = SetupOptions {
+        skip_runtime: true,
+        no_service: true,
+        ..SetupOptions::default()
+    };
+    for (options, interactive) in [
+        (base, true),
+        (base, false),
+        (
+            SetupOptions {
+                no_interactive: true,
+                ..base
+            },
+            true,
+        ),
+        (SetupOptions { yes: true, ..base }, true),
+    ] {
+        let (steps, prompts) = plugin_steps(options, interactive);
+        assert_eq!(steps, vec![SetupStep::InstallPlugins], "{options:?}");
+        assert_eq!(prompts, 0, "{options:?}");
+    }
+}
+
+#[test]
+fn skip_plugin_install_opts_out_in_every_mode() {
+    let base = SetupOptions {
+        skip_runtime: true,
+        no_service: true,
+        skip_plugin_install: true,
+        ..SetupOptions::default()
+    };
+    for (options, interactive) in [
+        (base, true),
+        (base, false),
+        (SetupOptions { yes: true, ..base }, false),
+    ] {
+        let (steps, _) = plugin_steps(options, interactive);
+        assert!(steps.is_empty(), "{options:?}");
+    }
+}
+
+/// Plugins land before the service starts, so its node finds them, and
+/// skipping the runtime does not skip them.
+#[test]
+fn plugins_install_before_the_service_and_independently_of_the_runtime() {
+    let (steps, _) = plugin_steps(
+        SetupOptions {
+            service: true,
+            skip_runtime: true,
+            ..SetupOptions::default()
+        },
+        true,
+    );
+    assert_eq!(
+        steps,
+        vec![SetupStep::InstallPlugins, SetupStep::InstallService]
+    );
 }

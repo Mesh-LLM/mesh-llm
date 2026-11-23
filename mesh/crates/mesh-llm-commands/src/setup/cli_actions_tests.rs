@@ -58,6 +58,7 @@ async fn run_setup_with_cli_actions_records_nonfatal_github_failure() {
     let mut prompter = FakePrompter::with_replies([None]);
     let options = SetupOptions {
         skip_runtime: true,
+        skip_plugin_install: true,
         no_service: true,
         ..SetupOptions::default()
     };
@@ -89,4 +90,47 @@ async fn run_setup_with_cli_actions_records_nonfatal_github_failure() {
             GhCommand::StarRepository,
         ]
     );
+}
+
+/// The plugin step is optional: with the catalog unreachable it records why
+/// and setup carries on, with the later steps still run.
+#[tokio::test]
+async fn a_failing_plugin_install_never_fails_setup() {
+    let (_temp, context) = service_context_fixture();
+    let mut actions = CliSetupActions::with_service_support(
+        SetupEnvironment {
+            platform: SetupPlatform::Linux,
+            interactive: false,
+        },
+        NativeRuntimeConfigSelection::default(),
+        context,
+        Box::new(FakeServiceRunner),
+        Box::new(SharedGhRunner::new([]).0),
+    );
+    let mut prompter = FakePrompter::default();
+    let options = SetupOptions {
+        skip_runtime: true,
+        no_service: true,
+        no_interactive: true,
+        ..SetupOptions::default()
+    };
+
+    let plan = run_setup(
+        options,
+        SetupEnvironment {
+            platform: SetupPlatform::Linux,
+            interactive: false,
+        },
+        &mut prompter,
+        &mut actions,
+    )
+    .await
+    .expect("an unreachable plugin catalog must not fail setup");
+
+    assert_eq!(plan.core_steps, vec![SetupStep::InstallPlugins]);
+    assert!(matches!(
+        actions.plugins_outcome,
+        crate::plugin_sets::SetupPluginsOutcome::Unavailable(_)
+    ));
+    assert!(prompter.prompts.is_empty());
 }
