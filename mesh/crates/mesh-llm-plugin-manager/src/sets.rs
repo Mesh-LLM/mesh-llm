@@ -55,37 +55,76 @@ pub struct SetInstallResult {
 
 const OFFERED_FILE: &str = "offered-sets.json";
 
-/// Whether setup already offered `set_name` on this machine. A set is offered
-/// once per machine: a plugin the operator later removes is never put back by
-/// setup, and members added to the set later are not installed by it either.
-pub fn set_was_offered(store_root: &std::path::Path, set_name: &str) -> Result<bool> {
-    Ok(read_offered(store_root)?
-        .iter()
-        .any(|name| name == set_name))
+/// What setup has already done with one set on this machine. A set is offered
+/// once: a member the operator later removes is never put back by setup, and
+/// members added to the set later are not installed by it either. A member
+/// that failed is not recorded, so the next setup retries it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SetOffer {
+    /// True once an offer finished with no failed member: setup then leaves
+    /// the set alone without reading the catalog.
+    pub complete: bool,
+    /// Members installed, already present, or unavailable here when offered.
+    pub members: Vec<String>,
 }
 
-/// Record that `set_name` was offered on this machine.
-pub fn record_set_offered(store_root: &std::path::Path, set_name: &str) -> Result<()> {
-    let mut offered = read_offered(store_root)?;
-    if offered.iter().any(|name| name == set_name) {
-        return Ok(());
+impl SetOffer {
+    /// The offer after `result`: a member that landed, was already there or
+    /// has no release here counts as offered; a failed one is not, so the
+    /// next setup retries it, and the set is complete only when none failed.
+    pub fn after(&self, result: &SetInstallResult) -> SetOffer {
+        let mut members = self.members.clone();
+        members.extend(result.installed.iter().map(|o| o.metadata.name.clone()));
+        members.extend(result.already_installed.iter().cloned());
+        members.extend(result.unavailable.iter().map(|(name, _)| name.clone()));
+        members.sort();
+        members.dedup();
+        SetOffer {
+            complete: result.failed.is_empty(),
+            members,
+        }
     }
-    offered.push(set_name.to_string());
+}
+
+pub fn read_set_offer(store_root: &std::path::Path, set_name: &str) -> Result<SetOffer> {
+    Ok(read_offers(store_root)?
+        .remove(set_name)
+        .unwrap_or_default())
+}
+
+pub fn record_set_offer(
+    store_root: &std::path::Path,
+    set_name: &str,
+    offer: SetOffer,
+) -> Result<()> {
+    let mut offers = read_offers(store_root)?;
+    offers.insert(set_name.to_string(), offer);
     std::fs::create_dir_all(store_root)
         .with_context(|| format!("create plugin store {}", store_root.display()))?;
     let path = store_root.join(OFFERED_FILE);
-    std::fs::write(&path, serde_json::to_vec(&offered)?)
+    std::fs::write(&path, serde_json::to_vec(&offers)?)
         .with_context(|| format!("write {}", path.display()))
 }
 
-fn read_offered(store_root: &std::path::Path) -> Result<Vec<String>> {
+fn read_offers(
+    store_root: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, SetOffer>> {
     let path = store_root.join(OFFERED_FILE);
     match std::fs::read(&path) {
         Ok(bytes) => {
             serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+impl SetResolution {
+    /// Drop the members setup already offered on this machine.
+    pub fn without_members(mut self, offered: &[String]) -> Self {
+        self.members
+            .retain(|member| !offered.contains(&member.name));
+        self
     }
 }
 
@@ -184,10 +223,12 @@ pub async fn install_set_with<P>(
 pub async fn install_set(
     catalog: &PluginCatalog,
     set_name: &str,
+    already_offered: &[String],
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<SetInstallResult> {
-    let resolution = resolve_set(catalog, set_name, options.target.triple())?;
+    let resolution =
+        resolve_set(catalog, set_name, options.target.triple())?.without_members(already_offered);
     let store = PluginStore::new(&options.store_root);
     install_set_with(&resolution, &store, progress, async |name, progress| {
         let entry = catalog
@@ -388,18 +429,69 @@ mod tests {
     }
 
     #[test]
-    fn a_set_is_offered_once_and_the_record_survives() {
+    fn a_set_offer_is_recorded_per_set_and_survives() {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("plugins");
-        assert!(!set_was_offered(&root, "recommended").unwrap());
-        record_set_offered(&root, "recommended").unwrap();
-        record_set_offered(&root, "recommended").unwrap();
-        record_set_offered(&root, "extras").unwrap();
-        assert!(set_was_offered(&root, "recommended").unwrap());
-        assert!(set_was_offered(&root, "extras").unwrap());
-        assert!(!set_was_offered(&root, "other").unwrap());
+        assert_eq!(
+            read_set_offer(&root, "recommended").unwrap(),
+            SetOffer::default()
+        );
+        let offer = SetOffer {
+            complete: false,
+            members: vec!["alpha".to_string()],
+        };
+        record_set_offer(&root, "recommended", offer.clone()).unwrap();
+        record_set_offer(
+            &root,
+            "extras",
+            SetOffer {
+                complete: true,
+                members: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(read_set_offer(&root, "recommended").unwrap(), offer);
+        assert!(read_set_offer(&root, "extras").unwrap().complete);
+        assert_eq!(read_set_offer(&root, "other").unwrap(), SetOffer::default());
         // The record is a file in the store root, not a plugin.
         assert!(PluginStore::new(&root).list().unwrap().is_empty());
+    }
+
+    /// A failed member is not offered, so the next setup retries it, and the
+    /// set is complete only once nothing failed.
+    #[test]
+    fn a_failed_member_stays_unoffered_until_it_lands() {
+        let mut result = SetInstallResult {
+            already_installed: vec!["alpha".to_string()],
+            unavailable: vec![("gamma".to_string(), "no release".to_string())],
+            failed: vec![("beta".to_string(), "download failed".to_string())],
+            ..SetInstallResult::default()
+        };
+        let first = SetOffer::default().after(&result);
+        assert!(!first.complete);
+        assert_eq!(first.members, ["alpha", "gamma"]);
+
+        result.failed.clear();
+        result.installed.push(InstallOutcome {
+            metadata: installed("beta"),
+            changed: true,
+        });
+        let second = first.after(&result);
+        assert!(second.complete);
+        assert_eq!(second.members, ["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn offered_members_are_dropped_from_a_resolution() {
+        let catalog = catalog(
+            &[("alpha", true), ("beta", true)],
+            r#"{"name":"recommended","description":"d","plugins":["alpha","beta"]}"#,
+        );
+        let resolution = resolve_set(&catalog, "recommended", TARGET)
+            .unwrap()
+            .without_members(&["alpha".to_string()]);
+        assert_eq!(resolution.members.len(), 1);
+        assert_eq!(resolution.members[0].name, "beta");
     }
 
     #[tokio::test]

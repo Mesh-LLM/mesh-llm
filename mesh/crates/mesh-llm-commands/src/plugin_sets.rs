@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::sets::{read_set_offer, record_set_offer};
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressReporter,
     catalog::sets_url_for,
@@ -76,7 +77,7 @@ pub async fn install_set_command(
     if catalog.find_set(set_name).is_none() {
         bail!("{}", no_set_reason(&catalog, set_name, problem));
     }
-    install_set(&catalog, set_name, options, progress).await
+    install_set(&catalog, set_name, &[], options, progress).await
 }
 
 /// Setup's plugin step. Every failure (offline, a slow catalog host, no such
@@ -103,10 +104,12 @@ async fn install_set_for_setup(
     catalog_timeout: Duration,
     install_timeout: Duration,
 ) -> SetupPluginsOutcome {
-    match mesh_llm_plugin_manager::sets::set_was_offered(&options.store_root, set_name) {
-        Ok(true) => return SetupPluginsOutcome::AlreadyOffered,
-        Ok(false) => {}
+    let offer = match read_set_offer(&options.store_root, set_name) {
+        Ok(offer) => offer,
         Err(error) => return SetupPluginsOutcome::Unavailable(format!("{error:#}")),
+    };
+    if offer.complete {
+        return SetupPluginsOutcome::AlreadyOffered;
     }
     let work = async {
         let (catalog, problem) = match read_catalog(options, catalog_timeout).await {
@@ -116,13 +119,11 @@ async fn install_set_for_setup(
         if catalog.find_set(set_name).is_none() {
             return SetupPluginsOutcome::Unavailable(no_set_reason(&catalog, set_name, problem));
         }
-        match install_set(&catalog, set_name, options, progress).await {
+        match install_set(&catalog, set_name, &offer.members, options, progress).await {
             Ok(result) => {
-                // Offered now, whatever each member did: a failed member is
-                // retried by the explicit command, never by a later setup.
-                if let Err(error) =
-                    mesh_llm_plugin_manager::sets::record_set_offered(&options.store_root, set_name)
-                {
+                let recorded =
+                    record_set_offer(&options.store_root, set_name, offer.after(&result));
+                if let Err(error) = recorded {
                     return SetupPluginsOutcome::Unavailable(format!("{error:#}"));
                 }
                 SetupPluginsOutcome::Finished {
@@ -150,6 +151,7 @@ async fn install_set_for_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mesh_llm_plugin_manager::sets::SetOffer;
     use std::{
         io::{BufRead, BufReader, Write},
         net::TcpListener,
@@ -277,8 +279,9 @@ mod tests {
         )
         .await;
         assert!(matches!(outcome, SetupPluginsOutcome::Unavailable(_)));
-        assert!(
-            !mesh_llm_plugin_manager::sets::set_was_offered(temp.path(), "recommended").unwrap()
+        assert_eq!(
+            read_set_offer(temp.path(), "recommended").unwrap(),
+            SetOffer::default()
         );
     }
 
