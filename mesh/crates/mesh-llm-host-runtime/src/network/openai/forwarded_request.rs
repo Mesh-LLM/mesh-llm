@@ -333,7 +333,7 @@ mod tests {
     async fn the_peer_is_told_this_nodes_tier_for_the_request() {
         let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nX-Mesh-Request-Tier: local\r\nContent-Length: 2\r\n\r\n{}";
         let forwarded = crate::mesh::request_tier::with_request_tier(
-            skippy_inference_api::InferenceRequestTier::Trusted,
+            crate::mesh::request_tier::InferenceRequestTier::Trusted,
             async { prepare_peer_forwarded_request(raw) },
         )
         .await

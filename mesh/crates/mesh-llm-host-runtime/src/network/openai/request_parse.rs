@@ -872,8 +872,8 @@ fn finalize_forwarded_request(
         }
         // Only this node names a request's class to its own Skippy server
         // (`mesh::request_tier`); a client's or peer's naming is dropped.
-        if name.eq_ignore_ascii_case(skippy_inference_api::REQUEST_TIER_HEADER)
-            || name.eq_ignore_ascii_case(skippy_inference_api::CACHE_PARTITION_HEADER)
+        if name.eq_ignore_ascii_case(crate::mesh::request_tier::SKIPPY_REQUEST_TIER_HEADER)
+            || name.eq_ignore_ascii_case(crate::mesh::request_tier::CACHE_PARTITION_HEADER)
         {
             continue;
         }

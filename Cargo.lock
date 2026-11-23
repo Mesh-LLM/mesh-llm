@@ -6001,8 +6001,8 @@ dependencies = [
 
 [[package]]
 name = "process-supervision"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "libc",
  "thiserror 2.0.21",
@@ -7441,8 +7441,8 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skippy-api"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "hex",
@@ -7478,8 +7478,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-cache"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7493,8 +7493,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-commands"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7528,8 +7528,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-config"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "serde",
@@ -7539,8 +7539,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-coordinator"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "skippy-model-artifact",
  "thiserror 2.0.21",
@@ -7548,8 +7548,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-events"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde",
  "uuid",
@@ -7557,8 +7557,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-ffi"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "bindgen",
  "libloading 0.9.0",
@@ -7566,8 +7566,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-gpu-bench"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "process-supervision",
  "serde",
@@ -7579,16 +7579,16 @@ dependencies = [
 
 [[package]]
 name = "skippy-guardrails"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "skippy-hardware-profile"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -7602,8 +7602,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-hf-hub"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -7631,8 +7631,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-inference-api"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "async-trait",
  "axum",
@@ -7652,13 +7652,13 @@ dependencies = [
 
 [[package]]
 name = "skippy-metrics"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 
 [[package]]
 name = "skippy-model"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "clap",
@@ -7673,8 +7673,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-artifact"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7685,8 +7685,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-hf"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7711,8 +7711,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-package"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7737,16 +7737,16 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-ref"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "skippy-model-resolver"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "serde",
@@ -7757,8 +7757,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-native-runtime"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "hex",
@@ -7769,8 +7769,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-package-format"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde",
  "serde_json",
@@ -7779,8 +7779,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-protocol"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "prost",
  "prost-build",
@@ -7791,8 +7791,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "crossbeam-queue",
@@ -7811,8 +7811,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime-install"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "anyhow",
  "dirs",
@@ -7835,8 +7835,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-scheduler"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "skippy-runtime",
  "thiserror 2.0.21",
@@ -7844,8 +7844,8 @@ dependencies = [
 
 [[package]]
 name = "skippy-serving"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "ahash",
  "anyhow",
@@ -7880,16 +7880,16 @@ dependencies = [
 
 [[package]]
 name = "skippy-tokenizer"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "skippy-topology"
-version = "0.80.0"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9#5c6625d7b62a73a4d4ff8976ce26ab81dc4059e9"
+version = "0.80.1"
+source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
 dependencies = [
  "serde",
  "serde_json",

@@ -179,10 +179,10 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "request_tiers.local_kv_reserve_percent",
-        status: WiringStatus::Wired,
+        status: WiringStatus::Unwired,
         owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
+        reason: "Needs request tiers in Skippy (Mesh-LLM/skippy#113); the pinned release has none",
+        behavior: WiringBehavior::SilentNoOp,
     },
     WiringEntry {
         path: "owner_control.bind",

@@ -498,7 +498,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         speculative_overrides,
         strategy: cli.placement.strategy.map(map_serving_strategy),
         split: cli.placement.split,
-        allow_uncertified_split: cli.placement.allow_uncertified_split,
         split_topology_lock: cli.placement.split_topology_lock,
         auto_balance: cli.placement.auto_balance,
         ctx_size: cli.placement.ctx_size,

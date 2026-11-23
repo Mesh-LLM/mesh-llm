@@ -979,7 +979,7 @@ impl PluginManager {
     pub(crate) fn begin_tiered_invocation(
         &self,
         plugin_name: &str,
-        tier: skippy_inference_api::InferenceRequestTier,
+        tier: crate::mesh::request_tier::InferenceRequestTier,
     ) -> Option<tiered_invocations::TieredInvocationGuard> {
         self.inner.tiered_invocations.begin(plugin_name, tier)
     }
@@ -988,7 +988,7 @@ impl PluginManager {
     pub(crate) fn nested_request_tier(
         &self,
         plugin_name: &str,
-    ) -> skippy_inference_api::InferenceRequestTier {
+    ) -> crate::mesh::request_tier::InferenceRequestTier {
         self.inner.tiered_invocations.nested_tier(plugin_name)
     }
 

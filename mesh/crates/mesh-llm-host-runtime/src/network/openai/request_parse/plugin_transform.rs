@@ -141,7 +141,7 @@ mod tests {
     #[derive(Default)]
     struct TierProbe {
         manager: std::sync::OnceLock<plugin::PluginManager>,
-        seen: std::sync::Mutex<Vec<skippy_inference_api::InferenceRequestTier>>,
+        seen: std::sync::Mutex<Vec<crate::mesh::request_tier::InferenceRequestTier>>,
     }
 
     impl PluginRpcBridge for Arc<TierProbe> {
@@ -193,10 +193,10 @@ mod tests {
         let body =
             json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}).to_string();
         for (header, expected) in [
-            ("", skippy_inference_api::InferenceRequestTier::Local),
+            ("", crate::mesh::request_tier::InferenceRequestTier::Local),
             (
                 "x-mesh-request-tier: mesh\r\n",
-                skippy_inference_api::InferenceRequestTier::Mesh,
+                crate::mesh::request_tier::InferenceRequestTier::Mesh,
             ),
         ] {
             let (mut client, mut server) = tokio::io::duplex(64 * 1024);
@@ -218,7 +218,7 @@ mod tests {
         }
         assert_eq!(
             manager.nested_request_tier("probe"),
-            skippy_inference_api::InferenceRequestTier::Local
+            crate::mesh::request_tier::InferenceRequestTier::Local
         );
     }
 

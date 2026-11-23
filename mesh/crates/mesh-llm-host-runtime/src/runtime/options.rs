@@ -78,7 +78,6 @@ pub struct RuntimeOptions {
     /// explicit overrides below are applied.
     pub strategy: Option<crate::runtime::serving_strategy::ServingStrategy>,
     pub split: bool,
-    pub allow_uncertified_split: bool,
     pub split_topology_lock: Option<PathBuf>,
     pub auto_balance: bool,
     pub ctx_size: Option<u32>,
@@ -166,7 +165,6 @@ impl Default for RuntimeOptions {
             speculative_overrides: None,
             strategy: None,
             split: false,
-            allow_uncertified_split: false,
             split_topology_lock: None,
             auto_balance: false,
             ctx_size: None,

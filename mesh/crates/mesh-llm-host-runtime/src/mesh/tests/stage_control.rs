@@ -14,7 +14,6 @@ fn test_stage_status(
         manifest_sha256: Some("direct-gguf:1:model.gguf".to_string()),
         source_model_path: Some("/model.gguf".to_string()),
         source_model_sha256: None,
-        split_certification: Some("certified".to_string()),
         source_model_bytes: Some(1),
         materialized_path: None,
         materialized_pinned: false,
@@ -88,7 +87,6 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
-        split_certification: Some("certified".to_string()),
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -142,7 +140,6 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
         }),
-        max_request_tier: None,
     }
 }
 
@@ -498,7 +495,6 @@ fn stage_control_status_list_response_round_trips_all_statuses() {
     };
     assert_eq!(statuses.len(), 2);
     assert_eq!(statuses[0].stage_id, first.stage_id);
-    assert_eq!(statuses[0].split_certification.as_deref(), Some("certified"));
     assert_eq!(statuses[1].stage_id, second.stage_id);
     assert_eq!(statuses[1].bind_addr, "127.0.0.1:51235");
 }
@@ -1023,26 +1019,5 @@ async fn peer_load_without_downloads_is_refused_before_execution() -> Result<()>
     );
     assert!(message.contains("refuses peer model downloads"), "{message}");
     assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_stage_loaded_for_a_peer_is_capped_at_the_peers_tier() -> Result<()> {
-    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
-    let stranger = make_test_endpoint_id(0x77);
-    let mut request =
-        crate::inference::skippy::StageControlRequest::Load(test_stage_load_request());
-    node.cap_stage_load_tier(stranger, &mut request).await;
-    let crate::inference::skippy::StageControlRequest::Load(load) = &request else {
-        unreachable!("the request stays a load");
-    };
-    assert_eq!(load.max_request_tier.as_deref(), Some("mesh"));
-
-    let mut own = crate::inference::skippy::StageControlRequest::LoadLocal(test_stage_load_request());
-    node.cap_stage_load_tier(node.endpoint.id(), &mut own).await;
-    let crate::inference::skippy::StageControlRequest::LoadLocal(load) = &own else {
-        unreachable!("the request stays a local load");
-    };
-    assert_eq!(load.max_request_tier.as_deref(), Some("local"));
     Ok(())
 }

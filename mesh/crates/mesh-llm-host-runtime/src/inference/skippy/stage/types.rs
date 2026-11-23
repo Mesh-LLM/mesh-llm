@@ -79,7 +79,6 @@ pub(crate) struct StageLoadRequest {
     pub(crate) model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) source_model_sha256: Option<String>,
-    pub(crate) split_certification: Option<String>,
     pub(crate) local_source_required: bool,
     pub(crate) projector_path: Option<String>,
     pub(crate) projector_use_gpu: Option<bool>,
@@ -116,10 +115,6 @@ pub(crate) struct StageLoadRequest {
     pub(crate) load_mode: LoadMode,
     pub(crate) upstream: Option<StagePeerDescriptor>,
     pub(crate) downstream: Option<StagePeerDescriptor>,
-    /// Highest request tier the loaded stage serves. Never read from the
-    /// wire: the receiving host sets it from its own classification of the
-    /// node that sent the load. `None` (a local load) serves the stamped tier.
-    pub(crate) max_request_tier: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -261,7 +256,6 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) manifest_sha256: Option<String>,
     pub(crate) source_model_path: Option<String>,
     pub(crate) source_model_sha256: Option<String>,
-    pub(crate) split_certification: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) materialized_path: Option<String>,
     pub(crate) materialized_pinned: bool,

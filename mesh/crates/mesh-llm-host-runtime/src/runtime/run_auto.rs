@@ -1418,7 +1418,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         parallel_override: primary_parallel_override,
         local_source_required: primary_startup_model
             .is_some_and(|model| model.local_source_required),
-        allow_uncertified_split: options.allow_uncertified_split,
         split_topology_lock: options.split_topology_lock.clone(),
         placement: super::placement_policy_for(options),
         resource_planning_profile,

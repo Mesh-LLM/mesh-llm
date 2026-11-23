@@ -198,21 +198,6 @@ impl Node {
         ))
     }
 
-    /// A stage serves its coordinator's requests no higher than this node
-    /// serves `requester`, whatever tier each message claims.
-    pub(super) async fn cap_stage_load_tier(
-        &self,
-        requester: EndpointId,
-        request: &mut crate::inference::skippy::StageControlRequest,
-    ) {
-        if let crate::inference::skippy::StageControlRequest::Load(load)
-        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = request
-        {
-            let tier = self.peer_request_tier(requester).await;
-            load.max_request_tier = Some(tier.as_str().to_owned());
-        }
-    }
-
     pub(crate) async fn handle_stage_control(
         &self,
         remote: EndpointId,
@@ -229,8 +214,7 @@ impl Node {
             remote.fmt_short()
         );
 
-        let mut request = stage_control_request_from_proto(frame)?;
-        self.cap_stage_load_tier(remote, &mut request).await;
+        let request = stage_control_request_from_proto(frame)?;
         // #2217: Claim/Load are already identity-bound by the conversion;
         // Status/Inventory carry no coordinator identity in the command body,
         // so the authenticated requester must be a participant of the

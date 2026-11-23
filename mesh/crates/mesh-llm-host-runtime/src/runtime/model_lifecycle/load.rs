@@ -681,7 +681,6 @@ pub(crate) async fn run_auto_load_runtime_model(
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
             local_source_required,
-            allow_uncertified_split: false,
             split_topology_lock: None,
             placement: Default::default(),
             planning_profile: runtime_resource_planning_profile(ctx.options),

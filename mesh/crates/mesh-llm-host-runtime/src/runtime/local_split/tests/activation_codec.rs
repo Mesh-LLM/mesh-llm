@@ -205,7 +205,6 @@ async fn split_stage_loads(
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &compact_meta,
-        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,

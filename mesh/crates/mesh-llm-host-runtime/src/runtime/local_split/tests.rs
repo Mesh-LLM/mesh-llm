@@ -1542,7 +1542,6 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &compact_meta,
-        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
@@ -2204,23 +2203,4 @@ fn a_split_drafts_short_dflash_blocks_unless_the_cap_is_configured() {
     // A configured `draft_max_tokens` wins, longer or shorter.
     assert_eq!(split_dflash_max_draft_tokens(Some(15), true), Some(15));
     assert_eq!(split_dflash_max_draft_tokens(Some(2), true), Some(2));
-}
-
-#[test]
-fn stage_zero_is_capped_by_the_final_stage_owner_only() {
-    let stage = |index: u32, node| RuntimeSliceStagePlan {
-        stage_id: format!("stage-{index}"),
-        stage_index: index,
-        node_id: make_id(node),
-        layer_start: index * 10,
-        layer_end: index * 10 + 10,
-        parameter_bytes: 0,
-    };
-    let own = make_id(1);
-    // Listed out of order: the final stage is the highest index, not the last entry.
-    let split = [stage(0, 1), stage(2, 3), stage(1, 2)];
-    assert_eq!(remote_final_stage_owner(&split, own), Some(make_id(3)));
-    let returns_to_self = [stage(0, 1), stage(1, 2), stage(2, 1)];
-    assert_eq!(remote_final_stage_owner(&returns_to_self, own), None);
-    assert_eq!(remote_final_stage_owner(&[], own), None);
 }

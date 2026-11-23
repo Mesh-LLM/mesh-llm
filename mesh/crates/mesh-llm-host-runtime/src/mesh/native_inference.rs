@@ -265,17 +265,16 @@ impl Node {
                 continue;
             }
             drop(current);
-            let tier = match requester {
-                Some(peer) => self.peer_request_tier(peer).await,
-                None => super::request_tier::current_request_tier(),
-            };
-            let private = super::current_private_scope().is_some();
-            let context = InferenceRequestContext::new().with_request_class(
-                skippy_inference_api::InferenceRequestClass::new(tier, private),
-            );
+            let context = InferenceRequestContext::new();
+            let mut request: GenerationRequest = call.request.into();
+            // A private request starts no peer consultation: its hooks
+            // would pick peers outside its scope.
+            if super::current_private_scope().is_some() {
+                skippy_inference_api::set_chat_skippy_hooks_enabled(&mut request, false);
+            }
             return Ok(PreparedNativeChat {
                 backend: candidate.backend.clone(),
-                request: call.request.into(),
+                request,
                 _cancel: CancelNativeOnDrop(context.cancellation_token()),
                 context,
                 _slot: slot,

@@ -87,7 +87,7 @@ local_kv_reserve_percent = 20
 ```
 
 - `owners` — owner ids (64 hex characters, as `mesh-llm auth status` prints them) mapped to `local`, `trusted` or `mesh`. An entry replaces the tier the owner's verified nodes would otherwise get; it never affects nodes without a verified certificate. Owner ids that differ only in letter case are rejected. A running node rereads it when the file changes, and keeps the entries it last read while the file is missing or does not load.
-- `local_kv_reserve_percent` — share of each model's KV token budget that only `local` requests may use, 0 to 100. `0` (the default) reserves nothing. Applies when a model loads.
+- `local_kv_reserve_percent` — share of each model's KV token budget that only `local` requests may use, 0 to 100. `0` (the default) reserves nothing. Applies when a model loads. Not in effect yet: it needs request tiers in the Skippy runtime, which the Skippy release this build uses does not have.
 
 ## Payments
 

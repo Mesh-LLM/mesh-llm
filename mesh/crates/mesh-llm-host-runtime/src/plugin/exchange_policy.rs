@@ -91,12 +91,10 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
-        // The backend stamps the request's class from its context; a hook
-        // never runs above it even on a task that carries no tier.
-        let tier = request
-            .request_class
-            .tier()
-            .min(crate::mesh::request_tier::current_request_tier());
+        // Skippy does not carry the request's class, so on a task that
+        // carries no tier the admission runs at the lowest one.
+        let tier = crate::mesh::request_tier::classified_request_tier()
+            .unwrap_or(crate::mesh::request_tier::InferenceRequestTier::Mesh);
         let admission = self.admit_typed_request(
             || {
                 serde_json::to_vec(
@@ -235,9 +233,9 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         // A private request's hooks run in its scope here too.
         let scope = crate::network::openai::routing_scope::local_server_scope(headers);
         // And at its tier, which this node named on the loopback hop.
-        let tier = skippy_inference_api::InferenceRequestTier::from_headers(
+        let tier = crate::mesh::request_tier::InferenceRequestTier::from_headers(
             headers,
-            skippy_inference_api::REQUEST_TIER_HEADER,
+            crate::mesh::request_tier::SKIPPY_REQUEST_TIER_HEADER,
         );
         let (session, result) = crate::mesh::with_private_scope(
             scope,

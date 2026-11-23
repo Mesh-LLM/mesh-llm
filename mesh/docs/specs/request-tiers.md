@@ -1,5 +1,12 @@
 # Request tiers
 
+> **Not in effect on the Skippy engine yet.** The node still classifies every
+> request and its hooks and plugins run at that tier. The engine half below
+> (admission order, KV reservation, eviction order and per-tier caches) needs
+> request tiers in Skippy ([Mesh-LLM/skippy#113](https://github.com/Mesh-LLM/skippy/pull/113)),
+> which the Skippy release this build uses does not have. Until then a
+> hook on the local server runs at `mesh`, the lowest tier.
+
 A node serves requests for its owner before requests for the rest of the
 mesh. Every request it serves gets a **tier** when it enters the node, and
 the tier decides the order of admission, which KV cache entries go first
