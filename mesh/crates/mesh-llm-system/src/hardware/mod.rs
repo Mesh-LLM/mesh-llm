@@ -574,7 +574,7 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
         metrics,
         skippy_devices::gpu_facts(),
         survey_system_ram,
-        survey_available_ram,
+        survey_igpu_memory_ceiling,
     )
 }
 
@@ -595,22 +595,33 @@ fn survey_system_ram() -> u64 {
     }
 }
 
-/// System RAM the OS could hand out right now, which bounds an integrated
-/// GPU outside Metal: its device memory is that same RAM. Read on Linux and
-/// Windows; `None` elsewhere, and on a failed read, leaves the budget as the
-/// device reported it.
+/// The most memory an integrated GPU outside Metal can get: what the BIOS set
+/// aside as its dedicated memory, which the OS never sees, plus the system RAM
+/// the OS could hand out right now. Read on Linux and Windows; `None`
+/// elsewhere, and when free RAM can't be read, leaves the budget as the device
+/// reported it. An unreadable dedicated size counts as none, which keeps the
+/// pre-dedicated behavior: the budget is the free RAM.
 #[cfg(any(feature = "skippy-devices", test))]
 // Its only caller is the feature-gated `skippy_devices` probe.
 #[cfg_attr(all(test, not(feature = "skippy-devices")), allow(dead_code))]
-fn survey_available_ram() -> Option<u64> {
+fn survey_igpu_memory_ceiling() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
-        read_available_ram_bytes()
+        igpu_memory_ceiling(
+            read_available_ram_bytes(),
+            read_dedicated_graphics_memory_bytes(),
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         None
     }
+}
+
+/// Dedicated memory plus free RAM, or `None` when free RAM is unknown.
+#[cfg(any(feature = "skippy-devices", test))]
+fn igpu_memory_ceiling(available: Option<u64>, dedicated: Option<u64>) -> Option<u64> {
+    Some(available?.saturating_add(dedicated.unwrap_or(0)))
 }
 
 #[cfg(all(target_os = "linux", any(feature = "skippy-devices", test)))]
@@ -633,8 +644,36 @@ fn parse_meminfo_available(meminfo: &str) -> Option<u64> {
     })
 }
 
+/// Memory the BIOS reserved as dedicated graphics memory on an amdgpu
+/// integrated GPU (AMD's UMA frame buffer or Variable Graphics Memory): the
+/// amdgpu driver reports it as the card's VRAM. On a host whose memory-bearing
+/// GPUs are all integrated, which is the only place the ceiling applies, those
+/// cards are the iGPU. `None` when no card reports it (Intel, NVIDIA's DGX Spark
+/// and Jetson).
+#[cfg(all(target_os = "linux", any(feature = "skippy-devices", test)))]
+fn read_dedicated_graphics_memory_bytes() -> Option<u64> {
+    let mut total: Option<u64> = None;
+    for entry in std::fs::read_dir("/sys/class/drm").ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // `card0` is a device, `card0-DP-1` one of its connectors.
+        if !name.starts_with("card") || name.contains('-') {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path().join("device/mem_info_vram_total"))
+        else {
+            continue;
+        };
+        if let Ok(bytes) = text.trim().parse::<u64>() {
+            total = Some(total.unwrap_or(0).saturating_add(bytes));
+        }
+    }
+    total
+}
+
 #[cfg(all(target_os = "windows", any(feature = "skippy-devices", test)))]
-fn read_available_ram_bytes() -> Option<u64> {
+fn windows_memory_status() -> Option<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX>
+{
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     // SAFETY: MEMORYSTATUSEX only holds integers, so all zeroes is a valid
@@ -646,7 +685,30 @@ fn read_available_ram_bytes() -> Option<u64> {
     if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
         return None;
     }
-    Some(status.ullAvailPhys)
+    Some(status)
+}
+
+#[cfg(all(target_os = "windows", any(feature = "skippy-devices", test)))]
+fn read_available_ram_bytes() -> Option<u64> {
+    windows_memory_status().map(|status| status.ullAvailPhys)
+}
+
+/// Memory installed in the machine that Windows doesn't see: what the
+/// firmware keeps back, chiefly an integrated GPU's dedicated memory (512 MiB
+/// of UMA on a Radeon 780M laptop, 96 GB on a Strix Halo set that way). It
+/// also holds a few hundred MiB of firmware reservations, which errs toward a
+/// slightly larger ceiling.
+#[cfg(all(target_os = "windows", any(feature = "skippy-devices", test)))]
+fn read_dedicated_graphics_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
+
+    let mut installed_kib = 0_u64;
+    // SAFETY: the API writes one u64 through the pointer it is given.
+    if unsafe { GetPhysicallyInstalledSystemMemory(&mut installed_kib) } == 0 {
+        return None;
+    }
+    let visible = windows_memory_status()?.ullTotalPhys;
+    Some(installed_kib.saturating_mul(1024).saturating_sub(visible))
 }
 
 /// Applies a GPU probe outcome to the survey. The real probe (skippy device
@@ -658,18 +720,19 @@ fn read_available_ram_bytes() -> Option<u64> {
 /// otherwise, so probes that skip VramBytes never pay for it. A
 /// unified-memory survey records the reading but never credits it. Platform
 /// gating lives in the production RAM source (`survey_system_ram`), which
-/// keeps this seam platform-pure. The available RAM closure runs only for a
-/// unified-memory survey outside Metal that requests VramBytes: it caps the
-/// budget there (see the comment at its use).
+/// keeps this seam platform-pure. The memory ceiling closure runs only
+/// for a unified-memory survey outside Metal that requests VramBytes or
+/// GpuFacts: it caps the budget and each integrated GPU's facts there (see the
+/// comment at its use).
 #[cfg(any(feature = "skippy-devices", test))]
 fn apply_gpu_probe_outcome_to_survey<E>(
     survey: &mut HardwareSurvey,
     metrics: &[Metric],
     probe: Result<Vec<GpuFacts>, E>,
     system_ram: impl FnOnce() -> u64,
-    available_ram: impl FnOnce() -> Option<u64>,
+    memory_ceiling: impl FnOnce() -> Option<u64>,
 ) -> bool {
-    let gpus = match probe {
+    let mut gpus = match probe {
         Ok(gpus) => gpus,
         Err(_) => {
             #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
@@ -711,8 +774,25 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     if metrics.contains(&Metric::IsSoc) {
         survey.is_soc = unified_memory;
     }
+    // Outside Metal, an integrated GPU reports everything it may map as its
+    // memory (every Vulkan heap on an AMD APU), yet beyond what the BIOS set
+    // aside for it that is system RAM the OS and other processes already use:
+    // planning against it overcommits the machine before the KV cache is even
+    // allocated. So its memory is capped at its dedicated memory plus the RAM
+    // the OS can still hand out, read once at survey time. The cap reaches
+    // both the budget and the GPU's own facts, which a pinned target plans
+    // against. Metal's working set is already such a bound.
+    let ceiling = if unified_memory
+        && !memory_bearing_gpus(&gpus).any(is_metal_device)
+        && (metrics.contains(&Metric::VramBytes) || metrics.contains(&Metric::GpuFacts))
+    {
+        memory_ceiling()
+    } else {
+        None
+    };
     if metrics.contains(&Metric::VramBytes) {
-        // Index-aligned with the facts, so every GPU keeps its entry.
+        // Index-aligned with the facts, so every GPU keeps its entry: the
+        // figure the device reported, before the cap.
         survey.gpu_vram = gpus.iter().map(|gpu| gpu.vram_bytes).collect();
         survey.gpu_reserved = gpus.iter().map(|gpu| gpu.reserved_bytes).collect();
         let vram: u64 = memory_bearing_gpus(&gpus).map(|gpu| gpu.vram_bytes).sum();
@@ -724,25 +804,19 @@ fn apply_gpu_probe_outcome_to_survey<E>(
         }
         if unified_memory {
             let reserved: u64 = survey.gpu_reserved.iter().flatten().copied().sum();
-            let mut budget = vram.saturating_sub(reserved);
-            // Outside Metal, an integrated GPU reports everything it may map
-            // as its memory (every Vulkan heap on an AMD APU), yet that is
-            // system RAM the OS and other processes already use: planning
-            // against it overcommits the machine before the KV cache is even
-            // allocated. What the OS can still hand out bounds the budget.
-            // Metal's working set is already such a bound.
-            if !memory_bearing_gpus(&gpus).any(is_metal_device)
-                && let Some(available) = available_ram()
-            {
-                budget = budget.min(available);
-            }
-            survey.vram_bytes = budget;
+            let budget = vram.saturating_sub(reserved);
+            survey.vram_bytes = ceiling.map_or(budget, |ceiling| budget.min(ceiling));
         } else {
             let ram_offload = system_ram.saturating_sub(vram);
             survey.vram_bytes = vram + (ram_offload as f64 * 0.90) as u64;
         }
     }
     if metrics.contains(&Metric::GpuFacts) {
+        if let Some(ceiling) = ceiling {
+            for gpu in gpus.iter_mut().filter(|gpu| gpu.unified_memory) {
+                gpu.vram_bytes = gpu.vram_bytes.min(ceiling);
+            }
+        }
         survey.gpus = gpus;
     }
 

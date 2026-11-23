@@ -40,9 +40,8 @@ pub fn mesh_capacity_bytes(hw: &HardwareSurvey) -> u64 {
 }
 
 /// A host whose accelerator memory is the system memory: its budget comes
-/// from a platform working set (Metal), a platform policy (the Tegra
-/// collector) or the RAM still free under any other integrated GPU, not from
-/// device VRAM minus a driver reserve.
+/// from a platform working set (Metal) or a platform policy (the Tegra
+/// collector), not from device VRAM minus a driver reserve.
 fn unified_memory_only(hw: &HardwareSurvey) -> bool {
     hw.is_soc && (hw.gpus.is_empty() || hw.gpus.iter().all(|gpu| gpu.unified_memory))
 }
@@ -153,8 +152,7 @@ pub fn advertised_memory(
     };
     let reserved_bytes = driver_reserved.min(total_bytes);
     // On a unified-memory host the platform's own budget is a policy (Metal's
-    // working set, Tegra's 90% of RAM, the RAM still free under an integrated
-    // GPU elsewhere): whatever it keeps back from the
+    // working set, Tegra's 90% of RAM): whatever it keeps back from the
     // enumerated memory is a platform reserve, not something the owner set.
     // Discrete hosts budget the device memory minus the driver reserve, so
     // nothing lands here.

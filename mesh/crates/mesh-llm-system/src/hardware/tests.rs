@@ -1716,10 +1716,15 @@ fn test_igpu_budget_is_capped_by_available_ram() {
     assert!(survey.is_soc);
     assert_eq!(survey.vram_bytes, 2_600_000_000);
     assert_eq!(survey.gpu_vram, vec![8_500_000_000]);
+    // A model pinned to the iGPU plans against its facts, so they carry the
+    // cap too.
+    assert_eq!(survey.gpus[0].vram_bytes, 2_600_000_000);
     assert_eq!(crate::capacity::mesh_capacity_bytes(&survey), 2_600_000_000);
-    // `mesh-llm gpus` shows what the cap withholds as the platform reserve.
+    // `mesh-llm gpus` counts device memory from the facts, so it shows the
+    // capped figure for the device itself, matching the total.
     let memory = crate::capacity::advertised_memory(&survey, None, 0, false);
-    assert_eq!(memory.platform_reserve_bytes, 5_900_000_000);
+    assert_eq!(memory.total_bytes, 2_600_000_000);
+    assert_eq!(memory.platform_reserve_bytes, 0);
 }
 
 #[test]
@@ -1787,4 +1792,104 @@ fn test_parse_meminfo_available_reads_mem_available_in_bytes() {
                    MemAvailable:    2539062 kB\n";
     assert_eq!(parse_meminfo_available(meminfo), Some(2_539_062 * 1024));
     assert_eq!(parse_meminfo_available("MemTotal: 16384000 kB\n"), None);
+}
+
+/// A Strix Halo with 128 GB, 96 GB of it set aside as dedicated graphics
+/// memory (AMD's Variable Graphics Memory): the device reports about 112 GB,
+/// the OS sees 32 GB of which 25 GB is free. The dedicated part is not system
+/// RAM the OS hands out, so it stays in the budget.
+#[test]
+fn test_igpu_dedicated_memory_stays_in_the_budget() {
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("Vulkan0".to_string()),
+        vram_bytes: 112_000_000_000,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 32_000_000_000,
+        || igpu_memory_ceiling(Some(25_000_000_000), Some(96_000_000_000)),
+    );
+
+    assert_eq!(survey.vram_bytes, 112_000_000_000);
+    assert_eq!(survey.gpus[0].vram_bytes, 112_000_000_000);
+
+    // With less free RAM the cap bites, but only on the shared part.
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("Vulkan0".to_string()),
+        vram_bytes: 112_000_000_000,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 32_000_000_000,
+        || igpu_memory_ceiling(Some(4_000_000_000), Some(96_000_000_000)),
+    );
+    assert_eq!(survey.vram_bytes, 100_000_000_000);
+    assert_eq!(survey.gpus[0].vram_bytes, 100_000_000_000);
+}
+
+/// CUDA reports the DGX Spark and Jetson as integrated, so a static Linux
+/// build there gets the cap too: their memory is system RAM, with no separate
+/// dedicated part.
+#[test]
+fn test_integrated_cuda_device_is_capped_at_free_ram() {
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("CUDA0".to_string()),
+        vram_bytes: 119_000_000_000,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 128_000_000_000,
+        || igpu_memory_ceiling(Some(90_000_000_000), None),
+    );
+    assert_eq!(survey.vram_bytes, 90_000_000_000);
+    assert_eq!(survey.gpus[0].vram_bytes, 90_000_000_000);
+}
+
+#[test]
+fn test_igpu_memory_ceiling_adds_dedicated_memory_to_free_ram() {
+    assert_eq!(
+        igpu_memory_ceiling(Some(3_000_000_000), Some(512 * 1024 * 1024)),
+        Some(3_000_000_000 + 512 * 1024 * 1024)
+    );
+    assert_eq!(
+        igpu_memory_ceiling(Some(3_000_000_000), None),
+        Some(3_000_000_000)
+    );
+    // Without a free RAM reading there is no ceiling at all.
+    assert_eq!(igpu_memory_ceiling(None, Some(96_000_000_000)), None);
+}
+
+/// The real probes on this machine: a `None` here would quietly remove the
+/// cap, so catch it in CI rather than in a bug report.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn test_available_ram_reads_on_this_host() {
+    let available = read_available_ram_bytes().expect("free RAM must be readable");
+    assert!(available > 0);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn test_windows_reads_memory_the_os_does_not_see() {
+    // Installed minus visible RAM: zero on a machine without reserved
+    // memory, never a failure.
+    assert!(read_dedicated_graphics_memory_bytes().is_some());
 }
