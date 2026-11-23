@@ -725,7 +725,9 @@ impl ConfigState {
                         current_revision: self.revision,
                     };
                 }
+                let preserved_dns_fallback_override = self.config.network.dns_fallback_override;
                 self.config = pending.config.clone();
+                self.config.network.dns_fallback_override = preserved_dns_fallback_override;
                 self.config_hash = pending.hash;
                 self.last_write_config_hash = pending.write_hash;
                 self.revision = pending.revision;

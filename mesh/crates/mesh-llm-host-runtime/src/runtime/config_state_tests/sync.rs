@@ -452,3 +452,36 @@ reasoning_format = "mystery"
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn config_sync_apply_preserves_dns_fallback_override() {
+    if !mesh_llm_config::env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::config_sync_apply_preserves_dns_fallback_override"
+        ),
+        mesh_llm_config::MESH_LLM_DNS_FALLBACK_ENV,
+        "never",
+    ) {
+        return;
+    }
+    let dir = test_dir();
+    let config_path = dir.join("config.toml");
+    let mut state = ConfigState::load(&config_path).expect("load");
+    assert_eq!(
+        state.config().network.effective_dns_fallback(),
+        Some(mesh_llm_config::DnsFallbackMode::Never)
+    );
+
+    let mut updated = minimal_valid_config();
+    updated.network.dns_fallback = Some(mesh_llm_config::DnsFallbackMode::Deferred);
+    state.apply(updated, 0);
+    assert_eq!(state.revision(), 1);
+    assert_eq!(
+        state.config().network.effective_dns_fallback(),
+        Some(mesh_llm_config::DnsFallbackMode::Never),
+        "an unrelated config apply must preserve the process MESH_LLM_DNS_FALLBACK override"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
