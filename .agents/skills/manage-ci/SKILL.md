@@ -515,6 +515,14 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- Keep runner-contract coverage separate from placement. Exhaustive main and
+  manual-full profiles still execute runner contracts; only actual `ci-control`
+  or `runner-infra` changes and unknown-diff fallbacks require hosted placement.
+  Lanes must fail hosted when the placement signal is missing or malformed.
+  Manual-full uses its resolved base/source diff without replacing it with a
+  coverage sentinel; missing comparison history retains the hosted fallback.
+  This separation grants no new provider eligibility and activates no gate.
+  Preserve the Linux CPU runtime's hosted cache-producer exception.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;
@@ -635,6 +643,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   caches and package-manager download stores with lockfile-exact keys.
 - Assign one publisher for a shared package-manager key. Other focused PR
   workflows may restore it but must not race to upload the same cache entry.
+- A job that resolves dependencies from a public registry (Maven Central,
+  the Gradle plugin portal) restores an exact-key download store, so a warm
+  run makes no registry requests. Trusted main pushes alone save it; PRs
+  restore only. A failed run may retry once, after a cooldown, only when its
+  output contains the registry's HTTP 429 response (which a warm cache never
+  reaches). Every other resolution, compile or runtime failure fails
+  immediately.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.

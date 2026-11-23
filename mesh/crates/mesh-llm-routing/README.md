@@ -10,8 +10,9 @@ It intentionally stays small:
   sticky candidate selection.
 - `cache_inventory` stores bounded, short-lived positive L1 receipts and emits
   rotating salted digests; raw prompt content and tokens never cross gossip.
-- `cache_aware` compares a verified hit's queue, restore, and suffix-prefill
-  cost with cold prefill before it may override normal routing.
+- `request_cost` sizes the request being routed and compares a verified hit's
+  cost with serving it cold on each candidate before it may override normal
+  routing.
 - `affinity` extracts request namespaces and preserves explicit session/sticky
   fallback without learning a long-lived `prefix -> target` mapping.
 - `total_model_bytes()` calculates GGUF model size, including split GGUF

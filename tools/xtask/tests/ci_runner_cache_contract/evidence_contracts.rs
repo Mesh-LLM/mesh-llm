@@ -296,6 +296,61 @@ fn sdk_dependency_cache_identity_and_hash_boundaries_reject_each_lost_dimension(
     }
 }
 #[test]
+fn kotlin_gradle_cache_identity_and_trusted_writer_mutations_are_rejected() {
+    for (old, new) in [
+        // A PR or non-main context must never publish the entry main restores.
+        (
+            "github.ref == 'refs/heads/main' && github.event_name",
+            "github.event_name",
+        ),
+        ("github.event_name != 'pull_request' && ", ""),
+        (
+            "github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}\n        uses: actions/cache/save",
+            "true }}\n        uses: actions/cache/save",
+        ),
+        ("steps.gradle_cache.outputs.cache-hit != 'true' && ", ""),
+        (
+            "key: ${{ steps.gradle_cache.outputs.cache-primary-key }}",
+            "key: fixed",
+        ),
+        (
+            "key: ${{ format('{0}-kotlin-sdk-gradle-v1",
+            "restore-keys: generic\n          key: ${{ format('{0}-kotlin-sdk-gradle-v1",
+        ),
+        ("runner.arch, hashFiles('mesh/sdk", "hashFiles('mesh/sdk"),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/gradle/wrapper/gradle-wrapper.properties'",
+            "'unrelated'",
+        ),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/build.gradle.kts'",
+            "'unrelated'",
+        ),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/settings.gradle.kts'",
+            "'unrelated'",
+        ),
+        (
+            "settings.gradle.kts', '.github/cache-version.txt'",
+            "settings.gradle.kts', 'unrelated'",
+        ),
+        (
+            "actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+            "actions/cache/save@main",
+        ),
+        ("~/.gradle/wrapper/dists\n", "~/.gradle\n"),
+        (
+            "if: ${{ inputs.sdk_kind == 'kotlin' }}\n        uses: actions/cache/restore",
+            "if: ${{ inputs.sdk_kind == 'rust' }}\n        uses: actions/cache/restore",
+        ),
+    ] {
+        assert!(
+            cache_identity::check(&changed("sdk-smoke.yml", old, new)).is_err(),
+            "{old}"
+        );
+    }
+}
+#[test]
 fn seed_identity_restore_save_and_runtime_opt_out_mutations_are_rejected() {
     for name in [
         "ci-quality-slice.yml",

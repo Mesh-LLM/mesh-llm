@@ -12,9 +12,14 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+process-wrap = { version = "10", default-features = false, features = ["std", "process-group", "job-object"] }
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.80.0" }
 sysinfo = "0.38"
 serde_json.workspace = true
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 libc = "0.2"

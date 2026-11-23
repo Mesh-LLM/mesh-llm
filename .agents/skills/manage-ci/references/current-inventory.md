@@ -689,7 +689,7 @@ requires runner-image catalog changes. Slice IDs and catalog rows are unchanged.
 | `swift-sdk-artifact.yml` | Host-only/full arm64 XCFramework producer; full mode builds the four Apple Silicon Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single Apple Silicon producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs. It passes `source_sha` to the split smoke; `xtask split-payloads` certifies each stage and writes revision-bound JSON evidence. |
-| `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
+| `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache`. Kotlin smoke restores the exact `mesh-llm-kotlin-sdk-gradle-v1-<os>-<arch>-<hash>` Gradle store (`~/.gradle/caches/modules-2`, `~/.gradle/wrapper/dists`; hash over the example's wrapper properties, `build.gradle.kts`, `settings.gradle.kts` and `.github/cache-version.txt`, no restore keys) with pinned `actions/cache/restore`; its only writer is the Kotlin row of a trusted `main` run that missed, through pinned `actions/cache/save`; PR runs restore only. `scripts/ci-kotlin-sdk-smoke.sh` retries `gradlew run` once after 60 s only when its output contains Maven's HTTP 429 response. The `cache_identity` guard pins the key, paths, exact restore and writer conditions |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
 The `native-abi` domain selects `static-abi`, `runtime-product`,
@@ -1021,6 +1021,14 @@ source commit.
 
 ## Planner contract
 
+- `signals.hosted_runner_required` records actual `ci-control`/`runner-infra`
+  changes or `__force_all__` unknown-diff fallback, independently of exhaustive
+  `runner_contract_required` coverage. All five lanes forward the placement
+  signal and force hosted unless it is explicitly boolean false. Manual-full
+  retains its resolved base/source diff; unavailable history stays hosted.
+  Existing provider gates, allowlists and the hosted CPU runtime producer are
+  unchanged. This change does not alter provider gates; a gate that is already
+  enabled lets eligible runs resume Depot execution without a separate step.
 - `tools/ci-controller/src/plan` owns routing, and xtask delegates `ci plan` to
   it; the legacy Python planner and its identity/test import closure are
   deleted.
