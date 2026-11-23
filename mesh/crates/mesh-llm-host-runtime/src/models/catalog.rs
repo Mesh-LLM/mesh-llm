@@ -950,7 +950,22 @@ pub async fn download_hf_repo_file_with_progress(
     .map(|download| download.path)
 }
 
+/// Every caller that fetches a model file goes through here, so the marker the
+/// usage classifier reads as a download failure is attached once, for the
+/// exact-ref paths and for `serve --model <catalog name>` alike.
 pub async fn download_hf_repo_file_with_progress_label(
+    repo: &str,
+    revision: Option<&str>,
+    file: &str,
+    label: &str,
+    progress: bool,
+) -> Result<HfDownload> {
+    fetch_hf_repo_file(repo, revision, file, label, progress)
+        .await
+        .context(skippy_model_hf::ModelDownloadError)
+}
+
+async fn fetch_hf_repo_file(
     repo: &str,
     revision: Option<&str>,
     file: &str,
@@ -1705,6 +1720,34 @@ mod tests {
         assert_eq!(
             std::fs::symlink_metadata(&snapshot).unwrap_err().kind(),
             std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_model_file_download_is_marked_as_a_download_failure() {
+        // `serve --model <catalog name>` reaches the Hub through this function
+        // without the exact-ref wrappers, so the marker must come from here.
+        let label = "a-failed-catalog-download".to_string();
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label.clone(),
+            Arc::new(|_, _| Err(anyhow::anyhow!("HTTP status client error (404 Not Found)"))),
+        );
+
+        let error = download_hf_repo_file_with_progress_label(
+            "org/repo",
+            Some("main"),
+            "model.gguf",
+            &label,
+            false,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .downcast_ref::<skippy_model_hf::ModelDownloadError>()
+                .is_some(),
+            "{error:#}"
         );
     }
 
