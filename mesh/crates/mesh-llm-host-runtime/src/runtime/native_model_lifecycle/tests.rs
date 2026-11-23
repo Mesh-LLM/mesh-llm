@@ -249,15 +249,16 @@ mod requests {
         let mut checkpoints = lifecycle.install_gate_wait_checkpoint();
 
         // 2. Queue an exclusive_gpu handoff write lock while the outer read lease is held.
-        let handoff_task = {
-            let lifecycle = lifecycle.clone();
-            tokio::spawn(async move { lifecycle.acquire_exclusive_gpu_handoff().await.unwrap() })
-        };
+        let mut handoff_fut = std::pin::pin!(lifecycle.acquire_exclusive_gpu_handoff());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
+            "handoff must wait while outer read lease is held"
+        );
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), checkpoints.recv())
-                .await
-                .expect("handoff should queue write gate")
-                .expect("checkpoint channel open"),
+            checkpoints
+                .try_recv()
+                .expect("handoff should queue write gate"),
             "exclusive_gpu_handoff_write"
         );
         // Tokio's write-preferring RwLock now blocks any fresh read lock on this gate.
@@ -277,32 +278,30 @@ mod requests {
         })
         .await;
 
-        // 4. Even after the outer scope exits, the `InstanceRequestGuard` still
-        // holds the shared read lease so handoff stays blocked until response end.
-        tokio::task::yield_now().await;
+        // 4. Even after the outer scope exits, polling `handoff_fut` directly proves
+        // `InstanceRequestGuard` still holds the shared read lease and blocks unload.
         assert!(
-            lifecycle.models["test"].gate.try_write().is_err(),
-            "InstanceRequestGuard must still hold the shared read lease"
-        );
-        assert!(
-            intents.try_recv().is_err(),
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
             "handoff must remain blocked while InstanceRequestGuard holds the reused lease"
         );
         assert!(
-            !handoff_task.is_finished(),
-            "handoff task must remain parked until InstanceRequestGuard drops"
+            intents.try_recv().is_err(),
+            "handoff must not emit unload intent while InstanceRequestGuard holds the reused lease"
         );
 
         // 5. Dropping `selected` releases the last lease reference and lets handoff unload.
         drop(selected);
+        assert!(
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
+            "handoff should now be waiting for unload completion"
+        );
         let ModelIntent::Unload {
             target,
             completion: Some(completion),
             ..
-        } = tokio::time::timeout(Duration::from_secs(2), intents.recv())
-            .await
+        } = intents
+            .try_recv()
             .expect("unload intent should arrive once selected request ends")
-            .expect("intent channel open")
         else {
             panic!("expected unload intent");
         };
@@ -314,7 +313,7 @@ mod requests {
                 unloaded: true,
             }))
             .unwrap();
-        let _handoff_lease = handoff_task.await.unwrap();
+        let _handoff_lease = handoff_fut.await.unwrap();
         node.endpoint.close().await;
     }
 
