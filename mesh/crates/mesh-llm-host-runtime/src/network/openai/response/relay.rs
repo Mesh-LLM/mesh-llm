@@ -299,12 +299,9 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     )
     .await
     {
+        let result = handle_unbounded_body_copy_error(tcp_stream, probe.status_code, err);
         let _ = tcp_stream.shutdown().await;
-        return Ok(handle_unbounded_body_copy_error(
-            tcp_stream,
-            probe.status_code,
-            err,
-        ));
+        return Ok(result);
     }
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
