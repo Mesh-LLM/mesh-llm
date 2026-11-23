@@ -49,10 +49,16 @@ async fn read_catalog(
 
 /// Why a catalog without the requested set has none: the reason the sets file
 /// could not be read, which names a custom catalog URL when that is the cause.
-fn no_set_reason(set_name: &str, problem: Option<String>) -> String {
+fn no_set_reason(catalog: &PluginCatalog, set_name: &str, problem: Option<String>) -> String {
     match problem {
         Some(problem) => format!("the plugin catalog has no set '{set_name}' ({problem})"),
-        None => format!("the plugin catalog has no set '{set_name}'"),
+        None => {
+            let known: Vec<&str> = catalog.sets().iter().map(|set| set.name.as_str()).collect();
+            format!(
+                "the plugin catalog has no set '{set_name}'; available sets: {}",
+                known.join(", ")
+            )
+        }
     }
 }
 
@@ -65,7 +71,7 @@ pub async fn install_set_command(
 ) -> Result<SetInstallResult> {
     let (catalog, problem) = read_catalog(options, CATALOG_TIMEOUT).await?;
     if catalog.find_set(set_name).is_none() {
-        bail!("{}", no_set_reason(set_name, problem));
+        bail!("{}", no_set_reason(&catalog, set_name, problem));
     }
     install_set(&catalog, set_name, options, progress).await
 }
@@ -100,7 +106,7 @@ async fn install_set_for_setup(
             Err(error) => return SetupPluginsOutcome::Unavailable(format!("{error:#}")),
         };
         if catalog.find_set(set_name).is_none() {
-            return SetupPluginsOutcome::Unavailable(no_set_reason(set_name, problem));
+            return SetupPluginsOutcome::Unavailable(no_set_reason(&catalog, set_name, problem));
         }
         match install_set(&catalog, set_name, options, progress).await {
             Ok(result) => SetupPluginsOutcome::Finished {
