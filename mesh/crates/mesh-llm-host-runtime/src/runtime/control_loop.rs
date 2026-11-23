@@ -416,8 +416,8 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     .await;
     skippy_serving::telemetry::finish_process_telemetry();
 
-    node.set_serving_models(Vec::new()).await;
-    node.set_hosted_models(Vec::new()).await;
+    shutdown_step("clear_serving_models", node.set_serving_models(Vec::new())).await;
+    shutdown_step("clear_hosted_models", node.set_hosted_models(Vec::new())).await;
 
     // Last mesh-facing step: every subsystem that speaks over the mesh endpoint
     // has now stopped, so close it explicitly. Dropping it instead makes iroh
