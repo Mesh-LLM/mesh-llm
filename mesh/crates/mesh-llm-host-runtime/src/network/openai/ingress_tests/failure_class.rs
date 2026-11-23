@@ -117,6 +117,7 @@ fn remote_delivered_terminal_states_the_failure_class() {
                 peer_served_model: ServedModelHeaders::default(),
                 request_digest: None,
                 twin_bracket_id: None,
+                selected_attempt: None,
             },
             &outcome,
         )

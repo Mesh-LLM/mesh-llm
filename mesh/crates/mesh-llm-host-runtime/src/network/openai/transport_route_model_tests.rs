@@ -564,6 +564,7 @@ async fn a_retry_to_a_different_target_does_not_inherit_the_previous_peers_stale
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -750,6 +751,7 @@ async fn route_across_mock_backends(
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 

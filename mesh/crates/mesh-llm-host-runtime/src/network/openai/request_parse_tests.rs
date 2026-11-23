@@ -432,6 +432,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -939,6 +940,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             exchange_observation_id: None,
             exchange_seq: 0,
             automatic_repick: 0,
+            selected_attempt: Default::default(),
             automatic_route: false,
         };
 
@@ -989,6 +991,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -1242,6 +1245,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }

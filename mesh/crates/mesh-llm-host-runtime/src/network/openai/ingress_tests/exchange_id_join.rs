@@ -190,6 +190,10 @@ async fn peer_failover_joins_lifecycle_callbacks_and_channel_events_on_one_id() 
     }
     assert_eq!(channel[0]["phase"], "effective_request");
     assert_eq!(channel[1]["phase"], "terminal");
+    // Both attempts share `id`, so the terminal names the attempt that served:
+    // the second `backend_selected` (the first was denied), not the first.
+    assert_eq!(channel[1]["served_attempt"], 2, "terminal: {}", channel[1]);
+    assert_eq!(selected[1]["attempt"], channel[1]["served_attempt"]);
     // The terminal callback names the served peer and the denied attempt too.
     let finished = phase(&lifecycle, "exchange_finished")[0];
     assert_eq!(finished["attempt_history"].as_array().unwrap().len(), 2);

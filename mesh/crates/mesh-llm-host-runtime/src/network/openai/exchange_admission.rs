@@ -59,6 +59,12 @@ pub(super) async fn admit_selected_candidate(
     attempt: usize,
     more_candidates: bool,
 ) -> SelectedRouteAdmission {
+    // Recorded before the hook check: a served terminal names its attempt
+    // whether or not an exchange hook is loaded.
+    request.selected_attempt.store(
+        u32::try_from(attempt).unwrap_or(u32::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let Some(manager) = node.plugin_manager().await else {
         return SelectedRouteAdmission::Proceed;
     };

@@ -70,6 +70,7 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 

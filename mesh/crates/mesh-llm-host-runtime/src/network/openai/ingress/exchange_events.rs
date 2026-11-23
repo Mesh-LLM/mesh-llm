@@ -255,6 +255,9 @@ pub(in crate::network::openai) struct RawProxyTerminalFacts<'a> {
     /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.
     /// Host-served only.
     pub(in crate::network::openai) client_nonce: Option<(&'a str, ClientNonceSource)>,
+    /// [`proxy::BufferedHttpRequest::selected_attempt`], reported only when the
+    /// exchange was served.
+    pub(in crate::network::openai) selected_attempt: Option<u32>,
 }
 
 /// Publish the raw-proxy path's terminal event for a served exchange, enriched
@@ -295,6 +298,7 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         request_digest,
         requested_by_node_id,
         client_nonce,
+        selected_attempt,
     } = facts;
     let mut envelope = OpenAiExchangeEnvelope::terminal(
         exchange_id.to_string(),
@@ -304,7 +308,8 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         None,
         client_nonce.map(|(_, source)| source),
     )
-    .with_failure_class(exchange_failure_class(final_outcome));
+    .with_failure_class(exchange_failure_class(final_outcome))
+    .with_served_attempt(selected_attempt.filter(|_| outcome_was_served(final_outcome)));
     // A failed exchange has no serving provenance to name the asker in, so
     // it is stated here, only for the exchanges that failed: the same value
     // a served one already gives plugins inside its provenance.
@@ -448,6 +453,9 @@ pub(super) struct RemoteDeliveredFacts<'a> {
     pub(super) request_digest: Option<String>,
     /// The client's `x-mesh-twin-bracket` value, copied unread.
     pub(super) twin_bracket_id: Option<String>,
+    /// [`proxy::BufferedHttpRequest::selected_attempt`], reported only when the
+    /// exchange was served.
+    pub(super) selected_attempt: Option<u32>,
 }
 
 /// The terminal envelope for an exchange a peer delivered: `RemoteMesh`,
@@ -469,6 +477,11 @@ pub(super) fn remote_delivered_terminal(
         facts.peer_capsule_id,
     )
     .with_twin_bracket_id(facts.twin_bracket_id)
+    .with_served_attempt(
+        facts
+            .selected_attempt
+            .filter(|_| outcome_was_served(outcome)),
+    )
     .with_failure_class(exchange_failure_class(outcome));
     if let Some(provenance) = serving_provenance_for_remote_mesh(
         facts.target,
@@ -517,6 +530,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
         request_digest,
         // Validated in `route_request`; copied unread.
         twin_bracket_id: twin_bracket_id(request).ok().flatten(),
+        selected_attempt: request.selected_attempt(),
     }
 }
 

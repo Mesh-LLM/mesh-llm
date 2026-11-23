@@ -183,6 +183,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -214,6 +215,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -237,6 +239,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -760,6 +763,7 @@ fn test_capture_path_for_request_uses_client_path() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 

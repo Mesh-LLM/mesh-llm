@@ -887,6 +887,7 @@ async fn try_route_plugin_model(
                     request_digest: request_digest.as_deref(),
                     requested_by_node_id: ctx.requested_by_node_id.as_deref(), // named on a failed exchange only; no provenance block on this path
                     client_nonce: None,
+                    selected_attempt: request.selected_attempt(),
                 },
             )
             .await;
@@ -1158,6 +1159,7 @@ async fn route_prepared_request(
                     client_nonce: client_nonce
                         .as_ref()
                         .map(|(nonce, source)| (nonce.as_str(), *source)),
+                    selected_attempt: request.selected_attempt(),
                 },
             )
             .await;

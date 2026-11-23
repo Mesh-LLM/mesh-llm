@@ -196,6 +196,17 @@ nothing; the lifecycle service's `exchange_finished` callbacks do not carry
 it. Other phases never carry it, so existing consumers read what they read
 before.
 
+### Which attempt served (`served_attempt`)
+
+A same-model peer failover tries several peers under one `exchange_id`: each
+attempt's `backend_selected` callback carries its own `attempt` number (and the
+peer's `target_peer_id`), but they share the exchange id. A served `raw_proxy`
+or `remote_mesh` terminal therefore carries an additive `served_attempt`, the
+`attempt` of the `backend_selected` that served it, so a plugin can tell the
+served attempt from a failed earlier one. It is absent when nothing was served
+or no attempt was recorded. Joining a payment leg to an attempt also needs the
+payer's own events to name their peer; that is the payer plugin's to emit.
+
 ### Client-marked pairs (`twin_bracket_id`)
 
 A client can mark two or more exchanges as one pair it sent to different nodes

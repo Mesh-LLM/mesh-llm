@@ -368,6 +368,7 @@ fn request_with_model(path: &str, model: Option<&str>) -> BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }

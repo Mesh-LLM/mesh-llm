@@ -409,6 +409,59 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
     assert!(state.attempt_history[1].get("admission_denied").is_none());
 }
 
+/// `served_exchange_id` names a dispatch that was admitted: a later denied
+/// attempt must not take it over.
+#[tokio::test]
+async fn denied_attempt_does_not_become_the_served_dispatch() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
+    let (session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    // The plugin denies attempt 1 only: attempt 2 is admitted, then attempt 1's
+    // id is reused for a denied one.
+    for (attempt, id) in [(2, "admitted"), (1, "denied")] {
+        let mut selected = request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, true)
+            .await;
+    }
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().served_exchange_id.as_deref(),
+        Some("admitted")
+    );
+}
+
 /// A dispatch names its own exchange: the session must hand a plugin the id
 /// the `backend_selected` event carries (a model re-pick has its own), and
 /// only fill in the session's id for an event that has none.

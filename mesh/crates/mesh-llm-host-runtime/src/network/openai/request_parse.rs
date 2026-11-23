@@ -200,6 +200,10 @@ pub struct BufferedHttpRequest {
     /// How many times an automatic route has re-picked a model for this
     /// request; 0 for the first dispatch. See [`Self::exchange_id`].
     pub automatic_repick: u32,
+    /// The `attempt` of the latest selected-route admission (`0` before any):
+    /// which `backend_selected` dispatch a served terminal belongs to. Written
+    /// through a shared reference, since routing borrows the request.
+    pub(super) selected_attempt: std::sync::atomic::AtomicU32,
     /// Set once automatic routing (`mesh`/`auto` or no model) resolved this
     /// request. The resolved model is written back into the body, so the model
     /// name alone can no longer tell an automatic request from a named one;
@@ -254,6 +258,17 @@ impl BufferedHttpRequest {
     /// gets its own.
     pub(crate) fn exchange_id(&self) -> String {
         exchange_id_for(self.exchange_seq, self.automatic_repick)
+    }
+
+    /// The latest selected-route attempt number, if any was admitted.
+    pub(crate) fn selected_attempt(&self) -> Option<u32> {
+        match self
+            .selected_attempt
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            attempt => Some(attempt),
+        }
     }
 
     /// Whether this is the product tokenizer capability route.
@@ -630,6 +645,7 @@ where
         exchange_observation_id: None,
         exchange_seq: next_exchange_seq(),
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     })
 }

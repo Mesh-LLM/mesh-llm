@@ -45,6 +45,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -224,6 +225,7 @@ fn dispatch_kind_request(
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -325,6 +327,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
     let decision = AutoRouteDecision {
@@ -1254,6 +1257,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -1438,6 +1442,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -1634,6 +1639,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -1963,6 +1969,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     }
 }
@@ -2390,6 +2397,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
 
@@ -2565,6 +2573,7 @@ fn remote_delivered_terminal_carries_the_relayed_response_digests() {
             },
             request_digest: Some("d".repeat(64)),
             twin_bracket_id: None,
+            selected_attempt: None,
         },
         &outcome,
     );
@@ -2640,12 +2649,14 @@ async fn local_route_terminal_names_the_peer_that_delivered() {
             peer_served_model: ServedModelHeaders::default(),
             request_digest: Some(digest.clone()),
             twin_bracket_id: None,
+            selected_attempt: None,
         }),
         RawProxyTerminalFacts {
             served_locally: true,
             request_digest: Some(&digest),
             requested_by_node_id: None,
             client_nonce: None,
+            selected_attempt: None,
         },
     )
     .await;
@@ -2701,6 +2712,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
     let peer_hex = "ab".repeat(32);

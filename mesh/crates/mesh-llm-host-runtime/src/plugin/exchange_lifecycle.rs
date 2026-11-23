@@ -320,7 +320,10 @@ impl PluginManager {
             state.incomplete = true;
             state.evidence_unavailable = true;
         }
-        state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
+        // A denied attempt served nothing, so it never names the served dispatch.
+        if !result.denied {
+            state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
+        }
         state.selected = Some(event);
         result
     }

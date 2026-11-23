@@ -175,6 +175,7 @@ pub(super) async fn route_missing_local_model(
                         peer_served_model: peer_capsule_id_sink.take_served_model(),
                         request_digest,
                         twin_bracket_id: twin_bracket,
+                        selected_attempt: request.selected_attempt(),
                     },
                     &outcome,
                 );

@@ -75,6 +75,7 @@ async fn missing_local_model_response_with_targets(
         exchange_observation_id: None,
         exchange_seq: 0,
         automatic_repick: 0,
+        selected_attempt: Default::default(),
         automatic_route: false,
     };
     let ctx = IngressRouteContext {

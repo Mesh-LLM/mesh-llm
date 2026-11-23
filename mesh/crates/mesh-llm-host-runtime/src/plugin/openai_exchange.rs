@@ -477,6 +477,14 @@ pub struct OpenAiExchangeEnvelope {
     /// other envelope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_by_node_id: Option<String>,
+    /// The `attempt` number of the `backend_selected` dispatch that served
+    /// this exchange, on a served raw-proxy or remote-mesh `Terminal`. A
+    /// same-model peer failover shares one `exchange_id` across its attempts,
+    /// so this (with the `target_peer_id` that attempt's `backend_selected`
+    /// carried) tells which attempt the terminal belongs to. Absent when
+    /// nothing was served or no attempt was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub served_attempt: Option<u32>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -504,6 +512,7 @@ impl OpenAiExchangeEnvelope {
             twin_bracket_id: None,
             failure_class: None,
             requested_by_node_id: None,
+            served_attempt: None,
         }
     }
 
@@ -534,6 +543,7 @@ impl OpenAiExchangeEnvelope {
             twin_bracket_id: None,
             failure_class: None,
             requested_by_node_id: None,
+            served_attempt: None,
         }
     }
 
@@ -587,6 +597,14 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_requested_by_node_id(mut self, requested_by_node_id: Option<&str>) -> Self {
         self.requested_by_node_id = requested_by_node_id.map(str::to_string);
+        self
+    }
+
+    /// Attach the attempt that served (see [`served_attempt`](Self::served_attempt));
+    /// `None` leaves it absent.
+    #[must_use]
+    pub fn with_served_attempt(mut self, served_attempt: Option<u32>) -> Self {
+        self.served_attempt = served_attempt;
         self
     }
 
@@ -658,6 +676,7 @@ impl OpenAiExchangeEnvelope {
             twin_bracket_id: None,
             failure_class: None,
             requested_by_node_id: None,
+            served_attempt: None,
         }
     }
 
@@ -722,6 +741,7 @@ impl OpenAiExchangeEnvelope {
             twin_bracket_id: None,
             failure_class: None,
             requested_by_node_id: None,
+            served_attempt: None,
         }
     }
 }
