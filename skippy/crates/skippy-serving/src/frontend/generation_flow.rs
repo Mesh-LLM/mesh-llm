@@ -30,6 +30,7 @@ use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
+use crate::frontend::wire_messages::stop_message;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
@@ -37,7 +38,6 @@ use serde_json::json;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::generation::GenerationRequest;
-use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use skippy_protocol::binary::write_stage_message;
@@ -287,7 +287,7 @@ impl StageOpenAiBackend {
         let mut receipt_cancelled = false;
         let mut receipt_model_generation_elapsed = None;
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+            TextGenerationCollector::new(self.model_reader(), stop_values, on_text_chunk)?
                 .with_emulation_stop(emulation_active)
                 .with_ignore_eos(sampling.ignore_eos);
         let (result, mut session_cleanup) = LocalSessionCleanupGuard::run(
@@ -685,7 +685,7 @@ impl StageOpenAiBackend {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+            TextGenerationCollector::new(self.model_reader(), stop_values, on_text_chunk)?
                 .with_emulation_stop(request.emulation_active)
                 .with_ignore_eos(request.sampling.ignore_eos);
         let session_id = request.ids.session_id;
@@ -856,6 +856,7 @@ impl StageOpenAiBackend {
                     positions: chunk.positions.clone(),
                     sampling: is_final_chunk.then_some(wire_sampling.clone()).flatten(),
                     final_chunk: is_final_chunk,
+                    request_class: request.ids.request_class(),
                 })?;
                 let forwarded = forwarded_stage_message_timed(
                     &request.config,
@@ -951,6 +952,7 @@ impl StageOpenAiBackend {
                 sampling: wire_sampling.clone(),
                 sideband_capacity: 1,
                 native_mtp_draft_tokens: 0,
+                request_class: request.ids.request_class(),
             })?;
 
             while decoded_tokens < max_tokens as usize {
@@ -1167,7 +1169,7 @@ impl StageOpenAiBackend {
 
         let stop_result = write_stage_message(
             &mut lane.stream,
-            &StageWireMessage::stop_with_identity(request_id, session_id),
+            &stop_message(request_id, session_id, request.ids.request_class()),
         )
         .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
         .and_then(|kind| {

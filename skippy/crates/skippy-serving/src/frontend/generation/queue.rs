@@ -17,11 +17,14 @@ use serde_json::json;
 use skippy_inference_api::CancellationToken;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceErrorKind;
+use skippy_inference_api::InferenceRequestTier;
 use skippy_inference_api::InferenceResult;
 use skippy_protocol::StageConfig;
-use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
+use skippy_scheduler::{
+    CacheAffinity, CacheAwareCandidate, PriorityPassovers, order_cache_aware_candidates,
+};
 use std::collections::BTreeMap;
-use std::collections::VecDeque;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -32,8 +35,6 @@ use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
-const SERVICE_RATE_EWMA_ALPHA: f64 = 0.25;
-const SERVICE_RATE_WINDOW: usize = 64;
 const ADMISSION_CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 
 /// How many admissions the oldest waiter may be bypassed before the queue stops
@@ -49,7 +50,8 @@ const ADMISSION_CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 /// request fits an empty pool (`claim_or_enqueue` rejects impossible requests up
 /// front), so draining always makes progress. The bound trades a little
 /// throughput and cache locality for a hard ceiling on bypasses before drain
-/// reservation begins.
+/// reservation begins. Higher tiers are not held: the bound caps bypasses by
+/// the waiter's own and lower tiers.
 pub(in crate::frontend) const ADMISSION_STARVATION_BOUND_TURNS: u64 = 32;
 
 pub(in crate::frontend) type GenerationCacheAffinityRefresh =
@@ -59,6 +61,7 @@ pub(in crate::frontend) type GenerationCacheAffinityRefresh =
 pub(in crate::frontend) struct GenerationAdmissionScheduling {
     prompt_tokens: Arc<[i32]>,
     refresh_affinity: GenerationCacheAffinityRefresh,
+    tier: InferenceRequestTier,
 }
 
 impl GenerationAdmissionScheduling {
@@ -69,7 +72,19 @@ impl GenerationAdmissionScheduling {
         Self {
             prompt_tokens,
             refresh_affinity,
+            tier: InferenceRequestTier::default(),
         }
+    }
+
+    /// Rank this work at `tier`: higher tiers are admitted first, and lower
+    /// tiers never take a higher tier's room in the waiting queue.
+    pub(in crate::frontend) fn with_tier(mut self, tier: InferenceRequestTier) -> Self {
+        self.tier = tier;
+        self
+    }
+
+    pub(in crate::frontend) fn tier(&self) -> InferenceRequestTier {
+        self.tier
     }
 }
 
@@ -78,6 +93,7 @@ impl Default for GenerationAdmissionScheduling {
         Self {
             prompt_tokens: Arc::from([]),
             refresh_affinity: Arc::new(CacheAffinity::default),
+            tier: InferenceRequestTier::default(),
         }
     }
 }
@@ -88,14 +104,153 @@ struct GenerationAdmissionWaiter {
     token_budget_request: GenerationTokenBudgetRequest,
     enqueued_turn: u64,
     order: u64,
+    /// [`PriorityPassovers::mark`] when the waiter entered the room.
+    passover_mark: u64,
+}
+
+/// A waiter as one election sees it.
+struct WaiterSnapshot {
+    id: u64,
+    waiter: GenerationAdmissionWaiter,
+    /// How many higher-tier waiters were admitted while it waited.
+    passed_over: u64,
+}
+
+/// What the anti-starvation head-of-line reservation asks of the next
+/// election.
+enum SeniorHold {
+    /// Hand the lane to this senior waiter, which fits now, so a higher
+    /// cache-value newcomer cannot re-occupy the drained pool ahead of it.
+    Select(u64),
+    /// A senior waiter of this tier does not fit yet: only higher tiers may
+    /// pass it, so the pool drains for it rather than letting a steady
+    /// stream of smaller requests of its own or a lower tier keep passing it.
+    HoldAtOrBelow(InferenceRequestTier),
+    None,
+}
+
+/// Each tier's oldest waiter (smallest enqueued turn, then smallest order)
+/// is the one at risk in that tier. From the highest tier down, the first
+/// that has been bypassed `ADMISSION_STARVATION_BOUND_TURNS` times gets the
+/// reservation. A higher tier is never held for a lower one: a senior is
+/// handed the lane only when no higher-tier waiter fits, and a lower tier's
+/// old waiter cannot remove a higher tier's protection. Across tiers, aging
+/// protects only a lower-tier waiter that fits: one that does not fit waits
+/// until higher-tier load leaves it room, or until its deadline.
+fn senior_hold(
+    waiters: &[WaiterSnapshot],
+    turn: u64,
+    token_budget: &GenerationTokenBudget,
+) -> InferenceResult<SeniorHold> {
+    let mut seniors = BTreeMap::<InferenceRequestTier, &WaiterSnapshot>::new();
+    for snapshot in waiters {
+        let senior = seniors
+            .entry(snapshot.waiter.scheduling.tier)
+            .or_insert(snapshot);
+        let age =
+            |snapshot: &WaiterSnapshot| (snapshot.waiter.enqueued_turn, snapshot.waiter.order);
+        if age(snapshot) < age(senior) {
+            *senior = snapshot;
+        }
+    }
+    let mut higher_tier_fits = false;
+    for (tier, senior) in seniors.into_iter().rev() {
+        if turn.saturating_sub(senior.waiter.enqueued_turn) >= ADMISSION_STARVATION_BOUND_TURNS {
+            if !token_budget.can_reserve_now(senior.waiter.token_budget_request)? {
+                return Ok(SeniorHold::HoldAtOrBelow(tier));
+            }
+            if !higher_tier_fits {
+                return Ok(SeniorHold::Select(senior.id));
+            }
+        }
+        higher_tier_fits =
+            higher_tier_fits || tier_has_fitting_waiter(waiters, tier, token_budget)?;
+    }
+    Ok(SeniorHold::None)
+}
+
+fn tier_has_fitting_waiter(
+    waiters: &[WaiterSnapshot],
+    tier: InferenceRequestTier,
+    token_budget: &GenerationTokenBudget,
+) -> InferenceResult<bool> {
+    for snapshot in waiters {
+        if snapshot.waiter.scheduling.tier == tier
+            && token_budget.can_reserve_now(snapshot.waiter.token_budget_request)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Default)]
 struct GenerationAdmissionQueueState {
     turn: u64,
+    /// Admissions by tier priority, which age the waiters they pass over.
+    passovers: PriorityPassovers,
     next_id: u64,
+    /// Advances whenever the waiting set changes, so an election run on an
+    /// older snapshot is not published.
+    revision: u64,
     selected_id: Option<u64>,
+    /// The published winner's tier and the waiters that fit when it won.
+    selection_basis: Option<SelectionBasis>,
     waiters: BTreeMap<u64, GenerationAdmissionWaiter>,
+}
+
+struct SelectionBasis {
+    tier: InferenceRequestTier,
+    fit: BTreeSet<u64>,
+}
+
+/// One election's view of the waiting room.
+struct ElectionSnapshot {
+    revision: u64,
+    turn: u64,
+    waiters: Vec<WaiterSnapshot>,
+}
+
+impl GenerationAdmissionQueueState {
+    /// A published winner is stale once a higher-tier waiter that did not
+    /// fit at its election fits now: a release can make room for it.
+    fn selection_is_stale(&self, token_budget: &GenerationTokenBudget) -> InferenceResult<bool> {
+        let Some(basis) = self.selection_basis.as_ref() else {
+            return Ok(false);
+        };
+        for (id, waiter) in &self.waiters {
+            if waiter.scheduling.tier > basis.tier
+                && !basis.fit.contains(id)
+                && token_budget.can_reserve_now(waiter.token_budget_request)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected_id = None;
+        self.selection_basis = None;
+    }
+
+    fn snapshot(&self) -> ElectionSnapshot {
+        ElectionSnapshot {
+            revision: self.revision,
+            turn: self.turn,
+            waiters: self
+                .waiters
+                .iter()
+                .map(|(id, waiter)| WaiterSnapshot {
+                    id: *id,
+                    waiter: waiter.clone(),
+                    passed_over: self
+                        .passovers
+                        .passed_over(waiter.scheduling.tier.priority(), waiter.passover_mark),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Scheduler-owned waiting room in front of the finite native lane pool.
@@ -143,7 +298,9 @@ impl GenerationAdmissionQueue {
         {
             return Ok(GenerationAdmissionClaim::Acquired(resources));
         }
-        let reservation = reserve_generation_queue(generation_queue_depth, generation_queue_limit)
+        let reservation = tier_has_queue_room(&state, scheduling.tier, generation_queue_limit)
+            .then(|| reserve_generation_queue(generation_queue_depth, usize::MAX))
+            .flatten()
             .ok_or_else(generation_queue_full_error)?;
         let id = state.next_id;
         state.next_id = state.next_id.saturating_add(1);
@@ -151,7 +308,9 @@ impl GenerationAdmissionQueue {
         // Claiming a lane or entering the waiting room is one queue-locked operation. A lane that
         // becomes free after the failed fast claim cannot be taken by a newer arrival before this
         // waiter is visible.
-        state.selected_id = None;
+        state.clear_selection();
+        state.revision = state.revision.wrapping_add(1);
+        let passover_mark = state.passovers.mark(scheduling.tier.priority());
         state.waiters.insert(
             id,
             GenerationAdmissionWaiter {
@@ -159,6 +318,7 @@ impl GenerationAdmissionQueue {
                 token_budget_request,
                 enqueued_turn: turn,
                 order: id,
+                passover_mark,
             },
         );
         drop(state);
@@ -172,6 +332,16 @@ impl GenerationAdmissionQueue {
                 reservation: Some(reservation),
             },
         ))
+    }
+
+    /// The number of waiters and the published winner.
+    #[cfg(test)]
+    pub(in crate::frontend) fn election_for_test(&self) -> (usize, Option<u64>) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.waiters.len(), state.selected_id)
     }
 
     pub(in crate::frontend) fn notify_lane_available(&self) {
@@ -189,92 +359,40 @@ impl GenerationAdmissionQueue {
             .election
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Refreshing affinity consults the prefix cache and can be more
-        // expensive than queue bookkeeping. Snapshot under the queue lock,
-        // then release it before crossing that subsystem boundary.
-        let (turn, waiters) = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(selected_id) = state.selected_id {
-                return Ok(Some(selected_id));
-            }
-            (
-                state.turn,
-                state
-                    .waiters
-                    .iter()
-                    .map(|(id, waiter)| (*id, waiter.clone()))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        // Anti-starvation head-of-line reservation. The oldest waiter (smallest
-        // enqueued turn, then smallest order) is the one at risk: once it has
-        // been bypassed ADMISSION_STARVATION_BOUND_TURNS times, reserve the pool
-        // for it instead of letting a steady stream of smaller, currently-fitting
-        // requests keep passing it. If it now fits, hand it the lane directly so a
-        // higher cache-value newcomer cannot re-occupy the drained pool ahead of
-        // it; otherwise select nobody so active reservations keep draining.
-        if let Some((senior_id, senior)) = waiters
-            .iter()
-            .min_by_key(|(_, waiter)| (waiter.enqueued_turn, waiter.order))
-            && turn.saturating_sub(senior.enqueued_turn) >= ADMISSION_STARVATION_BOUND_TURNS
-        {
-            let senior_id = *senior_id;
-            if !token_budget.can_reserve_now(senior.token_budget_request)? {
-                return Ok(None);
-            }
+        loop {
+            // Refreshing affinity consults the prefix cache and can be more
+            // expensive than queue bookkeeping. Snapshot under the queue
+            // lock, then release it before crossing that subsystem boundary.
+            let snapshot = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(selected_id) = state.selected_id {
+                    if !state.selection_is_stale(token_budget)? {
+                        return Ok(Some(selected_id));
+                    }
+                    state.clear_selection();
+                }
+                state.snapshot()
+            };
+            let fit = fitting_waiters(&snapshot.waiters, token_budget)?;
+            let winner = elect(&snapshot, &fit, token_budget)?;
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.selected_id.is_none() && state.waiters.contains_key(&senior_id) {
-                state.selected_id = Some(senior_id);
+            // A waiter that arrived or left during the election was not
+            // ranked: elect again from the current set.
+            if state.revision != snapshot.revision {
+                continue;
+            }
+            if let Some((id, tier)) = winner {
+                state.selected_id = Some(id);
+                state.selection_basis = Some(SelectionBasis { tier, fit });
             }
             return Ok(state.selected_id);
         }
-        let mut eligible_waiters = Vec::with_capacity(waiters.len());
-        for (id, waiter) in waiters {
-            if token_budget.can_reserve_now(waiter.token_budget_request)? {
-                eligible_waiters.push((id, waiter));
-            }
-        }
-        let affinities = eligible_waiters
-            .iter()
-            .map(|(_, waiter)| (waiter.scheduling.refresh_affinity)())
-            .collect::<Vec<_>>();
-        let selected_id = order_cache_aware_candidates(
-            eligible_waiters
-                .iter()
-                .map(|(_, waiter)| waiter)
-                .zip(affinities.iter())
-                .enumerate()
-                .map(|(index, (waiter, affinity))| CacheAwareCandidate {
-                    index,
-                    priority: 0,
-                    affinity,
-                    prompt_tokens: &waiter.scheduling.prompt_tokens,
-                    enqueued_turn: waiter.enqueued_turn,
-                    order: waiter.order,
-                }),
-            turn,
-            ADMISSION_CACHE_AGING_COST_PER_TURN,
-            true,
-        )
-        .first()
-        .and_then(|index| eligible_waiters.get(*index).map(|(id, _)| id))
-        .copied();
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.selected_id.is_none()
-            && selected_id.is_some_and(|id| state.waiters.contains_key(&id))
-        {
-            state.selected_id = selected_id;
-        }
-        Ok(state.selected_id)
     }
 
     fn remove(&self, id: u64) -> bool {
@@ -284,8 +402,11 @@ impl GenerationAdmissionQueue {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let removed = state.waiters.remove(&id).is_some();
+            if removed {
+                state.revision = state.revision.wrapping_add(1);
+            }
             if state.selected_id == Some(id) {
-                state.selected_id = None;
+                state.clear_selection();
             }
             removed
         };
@@ -295,18 +416,123 @@ impl GenerationAdmissionQueue {
         removed
     }
 
-    fn complete_selection(&self, id: u64) {
+    /// Take a lane and its tokens for waiter `id` if it is the current
+    /// winner. Confirming the election and claiming happen under one lock,
+    /// so a waiter that arrives after the election is not passed by it.
+    fn claim_if_selected(
+        &self,
+        id: u64,
+        generation_limit: Arc<Semaphore>,
+        token_budget: &Arc<GenerationTokenBudget>,
+        token_budget_request: GenerationTokenBudgetRequest,
+    ) -> InferenceResult<Option<GenerationAdmissionResources>> {
+        if self.selected_waiter(token_budget)? != Some(id) {
+            return Ok(None);
+        }
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.waiters.remove(&id).is_some() {
+        if state.selected_id != Some(id) {
+            return Ok(None);
+        }
+        if state.selection_is_stale(token_budget)? {
+            // Elect again, this waiter included.
+            state.clear_selection();
+            drop(state);
+            self.changed.notify_waiters();
+            return Ok(None);
+        }
+        let Some(resources) =
+            try_acquire_generation_resources(generation_limit, token_budget, token_budget_request)?
+        else {
+            return Ok(None);
+        };
+        Self::complete_selection(&mut state, id);
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(Some(resources))
+    }
+
+    fn complete_selection(state: &mut GenerationAdmissionQueueState, id: u64) {
+        if let Some(waiter) = state.waiters.remove(&id) {
+            state.revision = state.revision.wrapping_add(1);
             state.turn = state.turn.saturating_add(1);
+            state
+                .passovers
+                .record_selection(waiter.scheduling.tier.priority());
         }
         if state.selected_id == Some(id) {
-            state.selected_id = None;
+            state.clear_selection();
         }
     }
+}
+
+/// The waiters whose token request fits the budget now.
+fn fitting_waiters(
+    waiters: &[WaiterSnapshot],
+    token_budget: &GenerationTokenBudget,
+) -> InferenceResult<BTreeSet<u64>> {
+    let mut fit = BTreeSet::new();
+    for snapshot in waiters {
+        if token_budget.can_reserve_now(snapshot.waiter.token_budget_request)? {
+            fit.insert(snapshot.id);
+        }
+    }
+    Ok(fit)
+}
+
+/// The waiter the next free lane goes to, with its tier.
+fn elect(
+    snapshot: &ElectionSnapshot,
+    fit: &BTreeSet<u64>,
+    token_budget: &GenerationTokenBudget,
+) -> InferenceResult<Option<(u64, InferenceRequestTier)>> {
+    let tier_of = |id: u64| {
+        snapshot
+            .waiters
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .map(|candidate| (id, candidate.waiter.scheduling.tier))
+    };
+    let held_for = match senior_hold(&snapshot.waiters, snapshot.turn, token_budget)? {
+        SeniorHold::Select(senior_id) => return Ok(tier_of(senior_id)),
+        SeniorHold::HoldAtOrBelow(tier) => Some(tier),
+        SeniorHold::None => None,
+    };
+    let eligible_waiters = snapshot
+        .waiters
+        .iter()
+        .filter(|candidate| {
+            fit.contains(&candidate.id)
+                && held_for.is_none_or(|tier| candidate.waiter.scheduling.tier > tier)
+        })
+        .collect::<Vec<_>>();
+    let affinities = eligible_waiters
+        .iter()
+        .map(|candidate| (candidate.waiter.scheduling.refresh_affinity)())
+        .collect::<Vec<_>>();
+    let winner = order_cache_aware_candidates(
+        eligible_waiters
+            .iter()
+            .zip(affinities.iter())
+            .enumerate()
+            .map(|(index, (candidate, affinity))| CacheAwareCandidate {
+                index,
+                priority: candidate.waiter.scheduling.tier.priority(),
+                affinity,
+                prompt_tokens: &candidate.waiter.scheduling.prompt_tokens,
+                enqueued_turn: candidate.waiter.enqueued_turn,
+                order: candidate.waiter.order,
+                passed_over: candidate.passed_over,
+            }),
+        snapshot.turn,
+        ADMISSION_CACHE_AGING_COST_PER_TURN,
+        true,
+    )
+    .first()
+    .and_then(|index| eligible_waiters.get(*index).map(|candidate| candidate.id));
+    Ok(winner.and_then(tier_of))
 }
 
 pub(in crate::frontend) enum GenerationAdmissionClaim {
@@ -348,16 +574,13 @@ impl GenerationAdmissionQueueLease {
             let token_released = self.token_budget.release_notification().notified();
             tokio::pin!(token_released);
             token_released.as_mut().enable();
-            if self.queue.selected_waiter(&self.token_budget)? == Some(self.id)
-                && let Some(resources) = try_acquire_generation_resources(
-                    generation_limit.clone(),
-                    &self.token_budget,
-                    self.token_budget_request,
-                )?
-            {
-                self.queue.complete_selection(self.id);
+            if let Some(resources) = self.queue.claim_if_selected(
+                self.id,
+                generation_limit.clone(),
+                &self.token_budget,
+                self.token_budget_request,
+            )? {
                 self.reservation.take();
-                self.queue.changed.notify_waiters();
                 return Ok(resources);
             }
             if let Some(deadline) = deadline {
@@ -413,235 +636,6 @@ impl Drop for GenerationAdmissionQueueLease {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::frontend) struct GenerationAdmissionWork {
-    pub(in crate::frontend) prompt_tokens: u64,
-    pub(in crate::frontend) decode_tokens: u64,
-}
-
-impl GenerationAdmissionWork {
-    pub(in crate::frontend) fn new(prompt_tokens: usize, decode_tokens: u32) -> Self {
-        Self {
-            prompt_tokens: u64::try_from(prompt_tokens).unwrap_or(u64::MAX),
-            decode_tokens: u64::from(decode_tokens),
-        }
-    }
-}
-
-#[derive(Default)]
-struct GenerationServiceState {
-    active: GenerationAdmissionWork,
-    queued: GenerationAdmissionWork,
-    prefill_ms_per_token_ewma: Option<f64>,
-    decode_ms_per_token_ewma: Option<f64>,
-    prefill_ms_per_token_samples: VecDeque<f64>,
-    decode_ms_per_token_samples: VecDeque<f64>,
-}
-
-pub(in crate::frontend) struct GenerationServiceEstimator {
-    concurrency: AtomicUsize,
-    state: Mutex<GenerationServiceState>,
-}
-
-impl GenerationServiceEstimator {
-    pub(in crate::frontend) fn new(concurrency: usize) -> Self {
-        Self {
-            concurrency: AtomicUsize::new(concurrency.max(1)),
-            state: Mutex::new(GenerationServiceState::default()),
-        }
-    }
-
-    pub(in crate::frontend) fn predicted_wait_ms(&self) -> Option<f64> {
-        let state = self.state.lock().ok()?;
-        predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
-    }
-
-    pub(in crate::frontend) fn estimated_prefill_ms(&self, tokens: usize) -> Option<f64> {
-        let state = self.state.lock().ok()?;
-        state
-            .prefill_ms_per_token_ewma
-            .map(|per_token| per_token * tokens as f64)
-            .filter(|cost| cost.is_finite() && *cost >= 0.0)
-    }
-
-    pub(in crate::frontend) fn set_concurrency(&self, concurrency: usize) {
-        self.concurrency
-            .store(concurrency.max(1), Ordering::Release);
-    }
-
-    pub(in crate::frontend) fn reserve_queued(
-        self: &Arc<Self>,
-        work: GenerationAdmissionWork,
-        admission_timeout: Duration,
-    ) -> Result<GenerationQueuedWorkReservation, f64> {
-        let Ok(mut state) = self.state.lock() else {
-            return Ok(GenerationQueuedWorkReservation {
-                estimator: self.clone(),
-                work,
-                queued: false,
-            });
-        };
-        if !admission_timeout.is_zero()
-            && let Some(wait_ms) =
-                predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
-            && wait_ms > admission_timeout.as_secs_f64() * 1_000.0
-        {
-            return Err(wait_ms);
-        }
-        state.queued = add_work(state.queued, work);
-        Ok(GenerationQueuedWorkReservation {
-            estimator: self.clone(),
-            work,
-            queued: true,
-        })
-    }
-
-    pub(in crate::frontend) fn start_active(
-        self: &Arc<Self>,
-        work: GenerationAdmissionWork,
-    ) -> GenerationActiveWorkReservation {
-        if let Ok(mut state) = self.state.lock() {
-            state.active = add_work(state.active, work);
-        }
-        GenerationActiveWorkReservation {
-            estimator: self.clone(),
-            work,
-        }
-    }
-
-    pub(in crate::frontend) fn observe_completed(
-        &self,
-        work: GenerationAdmissionWork,
-        prompt_ms: f64,
-        decode_ms: f64,
-    ) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        if work.prompt_tokens > 0 && prompt_ms.is_finite() && prompt_ms > 0.0 {
-            let sample = prompt_ms / work.prompt_tokens as f64;
-            state.prefill_ms_per_token_ewma =
-                Some(update_ewma(state.prefill_ms_per_token_ewma, sample));
-            push_sample(&mut state.prefill_ms_per_token_samples, sample);
-        }
-        if work.decode_tokens > 0 && decode_ms.is_finite() && decode_ms > 0.0 {
-            let sample = decode_ms / work.decode_tokens as f64;
-            state.decode_ms_per_token_ewma =
-                Some(update_ewma(state.decode_ms_per_token_ewma, sample));
-            push_sample(&mut state.decode_ms_per_token_samples, sample);
-        }
-    }
-}
-
-fn predicted_wait_ms_for_state(state: &GenerationServiceState, concurrency: usize) -> Option<f64> {
-    let prompt_ms_per_token = conservative_ms_per_token(
-        state.prefill_ms_per_token_ewma,
-        &state.prefill_ms_per_token_samples,
-    );
-    let decode_ms_per_token = conservative_ms_per_token(
-        state.decode_ms_per_token_ewma,
-        &state.decode_ms_per_token_samples,
-    );
-    if prompt_ms_per_token.is_none() && decode_ms_per_token.is_none() {
-        return None;
-    }
-    let work = add_work(state.active, state.queued);
-    let prompt_ms = prompt_ms_per_token.unwrap_or(0.0) * work.prompt_tokens as f64;
-    let decode_ms = decode_ms_per_token.unwrap_or(0.0) * work.decode_tokens as f64;
-    Some((prompt_ms + decode_ms) / concurrency.max(1) as f64)
-}
-
-pub(in crate::frontend) struct GenerationQueuedWorkReservation {
-    estimator: Arc<GenerationServiceEstimator>,
-    work: GenerationAdmissionWork,
-    queued: bool,
-}
-
-impl GenerationQueuedWorkReservation {
-    pub(in crate::frontend) fn promote(mut self) -> GenerationActiveWorkReservation {
-        if let Ok(mut state) = self.estimator.state.lock() {
-            state.queued = subtract_work(state.queued, self.work);
-            state.active = add_work(state.active, self.work);
-        }
-        self.queued = false;
-        GenerationActiveWorkReservation {
-            estimator: self.estimator.clone(),
-            work: self.work,
-        }
-    }
-}
-
-impl Drop for GenerationQueuedWorkReservation {
-    fn drop(&mut self) {
-        if self.queued
-            && let Ok(mut state) = self.estimator.state.lock()
-        {
-            state.queued = subtract_work(state.queued, self.work);
-        }
-    }
-}
-
-pub(in crate::frontend) struct GenerationActiveWorkReservation {
-    estimator: Arc<GenerationServiceEstimator>,
-    work: GenerationAdmissionWork,
-}
-
-impl Drop for GenerationActiveWorkReservation {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.estimator.state.lock() {
-            state.active = subtract_work(state.active, self.work);
-        }
-    }
-}
-
-fn add_work(
-    left: GenerationAdmissionWork,
-    right: GenerationAdmissionWork,
-) -> GenerationAdmissionWork {
-    GenerationAdmissionWork {
-        prompt_tokens: left.prompt_tokens.saturating_add(right.prompt_tokens),
-        decode_tokens: left.decode_tokens.saturating_add(right.decode_tokens),
-    }
-}
-
-fn subtract_work(
-    left: GenerationAdmissionWork,
-    right: GenerationAdmissionWork,
-) -> GenerationAdmissionWork {
-    GenerationAdmissionWork {
-        prompt_tokens: left.prompt_tokens.saturating_sub(right.prompt_tokens),
-        decode_tokens: left.decode_tokens.saturating_sub(right.decode_tokens),
-    }
-}
-
-fn update_ewma(previous: Option<f64>, sample: f64) -> f64 {
-    previous.map_or(sample, |previous| {
-        previous * (1.0 - SERVICE_RATE_EWMA_ALPHA) + sample * SERVICE_RATE_EWMA_ALPHA
-    })
-}
-
-fn push_sample(samples: &mut VecDeque<f64>, sample: f64) {
-    if samples.len() == SERVICE_RATE_WINDOW {
-        samples.pop_front();
-    }
-    samples.push_back(sample);
-}
-
-fn conservative_ms_per_token(ewma: Option<f64>, samples: &VecDeque<f64>) -> Option<f64> {
-    let mut sorted = samples.iter().copied().collect::<Vec<_>>();
-    sorted.sort_by(f64::total_cmp);
-    let p95 = if sorted.is_empty() {
-        None
-    } else {
-        let index = (sorted.len() * 95).div_ceil(100).saturating_sub(1);
-        sorted.get(index).copied()
-    };
-    match (ewma, p95) {
-        (Some(ewma), Some(p95)) => Some(ewma.max(p95)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
-}
 #[cfg(test)]
 use tokio::sync::TryAcquireError;
 
@@ -717,6 +711,23 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue(
         &cancellation,
     )
     .await
+}
+
+/// Whether a request at `tier` may join the waiting room. Only waiters at the
+/// same or a higher tier count against the limit, so lower-tier traffic cannot
+/// fill the room ahead of a higher tier. The room holds at most one limit per
+/// tier.
+fn tier_has_queue_room(
+    state: &GenerationAdmissionQueueState,
+    tier: InferenceRequestTier,
+    generation_queue_limit: usize,
+) -> bool {
+    state
+        .waiters
+        .values()
+        .filter(|waiter| waiter.scheduling.tier >= tier)
+        .count()
+        < generation_queue_limit
 }
 
 pub(in crate::frontend) fn reserve_generation_queue(
@@ -817,6 +828,16 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     let timer = PhaseTimer::start();
     let mut runtime = lock_runtime(runtime);
     let generation_graph_warmed = runtime.warmup_generation_graph()?;
+    // The one-token warmup above does not reserve the graphs real traffic
+    // uses: the first full prefill ubatch and the first concurrent decode
+    // wave each grow the reservation mid-request. Warm the serving shapes
+    // now so no request pays the graph growth.
+    let warmup_prefill_tokens = config
+        .n_ubatch
+        .or(config.n_batch)
+        .unwrap_or(512)
+        .min(config.ctx_size.saturating_sub(64)) as usize;
+    runtime.warmup_serving_shapes(warmup_prefill_tokens)?;
     let sessions = runtime.prewarm_idle_sessions(generation_concurrency)?;
     let mut attrs = lifecycle_attrs(config);
     attrs.insert(
@@ -906,77 +927,4 @@ pub(in crate::frontend) fn generation_queue_timeout_error(timeout: Duration) -> 
         ),
     )
     .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
-}
-
-pub(in crate::frontend) fn generation_predicted_wait_error(
-    predicted_wait_ms: f64,
-    timeout: Duration,
-) -> InferenceError {
-    InferenceError::from_kind(
-        StatusCode::TOO_MANY_REQUESTS,
-        InferenceErrorKind::RateLimit,
-        format!(
-            "predicted generation wait {:.3} seconds exceeds the {:.3}-second admission timeout",
-            predicted_wait_ms / 1_000.0,
-            timeout.as_secs_f64(),
-        ),
-    )
-    .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
-}
-
-#[cfg(test)]
-mod service_estimator_tests {
-    use super::*;
-
-    #[test]
-    fn warm_estimator_rejects_work_beyond_the_wait_slo() {
-        let estimator = Arc::new(GenerationServiceEstimator::new(1));
-        let work = GenerationAdmissionWork::new(100, 100);
-        estimator.observe_completed(work, 100.0, 100.0);
-        let active = estimator.start_active(work);
-
-        assert_eq!(estimator.predicted_wait_ms(), Some(200.0));
-        assert!(
-            estimator
-                .reserve_queued(work, Duration::from_millis(199))
-                .is_err()
-        );
-        assert!(
-            estimator
-                .reserve_queued(work, Duration::from_millis(200))
-                .is_ok()
-        );
-
-        drop(active);
-    }
-
-    #[test]
-    fn queued_and_active_work_are_released_by_raii() {
-        let estimator = Arc::new(GenerationServiceEstimator::new(2));
-        let work = GenerationAdmissionWork::new(80, 20);
-        estimator.observe_completed(work, 80.0, 20.0);
-        let queued = estimator
-            .reserve_queued(work, Duration::from_secs(1))
-            .expect("cold queue reservation");
-        assert_eq!(estimator.predicted_wait_ms(), Some(50.0));
-
-        let active = queued.promote();
-        assert_eq!(estimator.predicted_wait_ms(), Some(50.0));
-        drop(active);
-        assert_eq!(estimator.predicted_wait_ms(), Some(0.0));
-    }
-
-    #[test]
-    fn conservative_rate_uses_the_slower_p95_sample() {
-        let samples = VecDeque::from([1.0, 1.0, 1.0, 10.0]);
-        assert_eq!(conservative_ms_per_token(Some(1.5), &samples), Some(10.0));
-    }
-
-    #[test]
-    fn prefill_estimate_uses_observed_stage_rate() {
-        let estimator = GenerationServiceEstimator::new(1);
-        assert_eq!(estimator.estimated_prefill_ms(128), None);
-        estimator.observe_completed(GenerationAdmissionWork::new(100, 0), 25.0, 0.0);
-        assert_eq!(estimator.estimated_prefill_ms(40), Some(10.0));
-    }
 }

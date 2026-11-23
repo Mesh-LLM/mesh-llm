@@ -121,6 +121,9 @@ outputs:
   runner_contract_required:
     description: Planner-owned runner contract signal
     value: ${{ steps.plan.outputs.runner_contract_required }}
+  hosted_runner_required:
+    description: Actual CI-policy changes or unknown diff require hosted placement
+    value: ${{ steps.plan.outputs.hosted_runner_required }}
   linux_max_parallel:
     description: Validated Linux worker ceiling for the selected profile
     value: ${{ steps.plan.outputs.linux_max_parallel }}
@@ -199,19 +202,19 @@ runs:
             exit 1
           fi
           manifest_root=$(mktemp -d "$RUNNER_TEMP/mesh-ci-manifests.XXXXXX")
-          # BSD tar can stop after end markers before git writes its padding.
-          # Finish the producer first so pipefail cannot mistake SIGPIPE for drift.
+          # BSD tar may stop at end-of-archive before Git writes its final
+          # padding. Materialize the archive so pipefail cannot reject valid
+          # manifests because the producer receives SIGPIPE.
           manifest_archive=$(mktemp "$RUNNER_TEMP/mesh-ci-manifest-archive.XXXXXX")
           git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml > "$manifest_archive"
           tar -x -f "$manifest_archive" -C "$manifest_root"
+          rm "$manifest_archive"
           profile=pr-ready
           if [[ "$DRAFT" == "true" ]]; then
             profile=pr-draft
           fi
         elif [[ "$EVENT_NAME" == "push" ]]; then
           profile=main
-        else
-          printf '%s\n' '["__force_all__"]' > "$changed_files_json_file"
         fi
 
         affected_crates_json="${AFFECTED_CRATES:-[]}"
@@ -275,7 +278,7 @@ runs:
           echo "linux_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "linux")]' ci-plan.json)"
           echo "macos_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "macos")]' ci-plan.json)"
           echo "windows_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "windows")]' ci-plan.json)"
-          for signal in rust_changed ui_changed website_changed website_docs_changed plugin_exemplars_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
+          for signal in rust_changed ui_changed website_changed website_docs_changed plugin_exemplars_changed cli_surface_changed docs_only backend_changed runner_contract_required hosted_runner_required; do
             echo "${signal}=$(jq -r --arg signal "$signal" '.signals[$signal]' ci-plan.json)"
           done
           echo "linux_max_parallel=$(jq -r '.budgets.linux_max_parallel' ci-plan.json)"

@@ -14,15 +14,14 @@ use super::{
 
 const MAX_PREFIX_PROBES: usize = 64;
 
+mod resident_preference;
+use resident_preference::DurableRestoreLookup;
+pub(crate) use resident_preference::PreparedExactStateRestore;
 mod restore;
 mod snapshot_headroom;
 
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
     format!("{}:{}", l3.state_identity(), location.manifest_key)
-}
-
-fn resident_prefix_is_preferred(matched_tokens: usize, exact_tokens: Option<usize>) -> bool {
-    exact_tokens.is_none_or(|exact_tokens| matched_tokens > exact_tokens)
 }
 
 fn preflight_l3_kv_location(
@@ -84,14 +83,23 @@ pub(crate) enum SessionEndCapture {
     Deferred,
 }
 
-/// Total in-flight exact-state payloads per stage — exporting, queued in the
-/// recorder channel, or held by the recorder worker. Sized as channel
-/// capacity (1) plus one worker-held record.
+/// Minimum in-flight exact-state payload slots per stage, including exports,
+/// queued records, and the record held by the worker.
 pub const EXACT_STATE_ADMISSION_TOTAL: usize = 2;
 /// Slots reserved for [`CaptureAdmission::Continuation`]: BestEffort captures
 /// can never occupy more than `TOTAL - RESERVED` slots, so a continuation
 /// boundary always finds a slot unless the whole budget is exhausted.
 pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
+
+/// Per-stage admission slots, with one in-flight payload per lane plus one
+/// slot reserved for continuations. The recorder channel can hold the entire
+/// admitted set even when the worker holds no record.
+/// Concurrent multi-turn sessions measured on the fleet starved at the floor:
+/// whichever session completed first held the only best-effort slot and every
+/// other lane's record was declined for the whole wave.
+pub(crate) fn exact_state_admission_total_for_lanes(lane_count: u32) -> usize {
+    EXACT_STATE_ADMISSION_TOTAL.max(lane_count as usize + 1)
+}
 
 /// Move-only credit for one in-flight exact-state payload. Construction
 /// reserves a slot atomically (CAS, so competing producers cannot
@@ -111,14 +119,16 @@ impl ExactStateAdmissionCredit {
     pub(crate) fn acquire(
         total: &Arc<std::sync::atomic::AtomicUsize>,
         best_effort: &Arc<std::sync::atomic::AtomicUsize>,
+        total_cap: usize,
         class: CaptureAdmission,
     ) -> Option<Self> {
+        let total_cap = total_cap.max(EXACT_STATE_ADMISSION_TOTAL);
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         match class {
             CaptureAdmission::Continuation => {
                 let mut observed = total.load(Acquire);
                 loop {
-                    if observed >= EXACT_STATE_ADMISSION_TOTAL {
+                    if observed >= total_cap {
                         return None;
                     }
                     match total.compare_exchange_weak(observed, observed + 1, AcqRel, Acquire) {
@@ -135,7 +145,7 @@ impl ExactStateAdmissionCredit {
                 }
             }
             CaptureAdmission::BestEffort => {
-                let reserved_cap = EXACT_STATE_ADMISSION_TOTAL - EXACT_STATE_ADMISSION_RESERVED;
+                let reserved_cap = total_cap - EXACT_STATE_ADMISSION_RESERVED;
                 let mut observed_best_effort = best_effort.load(Acquire);
                 loop {
                     if observed_best_effort >= reserved_cap {
@@ -155,7 +165,7 @@ impl ExactStateAdmissionCredit {
                 // if the total budget was exhausted concurrently.
                 let mut observed_total = total.load(Acquire);
                 loop {
-                    if observed_total >= EXACT_STATE_ADMISSION_TOTAL {
+                    if observed_total >= total_cap {
                         best_effort.fetch_sub(1, AcqRel);
                         return None;
                     }
@@ -193,37 +203,6 @@ impl Drop for ExactStateAdmissionCredit {
 }
 
 impl KvStageIntegration {
-    fn available_exact_prefix_tokens(
-        &self,
-        identities: &[PrefillKvIdentity],
-        shared_durable_fallback: bool,
-    ) -> Option<usize> {
-        identities
-            .iter()
-            .filter_map(|identity| {
-                let warm = self
-                    .radix
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .peek_recurrent(&identity.namespace, &identity.token_ids)
-                    .map(|exact| exact.matched_tokens);
-                if warm.is_some() {
-                    return warm;
-                }
-                let l3 = self.l3.as_ref()?;
-                let durable_token_ids = if shared_durable_fallback {
-                    self.durable_exact_lookup_token_ids(&identity.token_ids)
-                } else {
-                    &identity.token_ids
-                };
-                l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES)
-                    .ok()
-                    .flatten()
-                    .and_then(|location| usize::try_from(location.token_count).ok())
-            })
-            .max()
-    }
-
     pub(crate) fn l3_benefit_cost(
         &self,
         cold_prefill_cost: Option<f64>,
@@ -237,32 +216,14 @@ impl KvStageIntegration {
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
-        identities: &[PrefillKvIdentity],
+        prepared: &PreparedExactStateRestore,
         cold_prefill_cost: Option<f64>,
-        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
         }
-        // Dense L3 uses serialized exact state only as the durable floor.
-        // Compare the available serving paths before either mutates the lane:
-        // prefer warm native resident KV only when it restores a longer prefix,
-        // while an equal-length warm or durable exact checkpoint retains priority.
-        if self.payload == StagePrefixCachePayload::ResidentKv {
-            let resident_tokens = identities
-                .iter()
-                .filter_map(|identity| self.probe_resident_prefix(identity))
-                .map(|resident| resident.token_count)
-                .max();
-            if let Some(resident_tokens) = resident_tokens {
-                let exact_tokens =
-                    self.available_exact_prefix_tokens(identities, shared_durable_fallback);
-                if resident_prefix_is_preferred(resident_tokens, exact_tokens) {
-                    return Ok(None);
-                }
-            }
-        }
-        for identity in identities {
+        for candidate in self.ordered_restore_candidates(prepared) {
+            let identity = candidate.identity;
             let lookup_started = Instant::now();
             let (lookup, entries) = {
                 let mut radix = self
@@ -281,6 +242,9 @@ impl KvStageIntegration {
                 lookup.as_ref().map(|matched| matched.stored_tokens.len()),
             );
             let Some(lookup) = lookup else {
+                let Some(location) = candidate.location else {
+                    continue;
+                };
                 // The durable tiers may still hold this prefix.
                 // Runs inside the restore transaction, so a failed import
                 // rolls the lane back exactly as a radix restore would.
@@ -288,9 +252,11 @@ impl KvStageIntegration {
                     runtime,
                     session_id,
                     identity,
-                    lookup_started,
+                    DurableRestoreLookup {
+                        started: lookup_started,
+                        location,
+                    },
                     cold_prefill_cost,
-                    shared_durable_fallback,
                 )? {
                     return restore::finish_restore(runtime, session_id, identity, restored);
                 }
@@ -459,6 +425,7 @@ impl KvStageIntegration {
                 && let Some(admission_credit) = ExactStateAdmissionCredit::acquire(
                     &self.admission_outstanding,
                     &self.admission_best_effort_outstanding,
+                    self.admission_total_cap,
                     CaptureAdmission::BestEffort,
                 )
                 && self.try_begin_record(&page_id)
@@ -469,6 +436,7 @@ impl KvStageIntegration {
                         payload,
                         extra,
                         namespace: identity.namespace.clone(),
+                        retention_priority: identity.retention_priority(),
                         token_ids: stored_tokens,
                         l3_fill_claim: None,
                         write_through_l3: true,
@@ -558,6 +526,9 @@ impl KvStageIntegration {
         l3_cost: Option<skippy_cache::policy::CostSample>,
         write_through_l3: bool,
     ) -> Result<Option<ExactStateRecord>> {
+        if self.records_resident_prefixes() {
+            return Ok(None);
+        }
         let Some((exact_state_payload, admission_credit)) = self.begin_exact_state_capture(
             runtime,
             session_id,
@@ -646,6 +617,9 @@ impl KvStageIntegration {
         l3_cost: Option<skippy_cache::policy::CostSample>,
         write_through_l3: bool,
     ) -> Result<SessionEndCapture> {
+        if self.records_resident_prefixes() {
+            return Ok(SessionEndCapture::Skipped);
+        }
         let token_count = identity.identity.token_count;
         if !self.defers_kv_copy(runtime, session_id, token_count) {
             return self
@@ -792,6 +766,7 @@ impl KvStageIntegration {
         let Some(mut admission_credit) = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
+            self.admission_total_cap,
             admission,
         ) else {
             #[cfg(test)]
@@ -830,6 +805,18 @@ impl KvStageIntegration {
             #[cfg(test)]
             crate::frontend::capture_trace::POST_DECODE_NONE_ALREADY_RECORDED
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
+        // Without L3 there is nowhere for a crowded-out snapshot to spill.
+        if !already_recorded
+            && (!write_through_l3 || self.l3.is_none())
+            && exact_state_crowded_out(
+                &self.radix,
+                self.exact_max_entries,
+                identity.retention_priority(),
+            )
+        {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
@@ -890,6 +877,7 @@ impl KvStageIntegration {
             payload,
             extra,
             namespace: identity.namespace.clone(),
+            retention_priority: identity.retention_priority(),
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
             write_through_l3,
@@ -945,9 +933,8 @@ impl KvStageIntegration {
         runtime: &mut RuntimeState,
         session_id: &str,
         identity: &PrefillKvIdentity,
-        lookup_started: Instant,
+        lookup: DurableRestoreLookup<'_>,
         cold_prefill_cost: Option<f64>,
-        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         let Some(l3) = &self.l3 else {
             return Ok(None);
@@ -956,23 +943,11 @@ impl KvStageIntegration {
         // load on the located entry's manifest key: same-length queries for
         // different prefixes never suppress each other, and different-length
         // queries resolving to one entry never load it twice.
-        let durable_token_ids = if shared_durable_fallback {
-            self.durable_exact_lookup_token_ids(&identity.token_ids)
-        } else {
-            &identity.token_ids
-        };
-        let location =
-            match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
-                Ok(Some(location)) => location,
-                // Nothing stored, or a corrupt / identity-mismatched entry.
-                // Either way the miss path is the safe one; the tier has
-                // recorded the reason for the status surface.
-                Ok(None) | Err(_) => return Ok(None),
-            };
+        let location = lookup.location;
         // L3 remains the authority for L2: locate and validate the current
         // manifest identity before a host-RAM mirror may serve the request.
         if let Some(restored) =
-            self.restore_from_l2(runtime, session_id, identity, &location, lookup_started)?
+            self.restore_from_l2(runtime, session_id, identity, location, lookup.started)?
         {
             return Ok(Some(restored));
         }
@@ -980,7 +955,7 @@ impl KvStageIntegration {
         // numerical states. A fill claim must not: one state's fill cannot
         // warm another state's radix namespace, even when their payload bytes
         // happen to be identical.
-        let fill_claim = l3_fill_claim_key(l3, &location);
+        let fill_claim = l3_fill_claim_key(l3, location);
         {
             let mut inflight = self
                 .inflight_fills
@@ -994,9 +969,9 @@ impl KvStageIntegration {
             runtime,
             session_id,
             identity,
-            lookup_started,
+            lookup.started,
             l3,
-            &location,
+            location,
             cold_prefill_cost,
         );
         // On success the claim travels with the re-warm record and the worker
@@ -1054,6 +1029,9 @@ impl KvStageIntegration {
         {
             return Ok(None);
         }
+        if !self.native_payload_is_complete(fill.payload.kind()) {
+            return Ok(None);
+        }
         let fill_ms = fill_started.elapsed().as_secs_f64() * 1000.0;
         let token_count = fill.token_count;
         let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = native_kv_desc.or_else(|| {
@@ -1094,6 +1072,13 @@ impl KvStageIntegration {
                     .payload
                     .recurrent_state_bytes()
                     .context("reconstruct L3 recurrent payload")?;
+                if !self.native_components_are_complete(
+                    kv.as_ref().map_or(0, |bytes| bytes.len() as u64),
+                    recurrent.len() as u64,
+                    kv_desc.is_some(),
+                ) {
+                    return Ok(None);
+                }
                 if recurrent.is_empty() && !self.dense_without_recurrent {
                     return Ok(None);
                 }
@@ -1124,6 +1109,13 @@ impl KvStageIntegration {
                     _ => None,
                 };
 
+                if self
+                    .loaded_memory_cache
+                    .is_some_and(|caps| caps.resident && caps.resident_attention)
+                    && kv_page.is_none()
+                {
+                    return Ok(None);
+                }
                 if let Some((kv, desc)) = kv_page {
                     let import_started = Instant::now();
                     if fill.cachegen_kv {
@@ -1169,7 +1161,15 @@ impl KvStageIntegration {
         // Re-warm the RAM tier off the request path. A drop is fine: the
         // disk copy stays authoritative. The fill claim rides along so the
         // worker releases it only once the entry is radix-resident.
-        if fill.cachegen_kv {
+        if self.records_resident_prefixes() {
+            let tokens = &identity.token_ids[..token_count as usize];
+            runtime.restore_token_history(session_id, tokens)?;
+            let mut prefix = identity.clone();
+            prefix.token_ids = tokens.to_vec();
+            prefix.identity.token_count = token_count;
+            let _ = self.record_resident_prefix(runtime, session_id, &prefix, tokens);
+        }
+        if fill.cachegen_kv || self.records_resident_prefixes() {
             return Ok(Some(ExactStateRestore {
                 page_id: identity.page_id.clone(),
                 token_count: token_count as usize,
@@ -1182,7 +1182,11 @@ impl KvStageIntegration {
                 lookup_ms,
                 kv_import_ms,
                 recurrent_import_ms,
-                source: "l3-cachegen",
+                source: if fill.cachegen_kv {
+                    "l3-cachegen"
+                } else {
+                    "l3"
+                },
                 fill_ms,
                 rewarm_enqueued: false,
             }));
@@ -1194,6 +1198,7 @@ impl KvStageIntegration {
         let rewarm_enqueued = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
+            self.admission_total_cap,
             CaptureAdmission::BestEffort,
         )
         .is_some_and(|admission_credit| {
@@ -1203,6 +1208,7 @@ impl KvStageIntegration {
                     payload: fill.payload,
                     extra: ExactStateExtra { kv_desc },
                     namespace: identity.namespace.clone(),
+                    retention_priority: identity.retention_priority(),
                     token_ids: identity.token_ids[..token_count as usize].to_vec(),
                     l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
                     write_through_l3: false,
@@ -1278,6 +1284,25 @@ fn try_touch_exact_state(
     }
 }
 
+/// Whether a new entry kept at `retention` would be evicted again as soon as
+/// it is stored: the cache is full and every entry it could evict outranks
+/// it (a higher request tier's). Exporting it would only cost the copy.
+fn exact_state_crowded_out(
+    radix: &std::sync::Mutex<
+        skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+    >,
+    max_entries: usize,
+    retention: u64,
+) -> bool {
+    let Ok(radix) = radix.try_lock() else {
+        return false;
+    };
+    radix.stats().recurrent_entries >= max_entries
+        && radix
+            .recurrent_victim_retention(super::RadixExactEntry::retention_priority)
+            .is_none_or(|victim| victim > retention)
+}
+
 fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         let message = cause.to_string();
@@ -1306,7 +1331,7 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
         match kind {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
-            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
+            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::KvRecurrent,
         }
     }
 }
@@ -1333,7 +1358,7 @@ mod tests {
     use skippy_cache::{L3Location, UnifiedRadixCache};
 
     use super::{
-        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_preferred,
+        exact_state_crowded_out, is_native_kv_unavailable, preflight_l3_kv_location,
         try_touch_exact_state,
     };
 
@@ -1343,17 +1368,38 @@ mod tests {
     >;
 
     #[test]
-    fn longer_resident_prefixes_skip_exact_restore() {
-        assert!(resident_prefix_is_preferred(4_000, None));
-        assert!(resident_prefix_is_preferred(4_001, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(4_000, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(200, Some(4_000)));
-    }
-
-    #[test]
     fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
         let error = anyhow::anyhow!("RuntimeError: no KV cache layers selected by layer range");
         assert!(is_native_kv_unavailable(&error));
+    }
+
+    #[test]
+    fn a_snapshot_every_stored_entry_outranks_is_not_exported_into_a_full_cache() {
+        let cache = Mutex::new(TestRadix::new());
+        for (index, retention) in [(1, 2), (2, 2)] {
+            cache
+                .lock()
+                .unwrap()
+                .insert_recurrent(
+                    "namespace",
+                    &[index],
+                    32,
+                    crate::kv_integration::RadixExactEntry::new(
+                        format!("page-{index}"),
+                        crate::kv_integration::ExactStatePayload::full_state(vec![1]),
+                        crate::kv_integration::ExactStateExtra::default(),
+                        false,
+                    )
+                    .with_retention_priority(retention),
+                )
+                .unwrap();
+        }
+        // Full of entries kept at 2: a 0 would evict itself; a 2 evicts the
+        // older of its peers.
+        assert!(exact_state_crowded_out(&cache, 2, 0));
+        assert!(!exact_state_crowded_out(&cache, 2, 2));
+        // With room to spare, any snapshot is kept.
+        assert!(!exact_state_crowded_out(&cache, 3, 0));
     }
 
     #[test]
@@ -1413,7 +1459,7 @@ mod tests {
         }
     }
 
-    fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
+    pub(super) fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
         skippy_runtime::RuntimeKvPageDesc {
             version: 1,
             layer_start: 0,
@@ -1476,6 +1522,7 @@ mod admission_credit_tests {
         let guard = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(guard.is_some(), "fresh budget admits Continuation");
@@ -1490,17 +1537,20 @@ mod admission_credit_tests {
         let first = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         let second = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(first.is_some() && second.is_some(), "two slots for TOTAL=2");
         let third = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(
@@ -1513,11 +1563,19 @@ mod admission_credit_tests {
     #[test]
     fn best_effort_declines_at_reserved_cap_even_with_budget_headroom() {
         let (total, best_effort) = counters();
-        let first =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let first = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(first.is_some());
-        let second =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let second = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(
             second.is_none(),
             "BestEffort cap is TOTAL - RESERVED = 1; second must decline"
@@ -1526,14 +1584,67 @@ mod admission_credit_tests {
     }
 
     #[test]
+    fn multi_lane_stages_admit_one_capture_per_lane() {
+        // Fleet regression: concurrent multi-turn sessions starved at the
+        // single-stream floor — whichever session completed first held the
+        // only best-effort slot and every other lane's capture was declined,
+        // so its exchange was lost and its next turn re-prefilled it. A stage
+        // serving four lanes must admit four concurrent captures.
+        let (total, best_effort) = counters();
+        let cap = super::exact_state_admission_total_for_lanes(4);
+        assert_eq!(cap, 5, "four lanes plus recorder headroom");
+        let held: Vec<_> = (0..4)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    cap,
+                    CaptureAdmission::BestEffort,
+                )
+            })
+            .collect();
+        assert!(
+            held.iter().all(|credit| credit.is_some()),
+            "every lane's capture must be admitted"
+        );
+        assert_eq!(total.load(Ordering::Acquire), 4);
+        let continuation = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            cap,
+            CaptureAdmission::Continuation,
+        );
+        assert!(
+            continuation.is_some(),
+            "the reserved continuation share still admits"
+        );
+        assert_eq!(total.load(Ordering::Acquire), 5);
+        assert!(
+            ExactStateAdmissionCredit::acquire(
+                &total,
+                &best_effort,
+                cap,
+                CaptureAdmission::BestEffort
+            )
+            .is_none(),
+            "budget exhausted at the lane-scaled cap"
+        );
+    }
+
+    #[test]
     fn continuation_admits_after_best_effort_under_reserved_share() {
         let (total, best_effort) = counters();
-        let best =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let best = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(best.is_some(), "BestEffort takes its single slot");
         let cont = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
         assert!(
@@ -1567,9 +1678,12 @@ mod admission_credit_tests {
                         } else {
                             CaptureAdmission::BestEffort
                         };
-                        if let Some(credit) =
-                            ExactStateAdmissionCredit::acquire(&total, &best_effort, class)
-                        {
+                        if let Some(credit) = ExactStateAdmissionCredit::acquire(
+                            &total,
+                            &best_effort,
+                            EXACT_STATE_ADMISSION_TOTAL,
+                            class,
+                        ) {
                             held.push((class, credit));
                         }
                     }
@@ -1610,6 +1724,7 @@ mod admission_credit_tests {
             let credit = ExactStateAdmissionCredit::acquire(
                 &total,
                 &best_effort,
+                EXACT_STATE_ADMISSION_TOTAL,
                 CaptureAdmission::Continuation,
             )
             .expect("topping up an under-subscribed budget must succeed");
@@ -1633,7 +1748,8 @@ mod admission_credit_tests {
                             ExactStateAdmissionCredit::acquire(
                                 &total,
                                 &best_effort,
-                                CaptureAdmission::BestEffort
+                                EXACT_STATE_ADMISSION_TOTAL,
+                                CaptureAdmission::BestEffort,
                             )
                             .is_none(),
                             "an exhausted budget must decline every BestEffort attempt"
@@ -1664,10 +1780,15 @@ mod admission_credit_tests {
         let recovery_continuation = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         );
-        let recovery_best_effort =
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort);
+        let recovery_best_effort = ExactStateAdmissionCredit::acquire(
+            &total,
+            &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
+            CaptureAdmission::BestEffort,
+        );
         assert!(
             recovery_continuation.is_some() && recovery_best_effort.is_some(),
             "budget must recover after the drain"
@@ -1691,12 +1812,14 @@ mod admission_credit_tests {
         let first = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         )
         .expect("first Continuation admitted");
         let second = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
+            EXACT_STATE_ADMISSION_TOTAL,
             CaptureAdmission::Continuation,
         )
         .expect("second Continuation admitted");
@@ -1716,7 +1839,8 @@ mod admission_credit_tests {
                             ExactStateAdmissionCredit::acquire(
                                 &total,
                                 &best_effort,
-                                CaptureAdmission::BestEffort
+                                EXACT_STATE_ADMISSION_TOTAL,
+                                CaptureAdmission::BestEffort,
                             )
                             .is_none(),
                             "a continuation-exhausted budget must decline every BestEffort via rollback"
@@ -1744,8 +1868,13 @@ mod admission_credit_tests {
         assert_eq!(total.load(Ordering::Acquire), 0);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
         assert!(
-            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort)
-                .is_some(),
+            ExactStateAdmissionCredit::acquire(
+                &total,
+                &best_effort,
+                EXACT_STATE_ADMISSION_TOTAL,
+                CaptureAdmission::BestEffort
+            )
+            .is_some(),
             "budget recovers after the drain"
         );
     }

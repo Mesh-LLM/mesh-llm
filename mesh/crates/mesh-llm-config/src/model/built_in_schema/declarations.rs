@@ -40,6 +40,8 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::SocketAddr,
         ),
         private_nodes_setting(),
+        request_tier_owners_setting(),
+        local_kv_reserve_setting(),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),

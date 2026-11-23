@@ -1,7 +1,6 @@
 use anyhow::Result;
 
 mod acquisition;
-mod capabilities;
 pub mod cli;
 mod details;
 mod dispatch;

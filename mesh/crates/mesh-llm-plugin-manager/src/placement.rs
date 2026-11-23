@@ -146,6 +146,8 @@ fn package_path(root: &Path, relative: &[OsString]) -> std::path::PathBuf {
 /// copy moved aside is the only complete one left, it is kept and the error
 /// says where.
 pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
+    let install_parent = to.parent().unwrap_or_else(|| Path::new("."));
+    remove_stale_backups(install_parent, plugin_name);
     if !to.exists() {
         return place_staged_tree(from, to)
             .with_context(|| format!("install plugin to {}", to.display()));
@@ -153,8 +155,8 @@ pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> R
     // A fixed prefix: a long plugin name plus a prefix and random suffix
     // could exceed the file name limit.
     let backup_parent = tempfile::Builder::new()
-        .prefix(".previous-")
-        .tempdir_in(to.parent().unwrap_or_else(|| Path::new(".")))
+        .prefix(BACKUP_PREFIX)
+        .tempdir_in(install_parent)
         .with_context(|| format!("create plugin install backup for {}", to.display()))?;
     let backup_dir = backup_parent.path().join(plugin_name);
     let moved = place_tree(to, &backup_dir)
@@ -180,14 +182,65 @@ pub(crate) fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> R
                 kept.display()
             )));
         }
-        let _ = remove_tree(backup_parent.path());
+        discard_backup(backup_parent);
         return Err(error);
     }
-    // The previous install is no longer needed. `TempDir` cannot remove the
-    // read-only directories it may hold, so remove it here; if that fails
-    // too, only its files are left behind.
-    let _ = remove_tree(backup_parent.path());
+    // The previous install is no longer needed.
+    discard_backup(backup_parent);
     Ok(())
+}
+
+const BACKUP_PREFIX: &str = ".previous-";
+// `+` is outside the plugin name alphabet (`is_valid_name`), so no installed
+// plugin directory can carry this prefix and be taken for a discarded backup.
+const DISCARDED_PREFIX: &str = "+discarded-";
+
+/// Remove a backup that is no longer needed. `TempDir` cannot remove the
+/// read-only directories it may hold, so it is removed here. It is renamed to
+/// `+discarded-*` first: if it still cannot be removed (on Windows a running
+/// executable cannot be deleted, as when a plugin is updated while the node
+/// runs it), a later replace knows it is disposable. A backup kept because it
+/// is the only complete copy, or one a replace in progress still needs, stays
+/// `.previous-*` and is never removed by a later replace.
+fn discard_backup(backup_parent: tempfile::TempDir) {
+    let backup = backup_parent.keep();
+    let discarded = backup
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(BACKUP_PREFIX))
+        .and_then(|suffix| {
+            backup
+                .parent()
+                .map(|parent| parent.join(format!("{DISCARDED_PREFIX}{suffix}")))
+        });
+    let target = match discarded {
+        Some(discarded) if fs::rename(&backup, &discarded).is_ok() => discarded,
+        _ => backup,
+    };
+    let _ = remove_tree(&target);
+}
+
+/// Remove the discarded backups of `plugin_name` an earlier replace could not
+/// delete. Only `+discarded-*` directories holding this plugin's directory
+/// are touched; one that still cannot be removed is left for a later replace.
+fn remove_stale_backups(install_parent: &Path, plugin_name: &str) {
+    let Ok(entries) = fs::read_dir(install_parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(DISCARDED_PREFIX)
+        {
+            continue;
+        }
+        let backup = entry.path();
+        let is_dir = fs::symlink_metadata(&backup).is_ok_and(|metadata| metadata.is_dir());
+        if is_dir && fs::symlink_metadata(backup.join(plugin_name)).is_ok() {
+            let _ = remove_tree(&backup);
+        }
+    }
 }
 
 /// Put the previous install back after a failed replacement. The failed move
@@ -707,6 +760,114 @@ mod tests {
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<std::io::Result<_>>()?;
         assert_eq!(leftovers, vec![std::ffi::OsString::from("demo")]);
+        Ok(())
+    }
+
+    fn entry_names(dir: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+        let mut names: Vec<_> = fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        names.sort();
+        Ok(names)
+    }
+
+    fn staged_demo(root: &Path, round: u32) -> Result<std::path::PathBuf> {
+        let from = root.join(format!("staging-{round}")).join("demo");
+        fs::create_dir_all(&from)?;
+        fs::write(from.join("demo.exe"), format!("binary {round}"))?;
+        Ok(from)
+    }
+
+    // Windows keeps a running executable's file from being deleted, so the
+    // backup of an install whose plugin still runs (an update while the node
+    // is up) cannot be removed by the replace that made it.
+    #[cfg(windows)]
+    #[test]
+    fn a_backup_left_by_a_running_executable_is_removed_by_the_next_replace() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot is set on Windows");
+        let exe = to.join("demo.exe");
+        fs::copy(Path::new(&system_root).join(r"System32\PING.EXE"), &exe)?;
+        let mut running = std::process::Command::new(&exe)
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+        let names = entry_names(&install_dir)?;
+        assert_eq!(
+            names.len(),
+            2,
+            "the running executable keeps its backup: {names:?}"
+        );
+
+        running.kill()?;
+        running.wait()?;
+        replace_plugin_dir(&staged_demo(temp.path(), 2)?, &to, "demo")?;
+
+        assert_eq!(fs::read(to.join("demo.exe"))?, b"binary 2");
+        assert_eq!(entry_names(&install_dir)?, ["demo"]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_replace_leaves_other_plugins_discarded_backups_alone() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        fs::write(to.join("demo.exe"), b"binary 0")?;
+        // Another plugin's backup that a replace of it could not remove.
+        let other = install_dir.join("+discarded-other").join("other");
+        fs::create_dir_all(&other)?;
+        fs::write(other.join("other.exe"), b"")?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+
+        assert!(other.join("other.exe").exists());
+        assert_eq!(entry_names(&install_dir)?, ["+discarded-other", "demo"]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_backup_kept_after_a_failed_replacement_survives_the_next_replace() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        fs::write(to.join("demo.exe"), b"binary 0")?;
+        // What a failed replacement keeps as the only complete copy, and what
+        // a replace in progress holds: both stay `.previous-*`.
+        let kept = install_dir.join(".previous-kept").join("demo");
+        fs::create_dir_all(&kept)?;
+        fs::write(kept.join("demo.exe"), b"the only complete copy")?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+
+        assert_eq!(fs::read(kept.join("demo.exe"))?, b"the only complete copy");
+        assert_eq!(entry_names(&install_dir)?, [".previous-kept", "demo"]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_installed_plugin_named_like_a_backup_survives_a_replace() -> Result<()> {
+        let temp = TempDir::new()?;
+        let install_dir = temp.path().join("installed");
+        let to = install_dir.join("demo");
+        fs::create_dir_all(&to)?;
+        fs::write(to.join("demo.exe"), b"binary 0")?;
+        // A valid plugin name that looks like a backup, holding a `demo` entry.
+        let plugin = install_dir.join(".discarded-tools");
+        fs::create_dir_all(plugin.join("demo"))?;
+        fs::write(plugin.join("tools.exe"), b"another plugin")?;
+
+        replace_plugin_dir(&staged_demo(temp.path(), 1)?, &to, "demo")?;
+
+        assert_eq!(fs::read(plugin.join("tools.exe"))?, b"another plugin");
+        assert_eq!(entry_names(&install_dir)?, [".discarded-tools", "demo"]);
         Ok(())
     }
 }

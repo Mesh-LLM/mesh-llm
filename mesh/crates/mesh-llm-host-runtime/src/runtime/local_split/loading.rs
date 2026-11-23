@@ -17,6 +17,7 @@ use crate::runtime::local_package::{
 use crate::runtime::survey;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
+use skippy_inference_api::InferenceRequestTier;
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
@@ -660,6 +661,8 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.load_mode = settings.load_mode.clone();
     runtime_options.config.bind_addr = stage0_return_endpoint.to_string();
     runtime_options.config.upstream = None;
+    runtime_options.config.max_request_tier =
+        Some(split_peer_request_tier(spec).await.as_str().to_owned());
     runtime_options.config.downstream = Some(PeerConfig {
         persistent_lane_marker: spec
             .node
@@ -670,6 +673,29 @@ pub(super) async fn stage0_runtime_options(
         endpoint: downstream_endpoint.to_string(),
     });
     Ok(runtime_options)
+}
+
+/// The highest tier stage 0's listener serves: the tier this node gives the
+/// owner of the final stage. Only that node may open a stage transport into
+/// stage 0 (to return its predictions), and stage messages carry a tier the
+/// sender claims.
+async fn split_peer_request_tier(spec: &SplitGenerationLoadSpec<'_>) -> InferenceRequestTier {
+    match remote_final_stage_owner(&spec.generation.stages, spec.node.id()) {
+        Some(owner) => spec.node.peer_request_tier(owner).await,
+        None => InferenceRequestTier::Local,
+    }
+}
+
+/// The owner of the split's final stage, unless that is this node.
+pub(super) fn remote_final_stage_owner(
+    stages: &[crate::runtime::split_planning::RuntimeSliceStagePlan],
+    own_id: iroh::EndpointId,
+) -> Option<iroh::EndpointId> {
+    stages
+        .iter()
+        .max_by_key(|stage| stage.stage_index)
+        .map(|stage| stage.node_id)
+        .filter(|owner| *owner != own_id)
 }
 
 pub(super) fn apply_admitted_activation_frontier(
@@ -985,6 +1011,7 @@ pub(super) fn split_runtime_stage_load_request(
         load_mode: settings.load_mode.clone(),
         upstream,
         downstream,
+        max_request_tier: None,
     })
 }
 
@@ -1107,10 +1134,13 @@ pub(super) async fn split_generation_load_settings_with<'a>(
         Some(_) => Some(split_dflash_fallback(&resolved, spec, &load_mode)?),
         None => None,
     };
-    runtime_options.recurrent_rollback_tokens = split_dflash.as_ref().map_or(
-        0,
-        skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
-    );
+    runtime_options.recurrent_rollback_tokens =
+        runtime_options
+            .recurrent_rollback_tokens
+            .max(split_dflash.as_ref().map_or(
+                0,
+                skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+            ));
     tracing::info!(
         model = spec.model_ref,
         "KV cache: {} K + {} V",

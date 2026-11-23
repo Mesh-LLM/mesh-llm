@@ -11,12 +11,14 @@ const WORKFLOWS: &[&str] = &[
     "release.yml",
     "windows-warm-caches.yml",
 ];
+// Restores only rows of ci/slices.yml that the runtime slice already registers.
+pub(super) const DIAGNOSTICS: &[&str] = &["windows-abi-measurement.yml"];
 
 #[derive(Debug, Serialize)]
 pub(super) struct Policy {
     schema_version: u32,
     target_ref: &'static str,
-    current_keys: Vec<String>,
+    pub(super) current_keys: Vec<String>,
     active_families_complete: bool,
     max_bytes: u64,
     history_per_family: usize,
@@ -78,13 +80,13 @@ pub(super) fn policy(root: &Path, context: &Context) -> Result<Policy, String> {
         }
         let source = fs::read_to_string(&path).map_err(|error| error.to_string())?;
         let (_, actions) = workflow_yaml::parse_with_actions(&source)?;
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
         if actions.iter().any(|action| action.reference == RESTORE)
-            && !WORKFLOWS.contains(
-                &path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(""),
-            )
+            && !WORKFLOWS.contains(&name)
+            && !DIAGNOSTICS.contains(&name)
         {
             return Err(format!(
                 "unregistered Windows ABI consumer: {}",

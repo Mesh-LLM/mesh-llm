@@ -38,10 +38,7 @@ fn windows_linker_owners_require_native_checks_and_hosted_policy_execution() -> 
             hosted,
             "{path}"
         );
-        assert_eq!(
-            plan["signals"]["runner_contract_required"], hosted,
-            "{path}"
-        );
+        assert_eq!(plan["signals"]["hosted_runner_required"], hosted, "{path}");
         let checks = plan["matrices"]["platform_checks"]
             .as_array()
             .ok_or("platform checks")?;

@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::{CStr, CString, c_void};
 use std::path::Path;
 use std::ptr;
@@ -105,14 +106,14 @@ impl SpeechRecognitionModel {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_asr_model_open(
+            native_call!(skippy_asr_model_open(
                 c_path.as_ptr(),
                 c_device
                     .as_ref()
                     .map_or(ptr::null(), |device| device.as_ptr()),
                 &mut raw,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)
             .with_context(|| format!("open speech model {}", path.display()))?;
@@ -200,7 +201,7 @@ impl SpeechRecognitionModel {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_asr_transcribe(
+            native_call!(skippy_asr_transcribe(
                 self.raw,
                 samples.as_ptr(),
                 samples.len(),
@@ -209,7 +210,7 @@ impl SpeechRecognitionModel {
                 &cancelled as *const F as *mut c_void,
                 &mut raw,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error).context("transcribe audio")?;
         if raw.is_null() {
@@ -223,7 +224,7 @@ impl SpeechRecognitionModel {
 impl Drop for SpeechRecognitionModel {
     fn drop(&mut self) {
         if !self.raw.is_null() {
-            unsafe { skippy_ffi::skippy_asr_model_free(self.raw) };
+            unsafe { native_call!(skippy_asr_model_free(self.raw)) };
         }
     }
 }
@@ -236,13 +237,13 @@ pub fn decode_audio(bytes: &[u8]) -> Result<Vec<f32>> {
     let mut count = 0usize;
     let mut error = ptr::null_mut();
     let status = unsafe {
-        skippy_ffi::skippy_asr_decode_audio(
+        native_call!(skippy_asr_decode_audio(
             bytes.as_ptr(),
             bytes.len(),
             &mut samples,
             &mut count,
             &mut error,
-        )
+        ))
     };
     ensure_ok(status, error).context("decode audio upload")?;
     if samples.is_null() {

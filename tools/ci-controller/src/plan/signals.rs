@@ -17,10 +17,11 @@ enum Signal {
     DocsOnly,
     BackendChanged,
     RunnerContractRequired,
+    HostedRunnerRequired,
 }
 
 impl Signal {
-    const ALL: [Signal; 9] = [
+    const ALL: [Signal; 10] = [
         Signal::RustChanged,
         Signal::UiChanged,
         Signal::WebsiteChanged,
@@ -30,6 +31,7 @@ impl Signal {
         Signal::DocsOnly,
         Signal::BackendChanged,
         Signal::RunnerContractRequired,
+        Signal::HostedRunnerRequired,
     ];
 
     fn name(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Signal {
             Signal::DocsOnly => "docs_only",
             Signal::BackendChanged => "backend_changed",
             Signal::RunnerContractRequired => "runner_contract_required",
+            Signal::HostedRunnerRequired => "hosted_runner_required",
         }
     }
 }
@@ -100,25 +103,27 @@ impl Change<'_> {
             Signal::CliSurfaceChanged => self.has_domain("cli"),
             Signal::DocsOnly => documentation_only(self.domains),
             Signal::BackendChanged => self.any_domain(&BACKEND_DOMAINS),
-            Signal::RunnerContractRequired => {
+            Signal::RunnerContractRequired | Signal::HostedRunnerRequired => {
                 self.has_domain("ci-control") || self.has_domain("runner-infra")
             }
         }
     }
 }
 
-/// Every signal; exhaustive runs set all but `docs_only`.
+/// Exhaustive coverage expands diagnostic signals, never placement authority.
 pub(super) fn signals(
     files: &[String],
     domains: &[String],
     profile: Profile,
 ) -> Map<String, Value> {
-    let exhaustive = profile.exhaustive() || files.iter().any(|path| path == FORCE_ALL);
+    let unknown_diff = files.iter().any(|path| path == FORCE_ALL);
+    let exhaustive = profile.exhaustive() || unknown_diff;
     let change = Change { files, domains };
     Signal::ALL
         .into_iter()
         .map(|signal| {
             let value = match signal {
+                Signal::HostedRunnerRequired => unknown_diff || change.value(signal),
                 Signal::DocsOnly if exhaustive => false,
                 _ if exhaustive => true,
                 _ => change.value(signal),

@@ -99,6 +99,7 @@ pub(crate) fn remote_stage_load_request(
         load_mode: LoadMode::LayerPackage,
         upstream: None,
         downstream,
+        max_request_tier: None,
     }
 }
 
@@ -169,6 +170,13 @@ pub(crate) fn stage0_config(
         kv_offload: context.runtime_settings.kv_offload,
         kv_unified: context.runtime_settings.kv_unified,
         swa_full: context.runtime_settings.swa_full,
+        kv_pool_tokens: None,
+        kv_lazy_clear: None,
+        kv_release_pages: None,
+        kv_row_attention: None,
+        sample_threads: None,
+        prefill_coalesce_max_ms: None,
+        batch: Default::default(),
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
         resident_tensor_names: Vec::new(),
         execution_contract: context.admission.execution_contract.clone(),
@@ -185,6 +193,7 @@ pub(crate) fn stage0_config(
         load_mode: LoadMode::LayerPackage,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
+        max_request_tier: None,
         downstream: Some(PeerConfig {
             persistent_lane_marker: false,
             stage_id: downstream_stage.stage_id.clone(),

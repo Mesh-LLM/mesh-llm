@@ -13,6 +13,12 @@ impl Leader for StuckTree {
 }
 
 impl Tree for StuckTree {
+    fn pre_force(&mut self) -> crate::PreForceObservation {
+        crate::PreForceObservation {
+            leader: Ok(crate::LeaderState::Alive),
+            members: None,
+        }
+    }
     fn active(&mut self) -> Result<bool, Failure> {
         Ok(true)
     }
@@ -35,7 +41,7 @@ impl Tree for StuckTree {
     }
 }
 
-fn limits() -> Limits {
+pub(super) fn limits() -> Limits {
     Limits {
         execution: Duration::from_secs(1),
         graceful_shutdown: Duration::from_millis(1),
@@ -101,6 +107,9 @@ impl Leader for InactiveCompletedTree {
 }
 #[cfg(unix)]
 impl Tree for InactiveCompletedTree {
+    fn pre_force(&mut self) -> crate::PreForceObservation {
+        panic!("inactive group must not need a pre-force observation")
+    }
     fn active(&mut self) -> Result<bool, Failure> {
         // Platform membership excludes zombies; no live member remains.
         Ok(false)

@@ -4798,6 +4798,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial_test 4.0.1",
  "skippy-commands",
+ "skippy-config",
  "skippy-coordinator",
  "skippy-hardware-profile",
  "skippy-hf-hub",
@@ -4962,7 +4963,6 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-api",
  "skippy-cache",
- "skippy-commands",
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
@@ -5274,6 +5274,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-config",
  "skippy-gpu-bench",
+ "skippy-hardware-profile",
  "skippy-native-runtime",
  "skippy-runtime",
  "skippy-runtime-install",
@@ -8847,9 +8848,12 @@ version = "0.80.0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
+ "process-wrap",
+ "rustix",
  "serde_json",
  "skippy-native-runtime",
  "sysinfo",
+ "tempfile",
 ]
 
 [[package]]
@@ -8948,6 +8952,7 @@ dependencies = [
  "hex",
  "libc",
  "regex-lite",
+ "reqwest 0.13.5",
  "rustls",
  "serde",
  "serde_json",
@@ -9166,6 +9171,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "tracy-client",
  "uuid",
 ]
 
@@ -10301,6 +10307,27 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tracy-client"
+version = "0.18.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6131992ff3e2cb96f407eb4eb005427ba15e2687260d99089b90e60e33169ce0"
+dependencies = [
+ "loom",
+ "once_cell",
+ "tracy-client-sys",
+]
+
+[[package]]
+name = "tracy-client-sys"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab27f167b093214c68413a2e0bcd318f0591af475597405ff68138ba0a433379"
+dependencies = [
+ "cc",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

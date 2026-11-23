@@ -1,6 +1,21 @@
 use super::*;
 
 impl RuntimeState {
+    /// Active execution lanes with token state. Sampling configuration alone
+    /// reserves a real lane at position zero, but cannot fill a decode wave:
+    /// its required cache restore still needs a scheduler turn. This count is
+    /// never used for physical lane or KV-capacity admission.
+    pub(crate) fn nonempty_active_session_count(&self) -> usize {
+        self.sessions
+            .keys()
+            .filter(|id| {
+                self.session_token_counts
+                    .get(*id)
+                    .is_some_and(|&tokens| tokens > 0)
+            })
+            .count()
+    }
+
     pub fn prewarm_idle_sessions(
         &mut self,
         target_idle_sessions: usize,
@@ -53,19 +68,7 @@ impl RuntimeState {
     }
 
     pub(crate) fn warmup_generation_graph(&mut self) -> Result<bool> {
-        // Prewarming invokes decode_step. Encode-only models cannot decode,
-        // and encoder-decoder models must encode a source first.
-        if self.model.workload_info()?.kind != ModelWorkload::CausalGeneration {
-            return Ok(false);
-        }
-        if self.model.input_activation_boundary().is_some()
-            || self.model.output_activation_boundary().is_some()
-        {
-            return Ok(false);
-        }
-        // DiffusionGemma runs non-causally with no KV memory, so a decode
-        // step has no graph to warm and the reset would fail.
-        if self.serves_system_one() {
+        if !self.can_warm_generation_graph() {
             return Ok(false);
         }
         let token_id = self
@@ -92,6 +95,207 @@ impl RuntimeState {
             .and_then(|_| lane.session.reset());
         self.finish_generation_warmup(lane, result, idle_index.is_some())?;
         Ok(true)
+    }
+
+    /// Whether [`Self::warmup_generation_graph`] can run for this runtime.
+    fn can_warm_generation_graph(&self) -> bool {
+        // Prewarming invokes decode_step. Encode-only models cannot decode,
+        // and encoder-decoder models must encode a source first.
+        if !matches!(
+            self.model.workload_info().map(|info| info.kind),
+            Ok(ModelWorkload::CausalGeneration)
+        ) {
+            return false;
+        }
+        if self.model.input_activation_boundary().is_some()
+            || self.model.output_activation_boundary().is_some()
+        {
+            return false;
+        }
+        // DiffusionGemma runs non-causally with no KV memory, so a decode
+        // step has no graph to warm and the reset would fail.
+        !self.serves_system_one()
+    }
+
+    /// Reserve the compute graphs serving will actually use before the first
+    /// request pays for them. [`Self::warmup_generation_graph`] exercises a
+    /// one-token single-sequence decode; the first real prefill and the first
+    /// concurrent decode wave each need a larger graph, and the native
+    /// runtime's lazy graph reservation charges that growth to the request
+    /// that triggers it (a 314 ms `sched_reserve` on a GB10 spark for the
+    /// first full ubatch). Warm both serving shapes at startup instead: one
+    /// single-session prefill capped to the loaded batch limit, then one
+    /// one-token decode wave within that limit. Best-effort: a model that cannot run the
+    /// larger shapes still serves, keeping the lazy reservation.
+    pub(crate) fn warmup_serving_shapes(&mut self, prefill_tokens: usize) -> Result<()> {
+        if !self.can_warm_generation_graph() || prefill_tokens == 0 {
+            return Ok(());
+        }
+        let token_id = self
+            .model
+            .tokenize("", true)?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        self.warmup_prefill_shape(token_id, prefill_tokens);
+        self.warmup_concurrent_decode_shape(token_id);
+        Ok(())
+    }
+
+    fn warmup_prefill_shape(&mut self, token_id: i32, prefill_tokens: usize) {
+        let idle_index = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none());
+        let mut lane = match idle_index {
+            Some(index) => self.idle_sessions.swap_remove(index),
+            None => match self.create_lane_session() {
+                Ok(lane) => lane,
+                Err(error) => {
+                    tracing::warn!(?error, "serving prefill warmup could not borrow a lane");
+                    return;
+                }
+            },
+        };
+        let warmed = (|| {
+            // The native context clamps configured limits during loading.
+            let tokens = vec![token_id; prefill_tokens.min(lane.session.batch_size()?)];
+            let request = IterationBatchRequest {
+                session: &mut lane.session,
+                token_ids: &tokens,
+                positions: &[],
+                sampling: None,
+                input: None,
+                // Real prefill chunks sample their final row: the graph the
+                // reservation must cover includes the output head, which a
+                // consumerless warmup iteration omits entirely.
+                sample_last: true,
+                phase: IterationBatchPhase::Prefill,
+            };
+            StageSession::iteration_batch_sampled(&mut [request]).map(|_| ())
+        })();
+        let result = warmed.and_then(|_| lane.session.reset());
+        if let Err(error) = self.finish_generation_warmup(lane, result, idle_index.is_some()) {
+            tracing::warn!(
+                ?error,
+                "serving prefill warmup failed; keeping lazy reservation"
+            );
+        }
+    }
+
+    fn warmup_concurrent_decode_shape(&mut self, token_id: i32) {
+        let mut lanes = Vec::new();
+        let mut wave_limit = self.lane_count as usize;
+        while lanes.len() < wave_limit {
+            let idle_index = self
+                .idle_sessions
+                .iter()
+                .position(|idle| idle.resident_prefix.is_none());
+            let lane = match idle_index {
+                Some(index) => self.idle_sessions.swap_remove(index),
+                None => match self.create_lane_session() {
+                    Ok(lane) => lane,
+                    Err(_) => break,
+                },
+            };
+            match lane.session.batch_size() {
+                Ok(batch_size) => wave_limit = wave_limit.min(batch_size),
+                Err(error) => {
+                    let _ = self.finish_generation_warmup(lane, Err(error), false);
+                    break;
+                }
+            }
+            lanes.push((lane, idle_index.is_some()));
+        }
+        if lanes.is_empty() {
+            return;
+        }
+        let mut requests = Vec::with_capacity(lanes.len());
+        let warmup_sampling = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ..SamplingConfig::default()
+        };
+        // An empty metadata string clears chat sampling instead of
+        // configuring it (the native entry's early-out), so the attach the
+        // warmup exists to provoke never happened. A minimal grammar-free
+        // metadata document reaches the real configure path.
+        const WARMUP_SAMPLING_METADATA: &str = r#"{"grammar":""}"#;
+        for (lane, _) in lanes.iter_mut() {
+            // Real requests configure chat sampling through the frontend
+            // before their first iteration; that configuration is what
+            // attaches the backend sampler and grows the reservation. Walk
+            // the same entry here so the sampler-aware reservation is built
+            // at startup instead of on the first request.
+            if let Err(error) = lane.session.configure_chat_sampling(
+                WARMUP_SAMPLING_METADATA,
+                0,
+                Some(&warmup_sampling),
+            ) {
+                tracing::warn!(?error, "serving warmup could not configure chat sampling");
+            }
+            requests.push(IterationBatchRequest {
+                session: &mut lane.session,
+                token_ids: std::slice::from_ref(&token_id),
+                positions: &[],
+                // Real decode steps sample every iteration; warm the shape
+                // that includes the sampler's logits row, and attach the
+                // samplers so the sampler-aware graph reservation happens
+                // here rather than on the first request.
+                sampling: Some(&warmup_sampling),
+                input: None,
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            });
+        }
+        let warmed = StageSession::iteration_batch_sampled(&mut requests).map(|_| ());
+        if let Err(error) = &warmed {
+            tracing::warn!(
+                ?error,
+                "serving decode-wave warmup failed; keeping lazy reservation"
+            );
+        }
+        for (mut lane, borrowed) in lanes {
+            // Only successfully warmed and reset borrowed lanes are reusable.
+            let result = lane.session.reset();
+            if let Err(error) =
+                self.finish_generation_warmup(lane, result, borrowed && warmed.is_ok())
+            {
+                tracing::warn!(?error, "serving decode-wave warmup cleanup failed");
+            }
+        }
+        // Converge the sampler-aware reservation: sampling attaches happen
+        // after an iteration's decode, so the warmup so far can end with
+        // the re-reserve armed (or never consumed) and the reservation
+        // still sampler-less; the first request would then pay a
+        // worst-case graph re-reserve. One decode with a sampler attached
+        // guarantees the reservation is rebuilt sampler-aware (or confirmed
+        // already covering) before traffic arrives.
+        let idle_index = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none());
+        let mut lane = match idle_index {
+            Some(index) => self.idle_sessions.swap_remove(index),
+            None => match self.create_lane_session() {
+                Ok(lane) => lane,
+                Err(error) => {
+                    tracing::warn!(?error, "sampler-aware warmup could not borrow a lane");
+                    return;
+                }
+            },
+        };
+        let converged = lane
+            .session
+            .configure_chat_sampling(WARMUP_SAMPLING_METADATA, 0, Some(&warmup_sampling))
+            .and_then(|_| lane.session.decode_step(token_id))
+            .and_then(|_| lane.session.reset());
+        if let Err(error) = self.finish_generation_warmup(lane, converged, idle_index.is_some()) {
+            tracing::warn!(
+                ?error,
+                "sampler-aware warmup failed; keeping lazy reservation"
+            );
+        }
     }
 
     fn finish_generation_warmup(
@@ -472,6 +676,11 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn resident_prefix_bytes(&mut self, session_id: &str, cache_seq_id: i32) -> Result<u64> {
+        self.session(session_id)?
+            .resident_prefix_bytes(cache_seq_id)
+    }
+
     pub fn save_resident_prefix(
         &mut self,
         session_id: &str,
@@ -491,6 +700,7 @@ impl RuntimeState {
         self.abandon_session_end_kv_exports(session_id);
         let session = self.session(session_id)?;
         session.restore_prefix(cache_seq_id, token_ids)?;
+        session.restore_token_history(token_ids)?;
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
         Ok(())

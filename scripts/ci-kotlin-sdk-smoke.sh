@@ -73,5 +73,18 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
         export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
         export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
         cd "$MESH_SDK_REPOSITORY_ROOT"/mesh/sdk/kotlin/example/example-jvm
-        ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
+        # A cold Gradle cache downloads from Maven Central, which can answer
+        # HTTP 429. Retry that one cause once after a cooldown; any other
+        # failure keeps its exit status.
+        gradle_log="$(mktemp)"
+        status=0
+        ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN" 2>&1 | tee "$gradle_log" || status=$?
+        if [ "$status" -ne 0 ] && grep -q "Received status code 429 from server" "$gradle_log"; then
+            echo "::warning::Maven repository rate-limited Gradle dependency resolution (HTTP 429); retrying once after 60 s" >&2
+            sleep 60
+            status=0
+            ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN" || status=$?
+        fi
+        rm -f "$gradle_log"
+        exit "$status"
     '

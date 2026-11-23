@@ -84,6 +84,23 @@ impl Stage {
         Ok(fs::read_to_string(self.0.join(relative))?)
     }
 
+    /// Copies the checkout's registry and every evals model list its
+    /// derived suites read, so the stage projects like the checkout.
+    pub(crate) fn real_registry(&self, root: &Path) -> TestResult {
+        const REGISTRY: &str = "ci/model-artifacts/registry.json";
+        let bytes = fs::read(root.join(REGISTRY))?;
+        let registry: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let lists = registry["derived_suites"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|derived| derived["from"].as_str());
+        for list in lists {
+            self.write(list, &fs::read(root.join(list))?)?;
+        }
+        self.write(REGISTRY, &bytes)
+    }
+
     /// Copies the frozen suite manifests to `manifests/`.
     pub(crate) fn frozen_manifests(&self) -> TestResult {
         for entry in fs::read_dir(fixture_dir().join("manifests"))? {

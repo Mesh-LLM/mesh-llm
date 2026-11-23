@@ -484,6 +484,7 @@ async fn serve_hub_request(
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial]
+#[serial_test::serial(runtime_event_engine_state)]
 async fn embedded_listen_all_rejects_foreign_loopback_console() {
     let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

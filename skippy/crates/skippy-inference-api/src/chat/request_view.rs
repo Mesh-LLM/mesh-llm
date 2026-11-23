@@ -39,6 +39,8 @@ impl Serialize for ChatCompletionRequestRef<'_> {
             prompt_cache_retention,
             stream_options,
             extra,
+            // Served-in metadata, not part of the request a client sent.
+            request_class: _,
         } = self.0;
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("model", model)?;

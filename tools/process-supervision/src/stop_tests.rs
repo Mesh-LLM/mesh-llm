@@ -29,6 +29,12 @@ impl Leader for Script {
 }
 
 impl Tree for Script {
+    fn pre_force(&mut self) -> crate::PreForceObservation {
+        crate::PreForceObservation {
+            leader: Ok(crate::LeaderState::Alive),
+            members: None,
+        }
+    }
     fn active(&mut self) -> Result<bool, Failure> {
         match self.steps.pop_front() {
             Some(Step::Active(result)) => result,

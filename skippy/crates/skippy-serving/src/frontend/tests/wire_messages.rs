@@ -18,6 +18,7 @@ fn multimodal_final_prefill_message_requests_downstream_prediction() {
         positions: Vec::new(),
         sampling: Some(sampling.clone()),
         final_chunk: true,
+        request_class: Default::default(),
     })
     .unwrap();
 
@@ -49,6 +50,7 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
         sampling: Some(sampling.clone()),
         chat_sampling_metadata: Some(metadata),
         native_mtp_draft_tokens: 0,
+        request_class: Default::default(),
     })
     .unwrap();
 
@@ -82,6 +84,7 @@ fn reusable_decode_message_updates_hot_path_fields() {
         sampling: Some(sampling.clone()),
         sideband_capacity: 4,
         native_mtp_draft_tokens: 3,
+        request_class: skippy_inference_api::InferenceRequestClass::default(),
     })
     .unwrap();
 
@@ -114,4 +117,100 @@ fn reusable_decode_message_updates_hot_path_fields() {
     assert!(second.positions.is_empty());
     assert!(second.activation.is_empty());
     assert!(second.raw_bytes.is_empty());
+}
+
+/// A downstream stage caches prompts from every prefill, restore, decode,
+/// verify window and stop of a session, so each must carry the request's
+/// class.
+#[test]
+fn decode_verify_and_stop_messages_carry_the_request_class() {
+    use skippy_inference_api::{InferenceRequestClass, InferenceRequestTier};
+    let class = InferenceRequestClass::new(InferenceRequestTier::Mesh, true);
+    let served = |state| {
+        crate::stage_request_class::stage_request_class(
+            &skippy_protocol::StageConfig::default(),
+            state,
+        )
+    };
+
+    let decode = embedded_decode_message(DecodeMessageArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 4,
+        pos_start: 4,
+        decode_step: 0,
+        current: 104,
+        sampling: None,
+        native_mtp_draft_tokens: 0,
+        request_class: class,
+    })
+    .unwrap();
+    assert_eq!(served(decode.state), class);
+
+    let verify = embedded_verify_window_message(VerifyWindowMessageArgs {
+        window_id: 1,
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 4,
+        pos_start: 5,
+        decode_step: 1,
+        tokens: &[105, 106],
+        sampling: None,
+        native_mtp_draft_tokens: 0,
+        request_class: class,
+    })
+    .unwrap();
+    assert_eq!(served(verify.state), class);
+
+    let stop = stop_message(11, 13, class);
+    assert_eq!(stop.kind, WireMessageKind::Stop);
+    assert_eq!(served(stop.state), class);
+
+    let prefill = embedded_prefill_message(OpenAiPrefillChunk {
+        seq_id: 0,
+        pos_start: 0,
+        prefill_token_count: 2,
+        tokens: &[1, 2],
+        request_id: 11,
+        session_id: 13,
+        request_class: class,
+    })
+    .unwrap();
+    assert_eq!(served(prefill.state), class);
+
+    let restore =
+        embedded_prefix_cache_message(WireMessageKind::TryRestorePrefill, &[1, 2], 11, 13, class)
+            .unwrap();
+    assert_eq!(served(restore.state), class);
+
+    let multimodal = multimodal_prefill_message(MultimodalPrefillArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 2,
+        pos_start: 0,
+        token_count: 2,
+        tokens: vec![1, 2],
+        positions: Vec::new(),
+        sampling: None,
+        final_chunk: false,
+        request_class: class,
+    })
+    .unwrap();
+    assert_eq!(served(multimodal.state), class);
+
+    let fused = embedded_restore_prefill_decode_message(RestorePrefillDecodeMessageArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 3,
+        pos_start: 2,
+        decode_step: 0,
+        prefix_tokens: &[1, 2],
+        current: 3,
+        sampling: None,
+        chat_sampling_metadata: None,
+        native_mtp_draft_tokens: 0,
+        request_class: class,
+    })
+    .unwrap();
+    assert_eq!(served(fused.state), class);
 }

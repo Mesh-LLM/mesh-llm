@@ -136,13 +136,13 @@ fn windows_runtime_producer_cannot_drop_its_callers_cache_policy() {
         ),
         (
             "ci-windows-runtime-slice.yml",
-            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
-            "          allow_native_github_cache: \"true\"\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
+            "          allow_native_github_cache: \"true\"\n      - name: Save exact shared Windows ABI build from trusted main",
         ),
         (
             "ci-windows-runtime-slice.yml",
-            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
-            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact shared Windows ABI build from trusted main",
         ),
     ] {
         assert!(
@@ -296,6 +296,61 @@ fn sdk_dependency_cache_identity_and_hash_boundaries_reject_each_lost_dimension(
     }
 }
 #[test]
+fn kotlin_gradle_cache_identity_and_trusted_writer_mutations_are_rejected() {
+    for (old, new) in [
+        // A PR or non-main context must never publish the entry main restores.
+        (
+            "github.ref == 'refs/heads/main' && github.event_name",
+            "github.event_name",
+        ),
+        ("github.event_name != 'pull_request' && ", ""),
+        (
+            "github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}\n        uses: actions/cache/save",
+            "true }}\n        uses: actions/cache/save",
+        ),
+        ("steps.gradle_cache.outputs.cache-hit != 'true' && ", ""),
+        (
+            "key: ${{ steps.gradle_cache.outputs.cache-primary-key }}",
+            "key: fixed",
+        ),
+        (
+            "key: ${{ format('{0}-kotlin-sdk-gradle-v1",
+            "restore-keys: generic\n          key: ${{ format('{0}-kotlin-sdk-gradle-v1",
+        ),
+        ("runner.arch, hashFiles('mesh/sdk", "hashFiles('mesh/sdk"),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/gradle/wrapper/gradle-wrapper.properties'",
+            "'unrelated'",
+        ),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/build.gradle.kts'",
+            "'unrelated'",
+        ),
+        (
+            "'mesh/sdk/kotlin/example/example-jvm/settings.gradle.kts'",
+            "'unrelated'",
+        ),
+        (
+            "settings.gradle.kts', '.github/cache-version.txt'",
+            "settings.gradle.kts', 'unrelated'",
+        ),
+        (
+            "actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+            "actions/cache/save@main",
+        ),
+        ("~/.gradle/wrapper/dists\n", "~/.gradle\n"),
+        (
+            "if: ${{ inputs.sdk_kind == 'kotlin' }}\n        uses: actions/cache/restore",
+            "if: ${{ inputs.sdk_kind == 'rust' }}\n        uses: actions/cache/restore",
+        ),
+    ] {
+        assert!(
+            cache_identity::check(&changed("sdk-smoke.yml", old, new)).is_err(),
+            "{old}"
+        );
+    }
+}
+#[test]
 fn seed_identity_restore_save_and_runtime_opt_out_mutations_are_rejected() {
     for name in [
         "ci-quality-slice.yml",
@@ -440,7 +495,7 @@ fn trusted_caller_exceptions_preserve_explicit_native_cache_decisions() {
 }
 
 #[test]
-fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies() {
+fn current_seed_recipe_compiles_host_automation_and_standalone_skippy_dependencies() {
     let source = fs::read_to_string(root().join("just/ci.just")).unwrap();
     let body = source.split_once("\nci-sccache-seed-build:\n").unwrap().1;
     let commands: Vec<_> = body
@@ -455,6 +510,7 @@ fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies
             "cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime",
             "CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run",
             "cargo clippy --locked -p xtask --all-targets -- -D warnings",
+            "just skippy-cli-release-build",
         ]
     );
     let host = fs::read_to_string(root().join("mesh/scripts/build-host.sh")).unwrap();

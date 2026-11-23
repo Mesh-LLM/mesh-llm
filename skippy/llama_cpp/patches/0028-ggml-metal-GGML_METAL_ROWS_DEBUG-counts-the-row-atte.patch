@@ -1,0 +1,77 @@
+From 79422cd665d31cec86fcc9d6bbd69b308a87d83f Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Sun, 8 Nov 2026 13:07:18 +1100
+Subject: [PATCH 28/32] ggml-metal: GGML_METAL_ROWS_DEBUG counts the
+ row-attention variant choices
+
+At exit, how many dispatches took the gather-free variant, the general
+kernel, or found their lists not host-visible; the first blocks that
+disqualified a list are printed as they happen.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp | 28 ++++++++++++++++++++++++--
+ 1 file changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index a18d41ad8..e2319db33 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -12,6 +12,8 @@
+ 
+ #include <cassert>
+ #include <algorithm>
++#include <atomic>
++#include <cstdlib>
+ #include <limits>
+ #include <cmath>
+ 
+@@ -3609,8 +3611,21 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+     // consecutive range (possibly ending in padding) or all padding. a run ascends, so its ends
+     // decide; the lists are readable from the host whenever their Metal buffer is shared or
+     // mapped (every buffer type but private)
+-    const bool rows_dense = has_rows &&
+-        ggml_metal_buffer_is_shared((ggml_metal_buffer_t) (kv_rows->view_src ? kv_rows->view_src->buffer : kv_rows->buffer)->context) &&
++    // GGML_METAL_ROWS_DEBUG=1 reports, at exit, how often the gather-free variant was chosen and
++    // prints the first blocks that disqualified a list
++    static const bool rows_debug = getenv("GGML_METAL_ROWS_DEBUG") != nullptr;
++    static std::atomic<int64_t> rows_dense_hits{0}, rows_dense_misses{0}, rows_private{0};
++    static const bool rows_debug_registered = rows_debug && (atexit([] {
++        GGML_LOG_INFO("rows attention: gather-free %lld, general %lld, lists not host-visible %lld\n",
++                (long long) rows_dense_hits.load(), (long long) rows_dense_misses.load(), (long long) rows_private.load());
++    }), true);
++    GGML_UNUSED(rows_debug_registered);
++    const bool rows_shared = has_rows &&
++        ggml_metal_buffer_is_shared((ggml_metal_buffer_t) (kv_rows->view_src ? kv_rows->view_src->buffer : kv_rows->buffer)->context);
++    if (has_rows && !rows_shared) {
++        ++rows_private;
++    }
++    const bool rows_dense = rows_shared &&
+         [&] {
+             constexpr int64_t C = OP_FLASH_ATTN_EXT_VEC_NCPSG;
+             const int32_t * lists = (const int32_t *) kv_rows->data;
+@@ -3628,11 +3643,20 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+                 const int64_t live = tail - block;
+                 if (tail == block + C || block[live - 1] != first + live - 1 || first + C > n_cache_rows ||
+                         std::any_of(tail, block + C, [](int32_t row) { return row >= 0; })) {
++                    if (rows_debug && rows_dense_misses.load() < 4) {
++                        GGML_LOG_INFO("rows attention: general kernel: list %lld block %lld of %lld: first %d last %d live %lld [%d..%d] cache rows %lld\n",
++                                (long long) (b/(ne11_attn/C)), (long long) (b % (ne11_attn/C)), (long long) (ne11_attn/C),
++                                first, block[C - 1], (long long) live, block[std::max<int64_t>(live - 1, 0)], tail < block + C ? *tail : -2,
++                                (long long) n_cache_rows);
++                    }
+                     return false;
+                 }
+             }
+             return true;
+         }();
++    if (rows_shared) {
++        (rows_dense ? rows_dense_hits : rows_dense_misses)++;
++    }
+ 
+     float scale;
+     float max_bias;
+-- 
+2.43.0
+

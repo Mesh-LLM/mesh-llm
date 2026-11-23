@@ -2,6 +2,8 @@
 use super::*;
 
 impl KvStageIntegration {
+    /// Synchronously locate and restore an exact prefix. Scheduled callers use
+    /// prepared metadata so this lookup does not hold the shared runtime lock.
     pub fn restore_exact_state(
         &self,
         runtime: &mut RuntimeState,
@@ -11,18 +13,7 @@ impl KvStageIntegration {
         self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
     }
 
-    /// Constrain a cold L3 fallback to the checkpoint shared by every stage.
-    pub(crate) fn restore_exact_state_with_shared_durable_fallback(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identities: &[PrefillKvIdentity],
-    ) -> Result<Option<ExactStateRestore>> {
-        runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities, None, true)
-        })
-    }
-
+    /// Restore an exact prefix, using the estimated cold cost for L3 admission.
     pub fn restore_exact_state_with_cold_cost(
         &self,
         runtime: &mut RuntimeState,
@@ -30,14 +21,21 @@ impl KvStageIntegration {
         identities: &[PrefillKvIdentity],
         cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
+        let prepared = self.prepare_exact_state_restore(identities, false);
+        self.restore_prepared_exact_state(runtime, session_id, &prepared, cold_prefill_cost)
+    }
+
+    /// Recheck resident preference and import prepared durable metadata within
+    /// the existing rollback transaction; never repeat a completed disk lookup.
+    pub(crate) fn restore_prepared_exact_state(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        prepared: &PreparedExactStateRestore,
+        cold_prefill_cost: Option<f64>,
+    ) -> Result<Option<ExactStateRestore>> {
         runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(
-                runtime,
-                session_id,
-                identities,
-                cold_prefill_cost,
-                false,
-            )
+            self.restore_exact_state_inner(runtime, session_id, prepared, cold_prefill_cost)
         })
     }
 }

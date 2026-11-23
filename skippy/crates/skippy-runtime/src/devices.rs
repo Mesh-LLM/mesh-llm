@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 
@@ -37,9 +38,35 @@ pub struct BackendDevice {
 }
 
 pub fn backend_devices() -> Result<Vec<BackendDevice>> {
+    query_backend_devices(DeviceQuery::Traced)
+}
+
+/// [`backend_devices`] without native call timing, for samplers that poll
+/// device memory: polling should not fill the trace with spans of its own.
+pub fn backend_devices_untraced() -> Result<Vec<BackendDevice>> {
+    query_backend_devices(DeviceQuery::Untraced)
+}
+
+#[derive(Clone, Copy)]
+enum DeviceQuery {
+    Traced,
+    Untraced,
+}
+
+fn query_backend_devices(query: DeviceQuery) -> Result<Vec<BackendDevice>> {
     let mut error = ptr::null_mut();
     let mut count = 0usize;
-    let status = unsafe { skippy_ffi::skippy_backend_device_count(&mut count, &mut error) };
+    // SAFETY: both pointers are valid for the call.
+    let status = unsafe {
+        match query {
+            DeviceQuery::Traced => {
+                native_call!(skippy_backend_device_count(&mut count, &mut error))
+            }
+            DeviceQuery::Untraced => {
+                skippy_ffi::skippy_backend_device_count(&mut count, &mut error)
+            }
+        }
+    };
     super::ensure_ok(status, error)?;
 
     let mut devices = Vec::with_capacity(count);
@@ -55,7 +82,17 @@ pub fn backend_devices() -> Result<Vec<BackendDevice>> {
             caps: 0,
         };
         let mut error = ptr::null_mut();
-        let status = unsafe { skippy_ffi::skippy_backend_device_at(index, &mut raw, &mut error) };
+        // SAFETY: both pointers are valid for the call.
+        let status = unsafe {
+            match query {
+                DeviceQuery::Traced => {
+                    native_call!(skippy_backend_device_at(index, &mut raw, &mut error))
+                }
+                DeviceQuery::Untraced => {
+                    skippy_ffi::skippy_backend_device_at(index, &mut raw, &mut error)
+                }
+            }
+        };
         super::ensure_ok(status, error)?;
         devices.push(backend_device_from_raw(raw)?);
     }

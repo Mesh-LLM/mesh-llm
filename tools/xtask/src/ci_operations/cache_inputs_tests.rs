@@ -96,20 +96,7 @@ fn compiled_inputs_and_embedded_resources_change_identity() -> DynResult<()> {
 #[test]
 fn uncompiled_tests_readmes_and_unrelated_products_preserve_identity() -> DynResult<()> {
     let sandbox = tempfile::tempdir()?;
-    for (inventory, path) in [
-        (Inventory::HostedXtask, "tools/xtask/tests/integration.rs"),
-        (Inventory::HostedXtask, "tools/trajectory-reader/README.md"),
-        (Inventory::HostedController, "tools/xtask/src/main.rs"),
-        (
-            Inventory::LinuxRuntime,
-            "skippy/crates/skippy-cli/src/main.rs",
-        ),
-        (Inventory::LinuxRuntime, "skippy/docs/ARCHITECTURE.md"),
-        (
-            Inventory::WindowsAbi,
-            "skippy/crates/skippy-package-builder/src/main.rs",
-        ),
-    ] {
+    for &(inventory, path) in PRESERVED_EDITS {
         let before = digest(sandbox.path(), inventory)?;
         let file = sandbox.path().join(path);
         std::fs::create_dir_all(file.parent().ok_or("fixture parent")?)?;

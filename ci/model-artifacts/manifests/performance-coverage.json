@@ -1,0 +1,409 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "performance-coverage",
+  "registry_sha256": "66c2ae6cf5724d2609d60c1f2f442b7de5483f43e860f4c4fa5a14332e387f59",
+  "artifacts": [
+    {
+      "id": "perf-gpt-oss-20b-mxfp4",
+      "family": "gpt-oss",
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "mxfp4",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "ggml-org/gpt-oss-20b-GGUF",
+      "revision": "ef9b12f2ff56c69cf32153a02784e7a3c88bf524",
+      "selector": "MXFP4",
+      "files": [
+        "gpt-oss-20b-MXFP4.gguf"
+      ],
+      "file_integrity": {
+        "gpt-oss-20b-MXFP4.gguf": {
+          "size_bytes": 12109566624,
+          "blob_id": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901"
+        }
+      },
+      "model_ref": "ggml-org/gpt-oss-20b-GGUF:MXFP4",
+      "urls": [
+        "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/ef9b12f2ff56c69cf32153a02784e7a3c88bf524/gpt-oss-20b-MXFP4.gguf"
+      ],
+      "file": "gpt-oss-20b-MXFP4.gguf",
+      "size_bytes": 12109566624,
+      "sha256": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
+      "url": "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/ef9b12f2ff56c69cf32153a02784e7a3c88bf524/gpt-oss-20b-MXFP4.gguf",
+      "notes": "Performance coverage: MXFP4 MoE with attention sinks; same pin as family-gpt-oss."
+    },
+    {
+      "id": "perf-deepseek2-coder-lite-q4",
+      "family": "deepseek2",
+      "capability_tags": [
+        "gguf",
+        "mla",
+        "moe",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+      "selector": "Q4_K_M",
+      "files": [
+        "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 10364416768,
+          "blob_id": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+        }
+      },
+      "model_ref": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "size_bytes": 10364416768,
+      "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
+      "url": "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "notes": "Performance coverage: MLA attention MoE; same pin as family-deepseek2."
+    },
+    {
+      "id": "perf-mistral-small-24b-q4",
+      "family": "mistral-small",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+      "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+      "selector": "Q4_K_M",
+      "files": [
+        "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": {
+          "size_bytes": 14333922848,
+          "blob_id": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c"
+        }
+      },
+      "model_ref": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/b750ec2299225e492f1bd27cab88a0a595fa848f/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+      ],
+      "file": "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
+      "size_bytes": 14333922848,
+      "sha256": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c",
+      "url": "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/b750ec2299225e492f1bd27cab88a0a595fa848f/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
+      "notes": "Performance coverage: 24B dense; same pin as family-mistral-small."
+    },
+    {
+      "id": "perf-phi4-q4",
+      "family": "phi4",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "unsloth/phi-4-GGUF",
+      "revision": "5110b7771e8166d5530e73346a15aea096a8cb99",
+      "selector": "Q4_K_M",
+      "files": [
+        "phi-4-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "phi-4-Q4_K_M.gguf": {
+          "size_bytes": 8890306112,
+          "blob_id": "01e1f25b3e6931054c6c2227b06f4969828434eebc299e8e171f55dab6814485"
+        }
+      },
+      "model_ref": "unsloth/phi-4-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/unsloth/phi-4-GGUF/resolve/5110b7771e8166d5530e73346a15aea096a8cb99/phi-4-Q4_K_M.gguf"
+      ],
+      "file": "phi-4-Q4_K_M.gguf",
+      "size_bytes": 8890306112,
+      "sha256": "01e1f25b3e6931054c6c2227b06f4969828434eebc299e8e171f55dab6814485",
+      "url": "https://huggingface.co/unsloth/phi-4-GGUF/resolve/5110b7771e8166d5530e73346a15aea096a8cb99/phi-4-Q4_K_M.gguf",
+      "notes": "Performance coverage: 14B dense; same pin as family-phi4."
+    },
+    {
+      "id": "perf-falcon-mamba-7b-q4",
+      "family": "mamba2",
+      "capability_tags": [
+        "gguf",
+        "performance",
+        "recurrent"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "bartowski/falcon-mamba-7b-GGUF",
+      "revision": "1236a076ebddbcfcbd6ba0fe310d473d20527f11",
+      "selector": "Q4_K_M",
+      "files": [
+        "falcon-mamba-7b-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "falcon-mamba-7b-Q4_K_M.gguf": {
+          "size_bytes": 4204230656,
+          "blob_id": "ef8ba78a1fd0b0fd1d1c966acc5f4c043b12fbbd7044f4d9aad82e6b7a51e0a7"
+        }
+      },
+      "model_ref": "bartowski/falcon-mamba-7b-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/falcon-mamba-7b-GGUF/resolve/1236a076ebddbcfcbd6ba0fe310d473d20527f11/falcon-mamba-7b-Q4_K_M.gguf"
+      ],
+      "file": "falcon-mamba-7b-Q4_K_M.gguf",
+      "size_bytes": 4204230656,
+      "sha256": "ef8ba78a1fd0b0fd1d1c966acc5f4c043b12fbbd7044f4d9aad82e6b7a51e0a7",
+      "url": "https://huggingface.co/bartowski/falcon-mamba-7b-GGUF/resolve/1236a076ebddbcfcbd6ba0fe310d473d20527f11/falcon-mamba-7b-Q4_K_M.gguf",
+      "notes": "Performance coverage: pure Mamba2 recurrence; same pin as family-mamba2."
+    },
+    {
+      "id": "perf-rwkv7-2b9-q4",
+      "family": "rwkv7",
+      "capability_tags": [
+        "gguf",
+        "performance",
+        "recurrent"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF",
+      "revision": "e85c69858772a4d6b481d99e1e49910dad48e123",
+      "selector": "Q4_K",
+      "files": [
+        "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf"
+      ],
+      "file_integrity": {
+        "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf": {
+          "size_bytes": 2314884576,
+          "blob_id": "bfcb5b239cf99ac4a590d7163266bbe3bb14f41d221ad6f7a2bf602b610211b0"
+        }
+      },
+      "model_ref": "Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF:Q4_K",
+      "urls": [
+        "https://huggingface.co/Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF/resolve/e85c69858772a4d6b481d99e1e49910dad48e123/RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf"
+      ],
+      "file": "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf",
+      "size_bytes": 2314884576,
+      "sha256": "bfcb5b239cf99ac4a590d7163266bbe3bb14f41d221ad6f7a2bf602b610211b0",
+      "url": "https://huggingface.co/Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF/resolve/e85c69858772a4d6b481d99e1e49910dad48e123/RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf",
+      "notes": "Performance coverage: RWKV7 recurrence; same pin as family-rwkv7."
+    },
+    {
+      "id": "perf-granite-4-h-350m-q4",
+      "family": "granite-hybrid",
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "performance",
+        "recurrent"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "ibm-granite/granite-4.0-h-350m-GGUF",
+      "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+      "selector": "Q4_K_M",
+      "files": [
+        "granite-4.0-h-350m-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "granite-4.0-h-350m-Q4_K_M.gguf": {
+          "size_bytes": 222662560,
+          "blob_id": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb"
+        }
+      },
+      "model_ref": "ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf"
+      ],
+      "file": "granite-4.0-h-350m-Q4_K_M.gguf",
+      "size_bytes": 222662560,
+      "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+      "url": "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf",
+      "notes": "Performance coverage: Granite hybrid Mamba2 plus attention; same pin as family-granite-hybrid."
+    },
+    {
+      "id": "perf-gemma3-1b-q4",
+      "family": "gemma3",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "performance",
+        "swa"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "ggml-org/gemma-3-1b-it-GGUF",
+      "revision": "f9c28bcd85737ffc5aef028638d3341d49869c27",
+      "selector": "Q4_K_M",
+      "files": [
+        "gemma-3-1b-it-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "gemma-3-1b-it-Q4_K_M.gguf": {
+          "size_bytes": 806058240,
+          "blob_id": "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135"
+        }
+      },
+      "model_ref": "ggml-org/gemma-3-1b-it-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/f9c28bcd85737ffc5aef028638d3341d49869c27/gemma-3-1b-it-Q4_K_M.gguf"
+      ],
+      "file": "gemma-3-1b-it-Q4_K_M.gguf",
+      "size_bytes": 806058240,
+      "sha256": "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+      "url": "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/f9c28bcd85737ffc5aef028638d3341d49869c27/gemma-3-1b-it-Q4_K_M.gguf",
+      "notes": "Performance coverage: sliding-window attention; same pin as family-gemma3."
+    },
+    {
+      "id": "perf-llama-3-2-1b-q4",
+      "family": "llama",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "llama",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "selector": "Q4_K_M",
+      "files": [
+        "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Llama-3.2-1B-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 807694464,
+          "blob_id": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"
+        }
+      },
+      "model_ref": "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 807694464,
+      "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+      "url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "notes": "Performance coverage: Llama dense baseline; same pin as family-llama."
+    },
+    {
+      "id": "perf-nomic-embed-q8",
+      "family": "nomic-bert-embedding",
+      "capability_tags": [
+        "embedding",
+        "gguf",
+        "performance"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+      "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+      "selector": "Q8_0",
+      "files": [
+        "nomic-embed-text-v1.5.Q8_0.gguf"
+      ],
+      "file_integrity": {
+        "nomic-embed-text-v1.5.Q8_0.gguf": {
+          "size_bytes": 146146432,
+          "blob_id": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
+        }
+      },
+      "model_ref": "nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0",
+      "urls": [
+        "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/0188c9bf409793f810680a5a431e7b899c46104c/nomic-embed-text-v1.5.Q8_0.gguf"
+      ],
+      "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+      "size_bytes": 146146432,
+      "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+      "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/0188c9bf409793f810680a5a431e7b899c46104c/nomic-embed-text-v1.5.Q8_0.gguf",
+      "notes": "Performance coverage: BERT embedding; same pin as family-nomic-bert-embedding."
+    },
+    {
+      "id": "perf-bge-reranker-q4",
+      "family": "xlm-roberta",
+      "capability_tags": [
+        "gguf",
+        "performance",
+        "reranker"
+      ],
+      "suites": [
+        "performance-coverage"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "gpustack/bge-reranker-v2-m3-GGUF",
+      "revision": "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
+      "selector": "Q4_K_M",
+      "files": [
+        "bge-reranker-v2-m3-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "bge-reranker-v2-m3-Q4_K_M.gguf": {
+          "size_bytes": 438376864,
+          "blob_id": "e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673"
+        }
+      },
+      "model_ref": "gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/3093af03b1a635e67b084b1d8c03c5f5e020fd05/bge-reranker-v2-m3-Q4_K_M.gguf"
+      ],
+      "file": "bge-reranker-v2-m3-Q4_K_M.gguf",
+      "size_bytes": 438376864,
+      "sha256": "e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673",
+      "url": "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/3093af03b1a635e67b084b1d8c03c5f5e020fd05/bge-reranker-v2-m3-Q4_K_M.gguf",
+      "notes": "Performance coverage: XLM-RoBERTa reranker; same pin as bge-reranker-q4-cpp-api."
+    }
+  ]
+}

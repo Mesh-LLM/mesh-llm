@@ -1,5 +1,19 @@
 # MeshLLM CI inventory
 
+Manual KV validation lives in `automation kv-validation` and the thin
+`skippy-kv-*` Just recipes. It prepares one external native test harness against
+an exact packaged runtime, then reuses producer artifacts for the four pinned
+AgentX models. Its explicit Linux JY CPU/CUDA specs use the accepted lab/custom
+schema; Metal runs natively through the same local owner. This foundation is
+not selected by ordinary CI and does not qualify deferred long-c4/L3/performance
+checks. See `skippy/evals/kv-validation/README.md`.
+
+The optional AgentX comparison owner consumes the pinned external client and
+locked environment in `skippy/evals/agentx/`. The November 6 maintainer decision
+admits this bounded dependency through `ci/python-tooling-policy.json`.
+`agentx-setup` uses installed Python 3.12 without interpreter downloads;
+campaign workers use prepared inputs offline. This adds no required CI lane.
+
 Every workflow disables Rust debug information for the dev, test, release and
 bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
 Reusable workflows set their own environment, and the Linux test, client and
@@ -11,6 +25,7 @@ Local development defaults, complete package tests, assertions and overflow
 checks are preserved. Cache epoch `v5` invalidates the previous namespace.
 Batch jobs report filesystem space before each package and target/compiler-cache
 sizes after the test step, including failures.
+
 
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
@@ -65,14 +80,14 @@ themselves establish workload or GPU qualification.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
-L2 post-checkout planning, the five lane summaries, and Quality commit
-convention use the narrow `ci-controller` executable through
+L2 post-checkout planning, the five lane summaries, and the Quality llama.cpp
+upstream pin guard use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
 Cargo bypasses compiler wrappers and Just and reuses an exact-key cached
 release executable when present. Other automation keeps the closed
 `prepare-automation` hosted-bare profile under the same rules, while
-image callers retain verification and sccache unchanged. Quality convention
-and environment ownership checks, runner-contract cleanup, registry summary,
+image callers retain verification and sccache unchanged. Quality environment
+ownership checks, runner-contract cleanup, registry summary,
 and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
 step-local runner-temp Cargo home/target paths before the measured section.
 The protected `ed07043b` audit, `38d63b2f` resolver and no-checkout sentinel
@@ -146,9 +161,12 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `dflash-pairings-publish.yml` (`Publish DFlash pairing index`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**`, dispatch on `main` | Publishes the checked-in DFlash pairing index to Hugging Face `meshllm/dflash-pairings` with `HF_TOKEN`: uploads `index/<sha256>.json` only when absent (never overwritten or deleted; an existing copy must hash to its name), refreshes the human-facing root `index.json` and `README.md`, then re-downloads and hashes the published file. Releases pin the index by `DFLASH_PAIRING_INDEX_SHA256`. GitHub-hosted with the pinned `public cpu` image for the `hf` CLI; one non-cancelling concurrency group per commit, so no pending publication is replaced; only the run whose pairings still match `main` refreshes the root copies |
 | `dflash-drafts-publish.yml` (`Publish DFlash draft conversions`) | push to `main` touching `mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/**`, dispatch on `main` | Converts each DFlash draft in the checked-in manifest that is not yet on Hugging Face and uploads it to its `meshllm/` repo with `HF_TOKEN`. Sources are fetched by revision; `cargo xtool models dflash-draft-convert` (Rust, no Python) hashes every source file against the manifest, converts, and keeps the output only when it matches the entry's SHA-256 and size. Nothing is overwritten: an existing file must already hash to the manifest, and the target is re-checked with the token before upload. GitHub-hosted with the pinned `public cpu` image (Rust, git, jq, `hf` CLI) and `prepare-automation`; the token reaches only the upload step; one global non-cancelling concurrency group serializes runs (a replaced pending run loses nothing: each run publishes every unpublished draft in its manifest) |
+| `linux-cache-measurement.yml` (`Diagnostic · Linux cache measurement`) | dispatch only | Nonpublishing cold, exact-warm and unrelated-edit sample of the Linux CPU runtime package, hosted xtask or hosted controller cache; read-only token, no secrets, hosted `ubuntu-24.04`, evidence artifact only |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
+| `windows-abi-measurement.yml` (`Diagnostic · Windows ABI cache measurement`) | dispatch only | Nonpublishing cold versus exact-warm sample of one Windows runtime row; read-only token, no secrets, hosted `windows-2022`, evidence artifact only |
+| `windows-warm-caches.yml` | daily schedule, dispatch | Verify existing exact Windows ABI entries and run bounded retention; Main Windows runtime jobs own builds and publication |
 | `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
@@ -671,7 +689,7 @@ requires runner-image catalog changes. Slice IDs and catalog rows are unchanged.
 | `swift-sdk-artifact.yml` | Host-only/full arm64 XCFramework producer; full mode builds the four Apple Silicon Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single Apple Silicon producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs. It passes `source_sha` to the split smoke; `xtask split-payloads` certifies each stage and writes revision-bound JSON evidence. |
-| `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
+| `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache`. Kotlin smoke restores the exact `mesh-llm-kotlin-sdk-gradle-v1-<os>-<arch>-<hash>` Gradle store (`~/.gradle/caches/modules-2`, `~/.gradle/wrapper/dists`; hash over the example's wrapper properties, `build.gradle.kts`, `settings.gradle.kts` and `.github/cache-version.txt`, no restore keys) with pinned `actions/cache/restore`; its only writer is the Kotlin row of a trusted `main` run that missed, through pinned `actions/cache/save`; PR runs restore only. `scripts/ci-kotlin-sdk-smoke.sh` retries `gradlew run` once after 60 s only when its output contains Maven's HTTP 429 response. The `cache_identity` guard pins the key, paths, exact restore and writer conditions |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
 The `native-abi` domain selects `static-abi`, `runtime-product`,
@@ -1003,6 +1021,14 @@ source commit.
 
 ## Planner contract
 
+- `signals.hosted_runner_required` records actual `ci-control`/`runner-infra`
+  changes or `__force_all__` unknown-diff fallback, independently of exhaustive
+  `runner_contract_required` coverage. All five lanes forward the placement
+  signal and force hosted unless it is explicitly boolean false. Manual-full
+  retains its resolved base/source diff; unavailable history stays hosted.
+  Existing provider gates, allowlists and the hosted CPU runtime producer are
+  unchanged. This change does not alter provider gates; a gate that is already
+  enabled lets eligible runs resume Depot execution without a separate step.
 - `tools/ci-controller/src/plan` owns routing, and xtask delegates `ci plan` to
   it; the legacy Python planner and its identity/test import closure are
   deleted.
@@ -1060,11 +1086,36 @@ and `ImageVersion` separately from Rust's toolchain cache key. Conservative
 production source trees include embedded resources; uncompiled integration
 tests and READMEs no longer invalidate hosted executables. The packaged runtime
 inventory includes `skippy-package-builder` and its local dependency closure.
-The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory, and the
-`windows_warmer_paths` workflow guard requires `windows-warm-caches.yml` push
-paths to cover each of its inputs (equality or a literal `<dir>/**`, no `!`
-exclusions), so a key input cannot change on `main` without waking its only
-producer.
+The Windows ABI `CACHE_INPUT_HASH` comes from the same inventory. Main Windows
+runtime jobs save shared ABI misses with the exact pinned cache save after package verification,
+only on trusted main pushes with native cache permission. Every main run can
+repair a failed save or populate its actual hosted image cohort. The manual
+`windows-warm-caches.yml` runs daily and on dispatch. It restores and verifies
+existing entries and runs bounded maintenance once the current CPU identity
+resolves, even if an entry is missing; it has no push trigger, native build or
+ABI save.
+The `windows_abi_publication` guard pins that ownership and publication order.
+
+`linux-cache-measurement.yml` measures those three Linux identities without
+publishing. Inputs are closed choices (`cohort` cpu-runtime/hosted-xtask/
+hosted-controller, `condition` cold/exact-warm/unrelated-edit, `sample` 1-5).
+Each cohort job binds its restore key to the inventory expression; the CPU job
+selects the unchanged `linux-cpu` row of `ci/slices.yml`. `ci-ops
+linux-cache-measurement` records the key before and after the admitted edit,
+phase times, the restore result and the measured output tree, then writes
+`admission.json`, `blocked.json` or `refusal.json` and, after the unchanged
+production preparation, `receipt.json`. A warm arm without an exact hit is
+BLOCKED; a moved key, a reused root or a rebuilt warm output is refused. An
+admitted sample writes `receipt.json` even when preparation fails; a failed
+preparation, missing or out-of-order phases or an unreadable output make it
+`admitted=false`.
+Evidence retains for 14 days. The workflow is outside every inventory, so
+editing it does not move a measured key. Its `ci-ops` receipt code is in the
+CPU runtime and hosted xtask inventories (`tools/xtask/src/**`), so merging a
+receipt change moves those two keys: their exact-warm and unrelated-edit
+samples wait for a trusted `main` run that saves the new key. The controller
+key does not include it. Primary time is lookup plus preparation only, and each
+cohort, condition and sample has its own concurrency group.
 
 Windows ABI key construction and retention share typed Rust identities.
 The existing warmer's maintenance job derives active families from CI runtime
@@ -1078,6 +1129,31 @@ remain untouched. The job retains policy, inventory, plan and execution
 receipts for 14 days. Observed image cohorts for currently consumed toolkit
 and architecture combinations remain active during hosted image rollouts;
 one warmer's image cannot establish that other cohorts are obsolete.
+
+`windows-abi-measurement.yml` is a registered `windows_cache_consumers`
+diagnostic, not a family owner: its rows come from the same Windows
+`ci/slices.yml` runtime rows, so it adds no retained key. Inputs are closed
+choices (`backend` cpu/cuda/rocm/vulkan, `condition` cold/exact-warm, `sample`
+1-5). Its one product automation producer is the existing
+`product-automation-artifact.yml`. `ci-ops windows-abi-measurement` selects the
+row, records lookup and preparation phase times, and admits a sample: cold
+requires no retrieval and an empty build directory, and exact-warm requires an
+exact hit on the computed key and an unchanged ABI tree (paths, sizes, mtimes
+and stamp digest) after canonical `prepare-native-runtime-input`. An admitted
+sample writes its receipt even when preparation fails; a failed preparation or
+missing or out-of-order phase timestamps make it `admitted=false`. Any refusal
+fails the job and uploads `refusal.json` or a `receipt.json` with
+`admitted=false`. The ABI restore is enabled only for exact-warm. Every
+compiler, SDK, toolkit, automation and Depot cache authority is literal
+`false`, and the graph reaches no `actions/cache/save`, combined
+`actions/cache`, save-and-verify, retention or release step. Evidence retains
+for 14 days. The workflow is outside `CACHE_INPUT_HASH`, so changing it does
+not move the measured key. Its `ci-ops` receipt code is inside it
+(`tools/xtask/src/**`), so merging a receipt change moves all four keys:
+exact-warm samples wait for the main runtime jobs on that merge commit. Primary time
+is lookup plus preparation only; toolkit installs between them are excluded.
+Each backend, condition and sample has its own concurrency group, so samples
+dispatched back to back do not cancel one another.
 No live purge accompanies this source cutover.
 
 These source contracts require candidate and post-merge execution evidence;
@@ -1091,13 +1167,14 @@ manifest replacement. Portable `l4_producers` contracts cover the consumed JSON,
 file identity, environment precedence, and unchanged platform/backend paths.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
-publish and verify an exact-key ABI cache miss under the current ref. These
+publish and verify an exact-key ABI cache miss under the current ref, except
+main-ref CPU and Vulkan keys owned by Main Windows runtime jobs. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
 the scoped runtime cache token. Failed/cancelled packaging never saves a
 partial ABI build. Publication verification is idempotent: an exact key/ref,
-non-empty entry counts even when a concurrent writer (the main cache warmer)
+non-empty entry counts even when a concurrent main runtime publisher
 published the immutable key first, and the lookup-only restore still fails
-closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. Hosted placement, architecture matrices, and PR cache policy
+closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. `actions/cache/restore` reports a cache-service rate limit (HTTP 429) as a miss, so when that probe misses, the final lookup runs after one 60-second cooldown instead of failing in the same throttle window. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during
 native runtime preparation. Hosted CUDA 13 evidence and exact ABI-cache reuse
 are recorded in PR #2662; cache compatibility remains tied to the runner image.
@@ -1284,7 +1361,11 @@ Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
 `just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
 the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
-Clippy graph with all targets. Every profile disables debug information in the
+Clippy graph with all targets, then appends `just skippy-cli-release-build` for
+the standalone Skippy default-feature release graph with `dynamic-native-runtime`.
+Three paired runs at `83a16398df` measured a median 204.3 s standalone saving
+with about 291 MB more seed data, below the unchanged 2 GiB cap. Every profile
+disables debug information in the
 warmer and its consumers. The shared key also
 hashes the root and workspace package Cargo manifests and the warmer workflow
 so feature and profile changes invalidate the seed. Depot selections cannot

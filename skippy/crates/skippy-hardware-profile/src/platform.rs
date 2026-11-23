@@ -167,7 +167,7 @@ pub(crate) fn looks_like_display_controller(line: &str) -> bool {
 }
 
 pub(crate) fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = crate::probe::output(Command::new(program).args(args)).ok()?;
     output
         .status
         .success()

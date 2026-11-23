@@ -16,6 +16,7 @@ use crate::frontend::{
     generation_receipt::GenerationLifecycleState,
     speculative::{InferenceSpeculativeStats, SpeculativeDecodeConfig},
     util::{openai_backend_error, openai_io_error},
+    wire_messages::stop_message,
 };
 use crate::runtime_state::RuntimeState;
 
@@ -24,14 +25,10 @@ use crate::runtime_state::RuntimeState;
 /// discarded.
 fn stop_lane_session(
     stream: &mut TcpStream,
-    request_id: u64,
-    session_id: u64,
+    stop: &StageWireMessage,
     draft_owed: bool,
 ) -> std::io::Result<()> {
-    write_stage_message(
-        &mut *stream,
-        &StageWireMessage::stop_with_identity(request_id, session_id),
-    )?;
+    write_stage_message(&mut *stream, stop)?;
     let mut kind = recv_reply(&mut *stream)?.kind;
     if draft_owed && kind == WireReplyKind::PredictedTokens {
         kind = recv_reply(&mut *stream)?.kind;
@@ -52,8 +49,7 @@ fn stop_lane_session(
 fn settle_lane_in_background(
     lane_pool: Arc<PersistentStageLanePool>,
     lane: PersistentStageLane,
-    request_id: u64,
-    session_id: u64,
+    stop: StageWireMessage,
 ) {
     let lane_id = lane.id;
     let pool = Arc::clone(&lane_pool);
@@ -61,7 +57,7 @@ fn settle_lane_in_background(
         .name("skippy-lane-settle".to_string())
         .spawn(move || {
             let mut lane = lane;
-            match stop_lane_session(&mut lane.stream, request_id, session_id, true) {
+            match stop_lane_session(&mut lane.stream, &stop, true) {
                 Ok(()) => pool.return_lane(lane),
                 Err(error) => {
                     tracing::debug!(
@@ -424,6 +420,7 @@ impl StageOpenAiBackend {
             LocalGeneration {
                 prompt_token_ids: request.prompt_token_ids,
                 recurrent_cache_prefix_token_ids: None,
+                shared_system_prefix_tokens: None,
                 max_tokens: request.max_tokens,
                 sampling: request.sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
@@ -563,8 +560,11 @@ impl StageOpenAiBackend {
                 Some(pool) => settle_lane_in_background(
                     pool,
                     lane,
-                    request.ids.request_id,
-                    request.ids.session_id,
+                    stop_message(
+                        request.ids.request_id,
+                        request.ids.session_id,
+                        request.ids.request_class(),
+                    ),
                 ),
                 None => {
                     let lane_id = lane.id;
@@ -577,8 +577,11 @@ impl StageOpenAiBackend {
 
         let stop_result = stop_lane_session(
             &mut lane.stream,
-            request.ids.request_id,
-            request.ids.session_id,
+            &stop_message(
+                request.ids.request_id,
+                request.ids.session_id,
+                request.ids.request_class(),
+            ),
             false,
         );
         self.drop_embedded_runtime_session(request, session_key, SessionEnd::Completed);
@@ -706,19 +709,36 @@ mod tests {
     #[test]
     fn stopping_a_lane_drains_an_owed_draft_reply_before_the_ack() {
         let mut stream = stop_peer(&[WireReplyKind::PredictedTokens, WireReplyKind::Ack]);
-        stop_lane_session(&mut stream, 1, 2, true).unwrap();
+        stop_lane_session(
+            &mut stream,
+            &StageWireMessage::stop_with_identity(1, 2),
+            true,
+        )
+        .unwrap();
     }
 
     #[test]
     fn stopping_a_lane_accepts_an_ack_when_the_draft_went_elsewhere() {
         let mut stream = stop_peer(&[WireReplyKind::Ack]);
-        stop_lane_session(&mut stream, 1, 2, true).unwrap();
+        stop_lane_session(
+            &mut stream,
+            &StageWireMessage::stop_with_identity(1, 2),
+            true,
+        )
+        .unwrap();
     }
 
     #[test]
     fn stopping_a_lane_with_no_owed_draft_refuses_a_draft_reply() {
         let mut stream = stop_peer(&[WireReplyKind::PredictedTokens, WireReplyKind::Ack]);
-        assert!(stop_lane_session(&mut stream, 1, 2, false).is_err());
+        assert!(
+            stop_lane_session(
+                &mut stream,
+                &StageWireMessage::stop_with_identity(1, 2),
+                false
+            )
+            .is_err()
+        );
     }
 
     fn ngram_config() -> SpeculativeDecodeConfig {

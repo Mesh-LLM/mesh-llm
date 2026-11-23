@@ -17,8 +17,6 @@ use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
-use crate::runtime_state::RuntimeState;
-use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::CompletionChunk;
 use skippy_inference_api::FinishReason;
@@ -31,8 +29,6 @@ use skippy_inference_api::generation::GenerationEvent;
 use skippy_inference_api::generation::GenerationRequest;
 use skippy_runtime::StageModelReader;
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 
 pub(in crate::frontend) type GenerationStream = std::pin::Pin<
@@ -193,7 +189,7 @@ impl ChatOutputStreamParser {
     ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = lock_runtime(&backend.runtime).model.reader();
+        let model = backend.model_reader();
         Ok(Self {
             backend,
             model,
@@ -321,7 +317,7 @@ pub(in crate::frontend) fn generation_event_to_completion_chunk(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::frontend) enum TokenControl {
     Continue,
     Stop,
@@ -352,7 +348,7 @@ pub(in crate::frontend) struct TextGenerationCollector<'a, F>
 where
     F: FnMut(&str) -> InferenceResult<()>,
 {
-    model: StageModelReader,
+    model: Option<StageModelReader>,
     stop_values: Vec<&'a str>,
     on_text_chunk: F,
     text: String,
@@ -368,6 +364,9 @@ where
     ignore_eos: bool,
     /// Tokens counted as completion tokens, in order, to align logprobs.
     emitted_tokens: Vec<i32>,
+    /// Set once a token returned `Stop`. Later tokens are refused, so text
+    /// trimmed at a stop sequence cannot come back and counts stay exact.
+    stopped: bool,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -375,7 +374,20 @@ where
     F: FnMut(&str) -> InferenceResult<()>,
 {
     pub(in crate::frontend) fn new(
-        runtime: Arc<Mutex<RuntimeState>>,
+        model: StageModelReader,
+        stop_values: Vec<&'a str>,
+        on_text_chunk: F,
+    ) -> InferenceResult<Self> {
+        Self::with_model(Some(model), stop_values, on_text_chunk)
+    }
+
+    #[cfg(test)]
+    fn without_model(stop_values: Vec<&'a str>, on_text_chunk: F) -> InferenceResult<Self> {
+        Self::with_model(None, stop_values, on_text_chunk)
+    }
+
+    fn with_model(
+        model: Option<StageModelReader>,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
     ) -> InferenceResult<Self> {
@@ -384,7 +396,6 @@ where
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        let model = lock_runtime(&runtime).model.reader();
         Ok(Self {
             model,
             stop_values,
@@ -400,6 +411,7 @@ where
             emulation_active: false,
             ignore_eos: false,
             emitted_tokens: Vec::new(),
+            stopped: false,
         })
     }
 
@@ -418,27 +430,36 @@ where
     }
 
     pub(in crate::frontend) fn push_token(&mut self, token: i32) -> InferenceResult<TokenControl> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| InferenceError::backend("token decoding requires a loaded model"))?;
         let eog_timer = Instant::now();
-        if !self.ignore_eos
-            && self
-                .model
-                .token_is_eog(token)
-                .map_err(openai_backend_error)?
-        {
+        if !self.ignore_eos && model.token_is_eog(token).map_err(openai_backend_error)? {
             self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
-        self.completion_tokens += 1;
-        self.emitted_tokens.push(token);
         let detokenize_timer = Instant::now();
-        let piece = self
-            .model
+        let piece = model
             .detokenize_bytes(&[token])
             .map_err(openai_backend_error)?;
-        self.generated_text_bytes.extend_from_slice(&piece);
         self.metrics.detokenize_ms += detokenize_timer.elapsed().as_secs_f64() * 1000.0;
+        self.push_piece(token, &piece)
+    }
+
+    /// Applies one detokenized token. Once a token has returned `Stop`, later
+    /// tokens are refused: a producer that decoded ahead of the stop must not
+    /// change the text, the streamed output, or the completion count.
+    fn push_piece(&mut self, token: i32, piece: &[u8]) -> InferenceResult<TokenControl> {
+        if self.stopped {
+            return Ok(TokenControl::Stop);
+        }
+        self.completion_tokens += 1;
+        self.emitted_tokens.push(token);
+        self.generated_text_bytes.extend_from_slice(piece);
         let valid_len = valid_utf8_prefix_len(&self.generated_text_bytes);
         if valid_len > 0 {
             let candidate = std::str::from_utf8(&self.generated_text_bytes[..valid_len])
@@ -463,11 +484,13 @@ where
             self.text = trim_at_stop(&self.text, &self.stop_values).to_string();
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         if self.emulation_active && tool_emulation::emulated_tool_call_complete(&self.text) {
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
+            self.stopped = true;
             return Ok(TokenControl::Stop);
         }
         self.emit_safe_delta(false)?;
@@ -554,9 +577,12 @@ where
                 "recorded logprobs do not match the generated tokens",
             ));
         }
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| InferenceError::backend("logprob decoding requires a loaded model"))?;
         let candidate = |token: i32, logprob: f32| -> InferenceResult<GeneratedLogprobCandidate> {
-            let bytes = self
-                .model
+            let bytes = model
                 .detokenize_bytes(&[token])
                 .map_err(openai_backend_error)?;
             Ok(GeneratedLogprobCandidate {
@@ -597,6 +623,34 @@ mod tests {
         }))
         .expect("valid chat request")
         .into()
+    }
+
+    /// A producer that decoded ahead of the stop delivers one more token.
+    /// Without the latch the text is rebuilt from the untrimmed bytes as
+    /// "abcENDx", the stop sequence falls behind the search window, and
+    /// "ENDx" is streamed.
+    #[test]
+    fn token_after_stop_sequence_does_not_bring_back_trimmed_text() {
+        let chunks = std::cell::RefCell::new(Vec::<String>::new());
+        let mut collector = TextGenerationCollector::without_model(vec!["END"], |chunk| {
+            chunks.borrow_mut().push(chunk.to_string());
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            collector.push_piece(1, b"abc").unwrap(),
+            TokenControl::Continue
+        );
+        assert_eq!(collector.push_piece(2, b"END").unwrap(), TokenControl::Stop);
+        let late = collector.push_piece(3, b"x").unwrap();
+        collector.emit_safe_delta(true).unwrap();
+
+        assert_eq!(collector.text, "abc");
+        assert_eq!(chunks.borrow().concat(), "abc");
+        assert_eq!(collector.completion_tokens, 2);
+        assert_eq!(collector.emitted_tokens, vec![1, 2]);
+        assert_eq!(late, TokenControl::Stop);
     }
 
     #[test]

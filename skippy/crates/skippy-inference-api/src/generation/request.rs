@@ -52,6 +52,11 @@ pub struct GenerationRequest {
     pub stream_options: Option<StreamOptions>,
 
     pub extra: BTreeMap<String, Value>,
+
+    /// The tier and cache partition the request is served in. A backend sets
+    /// it from the request context when it accepts the request, so hooks see
+    /// it; no request body sets it.
+    pub request_class: crate::InferenceRequestClass,
 }
 
 impl GenerationRequest {
