@@ -598,6 +598,114 @@ async fn recovered_connection_gossip_failure_does_not_publish_unadmitted_connect
     Ok(())
 }
 
+/// #3095 follow-up: a redial can fail while the peer reconnects on its own.
+/// The connection the peer opened keeps it in routing; any other removal
+/// reason still removes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_redial_keeps_a_peer_that_reconnected_meanwhile() -> Result<()> {
+    let requester = make_test_node(super::super::NodeRole::Worker).await?;
+    let remote = make_test_node(super::super::NodeRole::Worker).await?;
+    remote.start_accepting();
+    {
+        let mut peer = make_test_peer(remote.id(), Some(20), 8);
+        peer.addr = remote.endpoint_addr_for_advertisement();
+        requester.state.lock().await.peers.insert(remote.id(), peer);
+    }
+    let live = connect_mesh(
+        &requester.endpoint,
+        remote.endpoint_addr_for_advertisement(),
+    )
+    .await?;
+    requester
+        .state
+        .lock()
+        .await
+        .connections
+        .insert(remote.id(), live.clone());
+
+    for reason in [
+        super::super::MeshPeerRemovalReason::ReconnectFailed,
+        super::super::MeshPeerRemovalReason::RecoveredGossipFailed,
+    ] {
+        requester.remove_peer(remote.id(), reason).await;
+        assert!(
+            requester.state.lock().await.peers.contains_key(&remote.id()),
+            "{reason:?} must keep a peer with a live connection"
+        );
+    }
+
+    requester
+        .remove_peer(
+            remote.id(),
+            super::super::MeshPeerRemovalReason::HeartbeatUnreachable,
+        )
+        .await;
+    assert!(
+        !requester.state.lock().await.peers.contains_key(&remote.id()),
+        "other removal reasons are unchanged"
+    );
+    live.close(0u32.into(), b"test-done");
+    Ok(())
+}
+
+/// #3095 follow-up: the peer can reconnect on its own while a recovered
+/// connection is still in its gossip exchange. Publishing the recovered one
+/// must not replace the live connection the peer opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovered_connection_keeps_a_live_replacement() -> Result<()> {
+    let requester = make_test_node(super::super::NodeRole::Worker).await?;
+    let remote = make_test_node(super::super::NodeRole::Worker).await?;
+    let trusted_signer = test_release_signer_key_id(9);
+    let policy = requirement_policy(&trusted_signer);
+
+    configure_requirement_node(&requester, &policy, Some(&trusted_signer)).await?;
+    configure_requirement_node(&remote, &policy, Some(&trusted_signer)).await?;
+    requester.start_accepting();
+    remote.start_accepting();
+    {
+        let mut peer = make_test_peer(remote.id(), Some(20), 8);
+        peer.addr = remote.endpoint_addr_for_advertisement();
+        requester.state.lock().await.peers.insert(remote.id(), peer);
+    }
+    let live = connect_mesh(
+        &requester.endpoint,
+        remote.endpoint_addr_for_advertisement(),
+    )
+    .await?;
+    let live_id = live.stable_id();
+    requester
+        .state
+        .lock()
+        .await
+        .connections
+        .insert(remote.id(), live.clone());
+
+    let recovered = connect_mesh(
+        &requester.endpoint,
+        remote.endpoint_addr_for_advertisement(),
+    )
+    .await?;
+    requester
+        .complete_recovered_connection(remote.id(), recovered.clone())
+        .await;
+
+    assert_eq!(
+        requester
+            .state
+            .lock()
+            .await
+            .connections
+            .get(&remote.id())
+            .map(|conn| conn.stable_id()),
+        Some(live_id),
+        "the live connection the peer opened must stay"
+    );
+    assert!(live.close_reason().is_none());
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), recovered.closed()).await;
+    assert!(closed.is_ok(), "the superseded recovered connection must be closed");
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connection_failure_cleanup_removes_only_matching_connection() -> Result<()> {
     let requester = make_test_node(super::super::NodeRole::Worker).await?;

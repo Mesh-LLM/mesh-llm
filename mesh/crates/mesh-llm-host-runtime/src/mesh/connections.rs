@@ -932,17 +932,35 @@ impl Node {
             .recovered_connection_gossip_ok(remote, new_conn.clone())
             .await
         {
-            {
+            // The peer may have reconnected on its own during the gossip
+            // exchange. A live connection it opened stays: replacing it here
+            // would drop it without the drain `remember_incoming_connection`
+            // gives a replaced connection.
+            let published = {
                 let mut state = self.state.lock().await;
-                state.connections.insert(remote, new_conn.clone());
-                state
-                    .redial_backoff
-                    .connected(remote, std::time::Instant::now());
+                let live_replacement = state.connections.get(&remote).is_some_and(|conn| {
+                    conn.stable_id() != new_conn.stable_id() && conn.close_reason().is_none()
+                });
+                if !live_replacement {
+                    state.connections.insert(remote, new_conn.clone());
+                    state
+                        .redial_backoff
+                        .connected(remote, std::time::Instant::now());
+                }
+                !live_replacement
+            };
+            if published {
+                let node = self.clone();
+                tokio::spawn(async move {
+                    node.dispatch_streams(new_conn, remote).await;
+                });
+            } else {
+                tracing::debug!(
+                    "Peer {} reconnected during the recovered handshake; keeping its connection",
+                    remote.fmt_short()
+                );
+                new_conn.close(0u32.into(), b"recovered-connection-superseded");
             }
-            let node = self.clone();
-            tokio::spawn(async move {
-                node.dispatch_streams(new_conn, remote).await;
-            });
             self.finish_pending_connection(owner, PendingConnectionOutcome::Admitted)
                 .await;
         } else {
