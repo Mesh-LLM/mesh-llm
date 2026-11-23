@@ -916,6 +916,26 @@ impl ExternalPlugin {
         let _ = self.observed_models.set(tracker);
     }
 
+    pub(crate) async fn current_generation(&self) -> Option<u64> {
+        self.runtime.lock().await.as_ref().map(|r| r.generation)
+    }
+
+    pub(crate) async fn sync_observed_models_if_generation(
+        &self,
+        expected_generation: Option<u64>,
+        models: std::collections::BTreeSet<String>,
+    ) -> bool {
+        let runtime = self.runtime.lock().await;
+        let current_generation = runtime.as_ref().map(|r| r.generation);
+        if current_generation != expected_generation || current_generation.is_none() {
+            return false;
+        }
+        if let Some(tracker) = self.observed_models.get() {
+            tracker.sync_plugin_models(&self.spec.name, models);
+        }
+        true
+    }
+
     pub(in crate::plugin) async fn handle_runtime_failure(
         &self,
         generation: Option<u64>,

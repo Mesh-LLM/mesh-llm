@@ -1,7 +1,7 @@
 use super::chat_stream::relay_translated_messages_stream;
 use super::common::{
     CommittedStreamFailureCause, ResponseRetryPolicy, RouteAttemptResult,
-    is_client_disconnect_error,
+    is_client_disconnect_error, parse_token_usage_from_json_body,
 };
 use super::json_adaptation::{
     relay_normalized_chat_completion_json, relay_translated_messages_json,
@@ -16,6 +16,7 @@ use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Result, anyhow};
+use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
@@ -42,9 +43,70 @@ impl std::fmt::Display for BodyCopyError {
     }
 }
 
+#[derive(Debug, Default)]
+pub(super) struct UnboundedBodyCopyOutcome {
+    pub(super) copied_bytes: u64,
+    pub(super) usage: Option<TokenUsage>,
+}
+
+const MAX_SSE_USAGE_LINE_BYTES: usize = 64 * 1024;
+
+#[derive(Default)]
+struct SseUsageTracker {
+    line: Vec<u8>,
+    overflowed: bool,
+    usage: Option<TokenUsage>,
+}
+
+impl SseUsageTracker {
+    fn feed(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.flush_line();
+            } else if !self.overflowed {
+                if self.line.len() < MAX_SSE_USAGE_LINE_BYTES {
+                    self.line.push(byte);
+                } else {
+                    self.line.clear();
+                    self.overflowed = true;
+                }
+            }
+        }
+    }
+
+    fn finish(mut self) -> Option<TokenUsage> {
+        self.flush_line();
+        self.usage
+    }
+
+    fn flush_line(&mut self) {
+        if self.overflowed {
+            self.overflowed = false;
+            self.line.clear();
+            return;
+        }
+        let trimmed = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
+        if let Some(rest) = trimmed.strip_prefix(b"data:") {
+            let payload = rest
+                .iter()
+                .position(|b| !b.is_ascii_whitespace())
+                .map(|start| &rest[start..])
+                .unwrap_or(&[]);
+            if !payload.is_empty()
+                && payload != b"[DONE]"
+                && let Some(usage) = parse_token_usage_from_json_body(payload)
+            {
+                self.usage = Some(usage);
+            }
+        }
+        self.line.clear();
+    }
+}
+
 async fn copy_reader_to_client<R: AsyncRead + Unpin>(
     reader: &mut R,
     tcp_stream: &mut ClientStream,
+    mut usage_tracker: Option<&mut SseUsageTracker>,
 ) -> std::result::Result<u64, BodyCopyError> {
     let mut total = 0u64;
     let mut buf = [0u8; 8192];
@@ -55,6 +117,9 @@ async fn copy_reader_to_client<R: AsyncRead + Unpin>(
             .map_err(BodyCopyError::Upstream)?;
         if n == 0 {
             return Ok(total);
+        }
+        if let Some(tracker) = usage_tracker.as_deref_mut() {
+            tracker.feed(&buf[..n]);
         }
         tcp_stream
             .write_all(&buf[..n])
@@ -68,15 +133,25 @@ pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
     reader: &mut R,
     tcp_stream: &mut ClientStream,
     content_type: Option<&str>,
-    body_already_sent: bool,
+    initial_body: &[u8],
     route_observer: OpenAiRouteObserver<'_>,
-) -> std::result::Result<u64, BodyCopyError> {
+) -> std::result::Result<UnboundedBodyCopyOutcome, BodyCopyError> {
     if !is_event_stream_content_type(content_type) {
-        return copy_reader_to_client(reader, tcp_stream).await;
+        let copied_bytes = copy_reader_to_client(reader, tcp_stream, None).await?;
+        return Ok(UnboundedBodyCopyOutcome {
+            copied_bytes,
+            usage: None,
+        });
     }
-    if body_already_sent {
+    let mut tracker = SseUsageTracker::default();
+    if !initial_body.is_empty() {
+        tracker.feed(initial_body);
         route_observer.inference_observation_first_output();
-        return copy_reader_to_client(reader, tcp_stream).await;
+        let copied_bytes = copy_reader_to_client(reader, tcp_stream, Some(&mut tracker)).await?;
+        return Ok(UnboundedBodyCopyOutcome {
+            copied_bytes,
+            usage: tracker.finish(),
+        });
     }
     let mut first = [0u8; 4096];
     match reader
@@ -84,16 +159,19 @@ pub(super) async fn copy_unbounded_response_body<R: AsyncRead + Unpin>(
         .await
         .map_err(BodyCopyError::Upstream)?
     {
-        0 => Ok(0),
+        0 => Ok(UnboundedBodyCopyOutcome::default()),
         n => {
+            tracker.feed(&first[..n]);
             route_observer.inference_observation_first_output();
             tcp_stream
                 .write_all(&first[..n])
                 .await
                 .map_err(BodyCopyError::Downstream)?;
-            copy_reader_to_client(reader, tcp_stream)
-                .await
-                .map(|rest| rest + n as u64)
+            let rest = copy_reader_to_client(reader, tcp_stream, Some(&mut tracker)).await?;
+            Ok(UnboundedBodyCopyOutcome {
+                copied_bytes: rest + n as u64,
+                usage: tracker.finish(),
+            })
         }
     }
 }
@@ -337,9 +415,9 @@ mod tests {
 
     async fn run_copy_case(
         content_type: Option<&str>,
-        body_already_sent: bool,
+        initial_body: &[u8],
         remaining: &[u8],
-    ) -> (Vec<u8>, bool) {
+    ) -> (Vec<u8>, bool, Option<TokenUsage>) {
         let hub = Arc::new(ObservationHub::new());
         let (sub, _, _) = hub.subscribe();
         let obs = PluginExecutionObservation::start(
@@ -364,19 +442,19 @@ mod tests {
         let mut client_stream = ClientStream::from(server_stream);
         let mut cursor = std::io::Cursor::new(remaining.to_vec());
 
-        let copied = copy_unbounded_response_body(
+        let outcome = copy_unbounded_response_body(
             &mut cursor,
             &mut client_stream,
             content_type,
-            body_already_sent,
+            initial_body,
             observer,
         )
         .await
         .unwrap();
-        assert_eq!(copied, remaining.len() as u64);
+        assert_eq!(outcome.copied_bytes, remaining.len() as u64);
         let _ = client_stream.shutdown().await;
         drop(client_stream);
-        obs.complete(None);
+        obs.complete(outcome.usage.as_ref());
 
         let received = reader_task.await.unwrap();
         let drained = hub.drain(sub, usize::MAX).unwrap();
@@ -384,26 +462,26 @@ mod tests {
             .events
             .iter()
             .any(|e| matches!(e.kind.as_ref(), Some(Kind::FirstOutput(_))));
-        (received, saw_first_output)
+        (received, saw_first_output, outcome.usage)
     }
 
     #[tokio::test]
     async fn copy_unbounded_response_body_signals_first_output_only_for_non_empty_sse() {
         let payload = b"data: {\"text\":\"hi\"}\n\n";
-        let (rx, first) = run_copy_case(Some("text/event-stream"), true, payload).await;
+        let (rx, first, _) = run_copy_case(Some("text/event-stream"), b"data: {}", payload).await;
         assert_eq!(rx, payload);
-        assert!(first, "SSE with body_already_sent must signal first_output");
+        assert!(first, "SSE with initial_body must signal first_output");
 
-        let (rx, first) =
-            run_copy_case(Some("text/event-stream; charset=utf-8"), false, payload).await;
+        let (rx, first, _) =
+            run_copy_case(Some("text/event-stream; charset=utf-8"), b"", payload).await;
         assert_eq!(rx, payload);
         assert!(first, "SSE first chunk read must signal first_output");
 
-        let (rx, first) = run_copy_case(Some("text/event-stream"), false, b"").await;
+        let (rx, first, _) = run_copy_case(Some("text/event-stream"), b"", b"").await;
         assert!(rx.is_empty());
         assert!(!first, "empty SSE EOF must not signal first_output");
 
-        let (rx, first) = run_copy_case(Some("application/octet-stream"), false, payload).await;
+        let (rx, first, _) = run_copy_case(Some("application/octet-stream"), b"", payload).await;
         assert_eq!(rx, payload);
         assert!(!first, "non-SSE body must not signal first_output");
     }

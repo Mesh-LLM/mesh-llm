@@ -751,3 +751,112 @@ async fn sdk_watcher_receives_plugin_observations_over_wire_including_disconnect
 
     manager.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_flight_health_probe_does_not_restore_models_after_runtime_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let model = format!("obs-race-{}", generate_request_id().as_ref());
+    let probe_count = Arc::new(AtomicUsize::new(0));
+    let probe_entered = Arc::new(tokio::sync::Notify::new());
+    let release_probe = Arc::new(tokio::sync::Notify::new());
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server_model = model.clone();
+    let server_count = probe_count.clone();
+    let server_entered = probe_entered.clone();
+    let server_release = release_probe.clone();
+    let server_task = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let model = server_model.clone();
+            let count = server_count.clone();
+            let entered = server_entered.clone();
+            let release = server_release.clone();
+            tokio::spawn(async move {
+                let _req = read_full_http_request(&mut stream).await;
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                if n >= 1 {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                let body = format!(r#"{{"data":[{{"id":"{model}"}}]}}"#);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+
+    let (mesh_tx, _mesh_rx) = mpsc::channel(32);
+    let in_process =
+        InProcessPlugins::default().with("obs-race", inference_plugin("obs-race", address));
+    let mut spec = config::in_process_builtin_spec("obs-race");
+    spec.startup.optional = false;
+    let manager = PluginManager::start_with_in_process(
+        &config::ResolvedPlugins {
+            externals: vec![spec],
+            inactive: Vec::new(),
+        },
+        config::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+        in_process,
+    )
+    .await
+    .unwrap();
+
+    let hub = super::inference_observation::hub();
+    let (sub, _notify, initial_ready) = hub.subscribe();
+    assert!(
+        initial_ready.ready_models.contains(&model),
+        "model should be ready after startup"
+    );
+
+    let refresh_manager = manager.clone();
+    let refresh_task = tokio::spawn(async move {
+        refresh_manager
+            .refresh_plugin_endpoints("obs-race")
+            .await
+            .unwrap();
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), probe_entered.notified())
+        .await
+        .expect("in-flight health probe should reach server");
+
+    let plugin = manager.inner.plugins.get("obs-race").unwrap();
+    let generation = plugin
+        .current_generation()
+        .await
+        .expect("active generation");
+    plugin
+        .handle_runtime_failure(Some(generation), "simulated crash".to_string())
+        .await;
+
+    release_probe.notify_one();
+    refresh_task.await.unwrap();
+
+    let drained = hub.drain(sub, usize::MAX).unwrap();
+    let mut ready = true;
+    for event in drained.events {
+        match event.kind {
+            Some(Kind::ModelUnloaded(m)) if m == model => ready = false,
+            Some(Kind::ModelReady(m)) if m == model => ready = true,
+            _ => {}
+        }
+    }
+    assert!(
+        !ready,
+        "stale in-flight health probe must not re-publish ModelReady after crash"
+    );
+
+    server_task.abort();
+    manager.shutdown().await;
+}

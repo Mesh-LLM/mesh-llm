@@ -30,15 +30,17 @@ pub(super) struct EndpointHealthState {
 
 impl PluginManager {
     pub(super) async fn refresh_plugin_endpoints(&self, plugin_name: &str) -> Result<()> {
-        let summary = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
-            plugin.summary().await
-        } else if let Some(summary) = self.inner.inactive.get(plugin_name) {
-            summary.clone()
-        } else {
-            self.clear_plugin_endpoint_health(plugin_name).await;
-            self.inner.observed_models.clear_plugin(plugin_name);
-            return Ok(());
-        };
+        let (summary, observed_generation) =
+            if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+                let generation = plugin.current_generation().await;
+                (plugin.summary().await, generation)
+            } else if let Some(summary) = self.inner.inactive.get(plugin_name) {
+                (summary.clone(), None)
+            } else {
+                self.clear_plugin_endpoint_health(plugin_name).await;
+                self.inner.observed_models.clear_plugin(plugin_name);
+                return Ok(());
+            };
         self.publish_plugin_summary(&summary);
 
         let manifest = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
@@ -138,6 +140,12 @@ impl PluginManager {
         {
             return Ok(());
         }
+        if let Some(plugin) = self.inner.plugins.get(plugin_name)
+            && observed_generation.is_some()
+            && plugin.current_generation().await != observed_generation
+        {
+            return Ok(());
+        }
         self.clear_plugin_endpoint_health(plugin_name).await;
         self.publish_plugin_summary(&summary);
         self.publish_plugin_manifest(plugin_name, Some(plugin_manifest_overview(&manifest)));
@@ -150,9 +158,19 @@ impl PluginManager {
         let mut registry = self.inner.endpoint_health.lock().await;
         registry.extend(endpoint_states);
         drop(registry);
-        self.inner
-            .observed_models
-            .sync_plugin_models(plugin_name, ready_models);
+        if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+            if observed_generation.is_some() {
+                plugin
+                    .sync_observed_models_if_generation(observed_generation, ready_models)
+                    .await;
+            } else {
+                self.inner.observed_models.clear_plugin(plugin_name);
+            }
+        } else {
+            self.inner
+                .observed_models
+                .sync_plugin_models(plugin_name, ready_models);
+        }
         Ok(())
     }
 
