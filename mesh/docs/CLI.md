@@ -112,7 +112,7 @@ Switches:
 - `--service`: install and enable the background service.
 - `--no-service`: skip installing and enabling the background service.
 - `--skip-runtime`: skip downloading or configuring the native runtime.
-- `--skip-plugin-install`: do not install the catalog's `recommended` plugin set. Without it, setup installs that set in attended and unattended runs alike, with no prompt; an install problem prints a warning and the retry command `mesh-llm plugins install --set recommended`, and setup still succeeds.
+- `--skip-plugin-install`: do not install the catalog's `recommended` plugin set. Without it, setup installs that set once per machine, in attended and unattended runs alike, with no prompt. A plugin you remove is not reinstalled by later setup runs, and members added to the set later are not installed by setup. An install problem prints a warning and the retry command `mesh-llm plugins install --set recommended`, and setup still succeeds.
 - `--verbose`: print detailed service paths, commands, log locations, and setup status.
 
 On Windows, the background service is a per-user scheduled task that starts at
@@ -869,8 +869,8 @@ Subcommands:
 - `plugins install <REFERENCE>`: install from a catalog name, GitHub
   `owner/repository`, or GitHub URL.
 - `plugins install --set <NAME>`: install the members of a catalog plugin set,
-  such as `recommended`, that are not installed yet. Installed members are left
-  as they are; a failing member does not stop the others, and the command exits
+  such as `recommended`, that are not installed yet, including one you removed
+  earlier. Installed members are left as they are; a failing member does not stop the others, and the command exits
   non-zero so you can retry. The sets come from `plugin-sets.jsonl` beside the
   catalog's `plugins.jsonl`. `--set` conflicts with `<reference>` and `--archive`.
 - `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:

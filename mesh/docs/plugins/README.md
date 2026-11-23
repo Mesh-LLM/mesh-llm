@@ -305,8 +305,8 @@ Install a catalog plugin set (a curated group, such as `recommended`) with
 `mesh-llm plugins install --set recommended`. Sets are named in
 `plugin-sets.jsonl`, next to the catalog's `plugins.jsonl`; a set carries only
 member names, and each member's catalog entry stays the authority for its
-release and checksums. `mesh-llm setup` installs `recommended` by default
-(`--skip-plugin-install` opts out). A set install only adds what is missing: it
+release and checksums. `mesh-llm setup` installs `recommended` by default,
+once per machine (`--skip-plugin-install` opts out). A set install only adds what is missing: it
 never updates, enables or re-enables a plugin that is already installed, and
 membership changes later install nothing on their own.
 

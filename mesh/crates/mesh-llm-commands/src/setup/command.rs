@@ -254,7 +254,7 @@ fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
         SetupPluginsOutcome::Unavailable(reason) => {
             let _ = writeln!(
                 err,
-                "warning: could not install the {DEFAULT_SET} plugins: {reason}. {retry}"
+                "warning: could not install the `{DEFAULT_SET}` plugin set: {reason}. {retry}"
             );
         }
         SetupPluginsOutcome::Finished {
@@ -275,7 +275,7 @@ fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
                 let _ = writeln!(err, "{retry}");
             }
         }
-        SetupPluginsOutcome::NotRequested => {}
+        SetupPluginsOutcome::NotRequested | SetupPluginsOutcome::AlreadyOffered => {}
     }
 }
 

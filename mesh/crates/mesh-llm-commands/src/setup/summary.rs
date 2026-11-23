@@ -84,6 +84,9 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
     match (plan, outcome) {
         (super::SetupPluginsPlan::Skip, _) => "skipped by --skip-plugin-install".to_string(),
         (_, SetupPluginsOutcome::NotRequested) => "not recorded".to_string(),
+        (_, SetupPluginsOutcome::AlreadyOffered) => {
+            "recommended set already offered on this machine; plugins left as they are".to_string()
+        }
         (_, SetupPluginsOutcome::Unavailable(_)) => {
             "not installed; see the warning above".to_string()
         }
@@ -97,7 +100,7 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
         ) => {
             let mut parts = Vec::new();
             if !installed.is_empty() {
-                parts.push(format!("installed {}", installed.join(", ")));
+                parts.push(format!("installed: {}", installed.join(", ")));
             }
             if !failed.is_empty() {
                 parts.push(format!("{} failed; see the warning above", failed.len()));
@@ -424,7 +427,7 @@ mod tests {
         );
         assert_eq!(
             plugins_line(InstallDefaultSet, &finished(&["capsules"], 0, 0)),
-            "installed capsules"
+            "installed: capsules"
         );
         assert_eq!(
             plugins_line(InstallDefaultSet, &finished(&[], 2, 0)),
@@ -432,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             plugins_line(InstallDefaultSet, &finished(&["capsules"], 0, 1)),
-            "installed capsules; 1 failed; see the warning above"
+            "installed: capsules; 1 failed; see the warning above"
         );
         assert_eq!(
             plugins_line(InstallDefaultSet, &finished(&[], 0, 0)),

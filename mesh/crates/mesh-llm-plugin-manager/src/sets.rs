@@ -53,6 +53,42 @@ pub struct SetInstallResult {
     pub unavailable: Vec<(String, String)>,
 }
 
+const OFFERED_FILE: &str = "offered-sets.json";
+
+/// Whether setup already offered `set_name` on this machine. A set is offered
+/// once per machine: a plugin the operator later removes is never put back by
+/// setup, and members added to the set later are not installed by it either.
+pub fn set_was_offered(store_root: &std::path::Path, set_name: &str) -> Result<bool> {
+    Ok(read_offered(store_root)?
+        .iter()
+        .any(|name| name == set_name))
+}
+
+/// Record that `set_name` was offered on this machine.
+pub fn record_set_offered(store_root: &std::path::Path, set_name: &str) -> Result<()> {
+    let mut offered = read_offered(store_root)?;
+    if offered.iter().any(|name| name == set_name) {
+        return Ok(());
+    }
+    offered.push(set_name.to_string());
+    std::fs::create_dir_all(store_root)
+        .with_context(|| format!("create plugin store {}", store_root.display()))?;
+    let path = store_root.join(OFFERED_FILE);
+    std::fs::write(&path, serde_json::to_vec(&offered)?)
+        .with_context(|| format!("write {}", path.display()))
+}
+
+fn read_offered(store_root: &std::path::Path) -> Result<Vec<String>> {
+    let path = store_root.join(OFFERED_FILE);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
 /// Resolve `set_name` from one catalog snapshot for `target`. An unknown set
 /// is an error, never an empty resolution.
 pub fn resolve_set(catalog: &PluginCatalog, set_name: &str, target: &str) -> Result<SetResolution> {
@@ -349,6 +385,21 @@ mod tests {
         assert_eq!(result.failed[0].0, "alpha");
         assert_eq!(result.installed.len(), 1);
         assert_eq!(result.installed[0].metadata.name, "beta");
+    }
+
+    #[test]
+    fn a_set_is_offered_once_and_the_record_survives() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("plugins");
+        assert!(!set_was_offered(&root, "recommended").unwrap());
+        record_set_offered(&root, "recommended").unwrap();
+        record_set_offered(&root, "recommended").unwrap();
+        record_set_offered(&root, "extras").unwrap();
+        assert!(set_was_offered(&root, "recommended").unwrap());
+        assert!(set_was_offered(&root, "extras").unwrap());
+        assert!(!set_was_offered(&root, "other").unwrap());
+        // The record is a file in the store root, not a plugin.
+        assert!(PluginStore::new(&root).list().unwrap().is_empty());
     }
 
     #[tokio::test]

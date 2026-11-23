@@ -26,6 +26,9 @@ const SETUP_INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 pub enum SetupPluginsOutcome {
     #[default]
     NotRequested,
+    /// Setup already offered the set on this machine: it installs a set once,
+    /// so nothing is attempted, reinstalled or warned about.
+    AlreadyOffered,
     /// The set resolved. Members may have been installed, left as they were
     /// (already installed), found unavailable on this platform, or failed.
     Finished {
@@ -100,6 +103,11 @@ async fn install_set_for_setup(
     catalog_timeout: Duration,
     install_timeout: Duration,
 ) -> SetupPluginsOutcome {
+    match mesh_llm_plugin_manager::sets::set_was_offered(&options.store_root, set_name) {
+        Ok(true) => return SetupPluginsOutcome::AlreadyOffered,
+        Ok(false) => {}
+        Err(error) => return SetupPluginsOutcome::Unavailable(format!("{error:#}")),
+    }
     let work = async {
         let (catalog, problem) = match read_catalog(options, catalog_timeout).await {
             Ok(read) => read,
@@ -109,15 +117,24 @@ async fn install_set_for_setup(
             return SetupPluginsOutcome::Unavailable(no_set_reason(&catalog, set_name, problem));
         }
         match install_set(&catalog, set_name, options, progress).await {
-            Ok(result) => SetupPluginsOutcome::Finished {
-                installed: result
-                    .installed
-                    .into_iter()
-                    .map(|outcome| outcome.metadata.name)
-                    .collect(),
-                unavailable: result.unavailable,
-                failed: result.failed,
-            },
+            Ok(result) => {
+                // Offered now, whatever each member did: a failed member is
+                // retried by the explicit command, never by a later setup.
+                if let Err(error) =
+                    mesh_llm_plugin_manager::sets::record_set_offered(&options.store_root, set_name)
+                {
+                    return SetupPluginsOutcome::Unavailable(format!("{error:#}"));
+                }
+                SetupPluginsOutcome::Finished {
+                    installed: result
+                        .installed
+                        .into_iter()
+                        .map(|outcome| outcome.metadata.name)
+                        .collect(),
+                    unavailable: result.unavailable,
+                    failed: result.failed,
+                }
+            }
             Err(error) => SetupPluginsOutcome::Unavailable(format!("{error:#}")),
         }
     };
@@ -200,6 +217,68 @@ mod tests {
         assert!(
             matches!(outcome, SetupPluginsOutcome::Unavailable(_)),
             "{outcome:?}"
+        );
+    }
+
+    /// Setup offers the set once per machine: after it resolved, a later run
+    /// attempts nothing (not even a catalog read), so a plugin the operator
+    /// removed stays removed.
+    #[tokio::test]
+    async fn a_set_is_offered_once_per_machine() {
+        let temp = TempDir::new().unwrap();
+        let base = serve(
+            &[
+                ("/plugins.jsonl", PLUGINS),
+                (
+                    "/plugin-sets.jsonl",
+                    r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+                ),
+            ],
+            false,
+        );
+        let options = options(format!("{base}/plugins.jsonl"), temp.path());
+        let first = install_set_for_setup(
+            "recommended",
+            &options,
+            &mut |_| {},
+            CATALOG_TIMEOUT,
+            SETUP_INSTALL_TIMEOUT,
+        )
+        .await;
+        assert!(
+            matches!(first, SetupPluginsOutcome::Finished { .. }),
+            "{first:?}"
+        );
+
+        let dead = self::options("http://127.0.0.1:9/plugins.jsonl".to_string(), temp.path());
+        let second = install_set_for_setup(
+            "recommended",
+            &dead,
+            &mut |_| {},
+            CATALOG_TIMEOUT,
+            SETUP_INSTALL_TIMEOUT,
+        )
+        .await;
+        assert_eq!(second, SetupPluginsOutcome::AlreadyOffered);
+    }
+
+    /// A set that could not be read is not recorded as offered, so the next
+    /// setup tries again.
+    #[tokio::test]
+    async fn an_unreadable_set_is_not_recorded_as_offered() {
+        let temp = TempDir::new().unwrap();
+        let dead = options("http://127.0.0.1:9/plugins.jsonl".to_string(), temp.path());
+        let outcome = install_set_for_setup(
+            "recommended",
+            &dead,
+            &mut |_| {},
+            CATALOG_TIMEOUT,
+            SETUP_INSTALL_TIMEOUT,
+        )
+        .await;
+        assert!(matches!(outcome, SetupPluginsOutcome::Unavailable(_)));
+        assert!(
+            !mesh_llm_plugin_manager::sets::set_was_offered(temp.path(), "recommended").unwrap()
         );
     }
 
