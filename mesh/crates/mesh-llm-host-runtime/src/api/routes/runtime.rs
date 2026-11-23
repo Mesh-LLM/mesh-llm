@@ -1965,12 +1965,12 @@ async fn handle_control_fleet(
     let mut filtered_peers: Vec<_> = peers
         .into_iter()
         .filter(|peer| {
-            // Skip client roles unless explicitly requested
-            if request.role_filter.is_empty() {
-                if matches!(peer.role, mesh_llm_membership::NodeRole::Client) {
-                    return false;
-                }
-            } else {
+            // Clients are never valid fleet targets regardless of role_filter.
+            if matches!(peer.role, mesh_llm_membership::NodeRole::Client) {
+                return false;
+            }
+            // Apply role_filter if present (Clients already excluded above).
+            if !request.role_filter.is_empty() {
                 let role_str = match &peer.role {
                     mesh_llm_membership::NodeRole::Worker => "Worker",
                     mesh_llm_membership::NodeRole::Host { .. } => "Host",
@@ -2359,7 +2359,8 @@ async fn handle_set_mesh_policy(
             }
         }
     }
-    respond_json(stream, 200, &response).await
+    let status = if response.accepted { 200 } else { 409 };
+    respond_json(stream, status, &response).await
 }
 
 #[derive(Debug, Serialize)]
