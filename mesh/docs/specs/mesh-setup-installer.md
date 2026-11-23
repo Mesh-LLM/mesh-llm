@@ -93,10 +93,12 @@ It does so with and without prompts, once per machine (recorded in the plugin
 store as `offered-sets.json`: a member counts as offered once it is installed,
 already present, or has no release for this platform; a member that failed, and
 a set that could not be read, are not recorded and are tried again by the next
-setup run), after the runtime and before the service, so a node the
-service starts finds the plugins. Later setup runs leave plugins as they are: a
-plugin the operator removed is not reinstalled and members added to the set
-later are not installed by setup. The set's membership and each
+setup run), after the runtime and before the service, so a node the service
+starts finds the plugins. Later setup runs leave plugins as they are: a plugin
+the operator removed is not reinstalled and members added to the set later are
+not installed by setup. Two limits: a setup that times out records nothing, so
+a member the operator removes before the next run is installed again, and an
+unreadable record counts as none, so the next setup offers the set again. The set's membership and each
 member's pinned release and checksums come from the plugin catalog.
 
 Plugin install is optional and never fails setup: an unreachable or slow

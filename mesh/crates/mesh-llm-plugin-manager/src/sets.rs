@@ -115,7 +115,7 @@ pub fn record_set_offer(
     let path = store_root.join(OFFERED_FILE);
     // Write beside the record and rename over it, so a crash never leaves a
     // torn file.
-    let temp = store_root.join(format!("{OFFERED_FILE}.tmp"));
+    let temp = store_root.join(format!("{OFFERED_FILE}.{}.tmp", std::process::id()));
     std::fs::write(&temp, serde_json::to_vec(&offers)?)
         .with_context(|| format!("write {}", temp.display()))?;
     std::fs::rename(&temp, &path).with_context(|| format!("replace {}", path.display()))
