@@ -268,8 +268,11 @@ async fn install_set_by_name(set: &str) -> Result<()> {
             outcome.metadata.name, outcome.metadata.installed_version
         )?;
     }
-    for (name, reason) in &result.skipped {
-        writeln!(err, "Skipped {name}: {reason}")?;
+    for name in &result.already_installed {
+        writeln!(err, "Already installed {name}")?;
+    }
+    for (name, reason) in &result.unavailable {
+        writeln!(err, "Unavailable on this platform: {name}: {reason}")?;
     }
     if result.failed.is_empty() {
         return Ok(());

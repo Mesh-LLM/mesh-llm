@@ -257,7 +257,17 @@ fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
                 "warning: could not install the {DEFAULT_SET} plugins: {reason}. {retry}"
             );
         }
-        SetupPluginsOutcome::Finished { failed, .. } => {
+        SetupPluginsOutcome::Finished {
+            unavailable,
+            failed,
+            ..
+        } => {
+            for (name, reason) in unavailable {
+                let _ = writeln!(
+                    err,
+                    "warning: plugin {name} is not available on this platform: {reason}"
+                );
+            }
             for (name, reason) in failed {
                 let _ = writeln!(err, "warning: could not install plugin {name}: {reason}");
             }

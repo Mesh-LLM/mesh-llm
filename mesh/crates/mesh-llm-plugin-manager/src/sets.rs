@@ -46,9 +46,11 @@ pub struct SetInstallResult {
     pub installed: Vec<InstallOutcome>,
     /// `(member, reason)` for members that were attempted and failed.
     pub failed: Vec<(String, String)>,
-    /// `(member, reason)` for members left alone: unavailable here, or
-    /// already installed.
-    pub skipped: Vec<(String, String)>,
+    /// Members already installed, left exactly as they are.
+    pub already_installed: Vec<String>,
+    /// `(member, reason)` for members this platform cannot install: no catalog
+    /// entry, release or checksum for it.
+    pub unavailable: Vec<(String, String)>,
 }
 
 /// Resolve `set_name` from one catalog snapshot for `target`. An unknown set
@@ -111,15 +113,25 @@ pub async fn install_set_with<P>(
     let mut result = SetInstallResult::default();
     for member in &resolution.members {
         if let MemberAvailability::Unavailable(reason) = &member.availability {
-            result.skipped.push((member.name.clone(), reason.clone()));
+            result
+                .unavailable
+                .push((member.name.clone(), reason.clone()));
             continue;
         }
-        if let Some(installed) = store.load_optional(&member.name)? {
-            result.skipped.push((
-                member.name.clone(),
-                format!("already installed ({})", installed.installed_version),
-            ));
-            continue;
+        // One member's unreadable record fails that member only.
+        match store.load_optional(&member.name) {
+            Ok(Some(_)) => {
+                result.already_installed.push(member.name.clone());
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                result.failed.push((
+                    member.name.clone(),
+                    format!("cannot read its installed record: {error:#}"),
+                ));
+                continue;
+            }
         }
         match install_member(&member.name, progress).await {
             Ok(outcome) => result.installed.push(outcome),
@@ -284,8 +296,8 @@ mod tests {
             first.failed,
             [("beta".to_string(), "download failed".to_string())]
         );
-        assert_eq!(first.skipped.len(), 1);
-        assert_eq!(first.skipped[0].0, "gamma");
+        assert_eq!(first.unavailable.len(), 1);
+        assert_eq!(first.unavailable[0].0, "gamma");
 
         let mut retried = Vec::new();
         let second = install_set_with(&resolution, &store, &mut (), async |name, _| {
@@ -300,12 +312,43 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(retried, ["beta"]);
-        assert!(
-            second
-                .skipped
-                .iter()
-                .any(|(name, reason)| name == "alpha" && reason.contains("already installed"))
+        assert_eq!(second.already_installed, ["alpha"]);
+    }
+
+    /// A corrupt installed record fails that member only; the rest of the set
+    /// still installs.
+    #[tokio::test]
+    async fn an_unreadable_installed_record_does_not_stop_the_other_members() {
+        let catalog = catalog(
+            &[("alpha", true), ("beta", true)],
+            r#"{"name":"recommended","description":"d","plugins":["alpha","beta"]}"#,
         );
+        let resolution = resolve_set(&catalog, "recommended", TARGET).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        store.save(&installed("alpha")).unwrap();
+        let record = std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .flat_map(|entry| std::fs::read_dir(entry.path()).unwrap().flatten())
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .expect("alpha's metadata file");
+        std::fs::write(&record, "{not json").unwrap();
+
+        let result = install_set_with(&resolution, &store, &mut (), async |name, _| {
+            let metadata = installed(name);
+            Ok(InstallOutcome {
+                metadata,
+                changed: true,
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].0, "alpha");
+        assert_eq!(result.installed.len(), 1);
+        assert_eq!(result.installed[0].metadata.name, "beta");
     }
 
     #[tokio::test]

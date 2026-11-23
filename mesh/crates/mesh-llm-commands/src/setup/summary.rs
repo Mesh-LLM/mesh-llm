@@ -90,7 +90,9 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
         (
             _,
             SetupPluginsOutcome::Finished {
-                installed, failed, ..
+                installed,
+                unavailable,
+                failed,
             },
         ) => {
             let mut parts = Vec::new();
@@ -100,8 +102,14 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
             if !failed.is_empty() {
                 parts.push(format!("{} failed; see the warning above", failed.len()));
             }
+            if !unavailable.is_empty() {
+                parts.push(format!(
+                    "{} not available on this platform; see the warning above",
+                    unavailable.len()
+                ));
+            }
             if parts.is_empty() {
-                "nothing to install".to_string()
+                "already installed".to_string()
             } else {
                 parts.join("; ")
             }
@@ -398,6 +406,44 @@ mod tests {
         assert_eq!(
             github_brief(&actions).map(|brief| strip_ansi_styles(&brief)),
             Some("skipped; gh not authenticated".to_string())
+        );
+    }
+
+    #[test]
+    fn plugins_line_says_what_landed_and_what_did_not() {
+        use super::super::SetupPluginsPlan::{InstallDefaultSet, Skip};
+        let finished =
+            |installed: &[&str], unavailable: usize, failed: usize| SetupPluginsOutcome::Finished {
+                installed: installed.iter().map(|name| name.to_string()).collect(),
+                unavailable: vec![("x".to_string(), "no release".to_string()); unavailable],
+                failed: vec![("y".to_string(), "boom".to_string()); failed],
+            };
+        assert_eq!(
+            plugins_line(Skip, &SetupPluginsOutcome::NotRequested),
+            "skipped by --skip-plugin-install"
+        );
+        assert_eq!(
+            plugins_line(InstallDefaultSet, &finished(&["capsules"], 0, 0)),
+            "installed capsules"
+        );
+        assert_eq!(
+            plugins_line(InstallDefaultSet, &finished(&[], 2, 0)),
+            "2 not available on this platform; see the warning above"
+        );
+        assert_eq!(
+            plugins_line(InstallDefaultSet, &finished(&["capsules"], 0, 1)),
+            "installed capsules; 1 failed; see the warning above"
+        );
+        assert_eq!(
+            plugins_line(InstallDefaultSet, &finished(&[], 0, 0)),
+            "already installed"
+        );
+        assert_eq!(
+            plugins_line(
+                InstallDefaultSet,
+                &SetupPluginsOutcome::Unavailable("offline".to_string())
+            ),
+            "not installed; see the warning above"
         );
     }
 }

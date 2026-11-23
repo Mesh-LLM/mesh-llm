@@ -27,10 +27,10 @@ pub enum SetupPluginsOutcome {
     #[default]
     NotRequested,
     /// The set resolved. Members may have been installed, left as they were
-    /// (already installed, or no release for this platform), or failed.
+    /// (already installed), found unavailable on this platform, or failed.
     Finished {
         installed: Vec<String>,
-        skipped: Vec<(String, String)>,
+        unavailable: Vec<(String, String)>,
         failed: Vec<(String, String)>,
     },
     /// The set could not be read or the install did not finish; nothing
@@ -115,7 +115,7 @@ async fn install_set_for_setup(
                     .into_iter()
                     .map(|outcome| outcome.metadata.name)
                     .collect(),
-                skipped: result.skipped,
+                unavailable: result.unavailable,
                 failed: result.failed,
             },
             Err(error) => SetupPluginsOutcome::Unavailable(format!("{error:#}")),
@@ -124,7 +124,7 @@ async fn install_set_for_setup(
     match tokio::time::timeout(install_timeout, work).await {
         Ok(outcome) => outcome,
         Err(_) => SetupPluginsOutcome::Unavailable(format!(
-            "timed out after {}s",
+            "timed out after {}s; plugins that finished installing before then stay installed (`mesh-llm plugins list`)",
             install_timeout.as_secs()
         )),
     }
@@ -240,7 +240,7 @@ mod tests {
     }
 
     /// The members have no release for this platform, so nothing downloads:
-    /// the set install ends cleanly with every member skipped.
+    /// the set install ends cleanly with every member unavailable.
     #[tokio::test]
     async fn a_set_whose_members_have_no_release_here_installs_nothing() {
         let temp = TempDir::new().unwrap();
@@ -264,14 +264,14 @@ mod tests {
         .await;
         let SetupPluginsOutcome::Finished {
             installed,
-            skipped,
+            unavailable,
             failed,
         } = outcome
         else {
             panic!("expected Finished");
         };
         assert!(installed.is_empty() && failed.is_empty());
-        assert_eq!(skipped.len(), 1);
-        assert_eq!(skipped[0].0, "alpha");
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].0, "alpha");
     }
 }
