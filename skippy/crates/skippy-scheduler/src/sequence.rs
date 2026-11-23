@@ -47,6 +47,8 @@ pub struct Sequence {
     pub(crate) prefill_cursor: usize,
     pub(crate) enqueued_turn: u64,
     pub(crate) enqueue_order: u64,
+    /// [`crate::PriorityPassovers::mark`] when the sequence started waiting.
+    pub(crate) passover_mark: u64,
 }
 
 impl Sequence {
@@ -75,6 +77,7 @@ impl Sequence {
             prefill_cursor: 0,
             enqueued_turn: 0,
             enqueue_order: 0,
+            passover_mark: 0,
         }
     }
 

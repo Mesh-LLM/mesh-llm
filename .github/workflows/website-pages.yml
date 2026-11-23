@@ -102,6 +102,8 @@ jobs:
           cp -R docs/docs "$artifact_dir/"
           cp -R docs/crates "$artifact_dir/"
           cp -R docs/pagefind "$artifact_dir/"
+          cp -R docs/plugins "$artifact_dir/"
+          test -f "$artifact_dir/plugins/index.html"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1

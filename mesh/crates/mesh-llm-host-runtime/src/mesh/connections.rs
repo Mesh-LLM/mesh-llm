@@ -1,3 +1,4 @@
+use super::gossip::ReservedDial;
 use super::*;
 use std::net::{IpAddr, SocketAddr};
 
@@ -57,7 +58,11 @@ pub(crate) fn control_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
 }
 
 pub(crate) enum ClosedConnectionRecovery {
-    Reconnect(EndpointAddr),
+    /// Redial the peer once `ticket`'s wait is over, if no newer close has
+    /// taken the redial since.
+    Reconnect {
+        ticket: mesh_llm_membership::redial_backoff::RedialTicket,
+    },
     RemovePeer,
     AlreadyReplaced,
 }
@@ -712,6 +717,9 @@ impl Node {
             ));
         }
         let replaced = state.connections.insert(remote, conn.clone());
+        state
+            .redial_backoff
+            .connected(remote, std::time::Instant::now());
         drop(state);
         if let Some(replaced) = replaced
             && replaced.stable_id() != conn.stable_id()
@@ -764,9 +772,11 @@ impl Node {
         self.release_direct_rescue_endpoint(remote, closing_stable_id)
             .await;
         match recovery {
-            ClosedConnectionRecovery::Reconnect(addr) => {
-                self.reconnect_closed_connection_or_remove(remote, addr)
-                    .await;
+            ClosedConnectionRecovery::Reconnect { ticket } => {
+                if let Some((owner, addr)) = self.claim_redial_after_wait(remote, ticket).await {
+                    self.reconnect_closed_connection_or_remove(remote, addr, owner)
+                        .await;
+                }
             }
             ClosedConnectionRecovery::RemovePeer => {
                 self.remove_peer(remote, MeshPeerRemovalReason::ClosedConnectionNoAddress)
@@ -776,21 +786,67 @@ impl Node {
         }
     }
 
+    /// Redial a peer whose connection closed, holding the pending handshake
+    /// `owner` claimed for it.
     pub(crate) async fn reconnect_closed_connection_or_remove(
         &self,
         remote: EndpointId,
         addr: EndpointAddr,
+        owner: PendingConnectionAttemptOwner,
     ) {
         tracing::info!("Attempting reconnect to {}...", remote.fmt_short());
         match self.reconnect_closed_peer(remote, addr).await {
             Some(new_conn) => {
-                self.complete_recovered_connection(remote, new_conn).await;
+                self.complete_recovered_connection_owned(remote, new_conn, owner)
+                    .await;
             }
             _ => {
+                self.finish_pending_connection(
+                    owner,
+                    PendingConnectionOutcome::Failed("reconnect failed".to_string()),
+                )
+                .await;
                 tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
                 self.remove_peer(remote, MeshPeerRemovalReason::ReconnectFailed)
                     .await;
             }
+        }
+    }
+
+    /// Wait out the backoff for a peer whose connections keep closing (#3081),
+    /// then claim the redial: the pending handshake for the peer, taken under
+    /// the same lock that checks the redial is still this recovery's to make.
+    /// Returns the handshake and the peer's address as known now, which a
+    /// gossip during the wait may have changed. `None` when the redial is not
+    /// this recovery's: a later close of a replacement connection started a
+    /// newer recovery, which owns the redial; the peer reconnected or left
+    /// the mesh meanwhile, including a departure recorded before its peer
+    /// record is removed; or an on-demand handshake is already dialing it.
+    pub(crate) async fn claim_redial_after_wait(
+        &self,
+        remote: EndpointId,
+        ticket: mesh_llm_membership::redial_backoff::RedialTicket,
+    ) -> Option<(PendingConnectionAttemptOwner, EndpointAddr)> {
+        if !ticket.delay.is_zero() {
+            tracing::info!(
+                delay_ms = ticket.delay.as_millis() as u64,
+                "Connection to {} keeps closing; waiting before the redial",
+                remote.fmt_short()
+            );
+            tokio::time::sleep(ticket.delay).await;
+        }
+        let mut state = self.state.lock().await;
+        let ours = state.redial_backoff.may_redial(remote, ticket)
+            && !state.connections.contains_key(&remote)
+            && !state.departed_peers.contains_key(&remote);
+        state.redial_backoff.finish_redial(remote, ticket);
+        let addr = state.peers.get(&remote).map(|peer| peer.addr.clone());
+        let (true, Some(addr)) = (ours, addr) else {
+            return None;
+        };
+        match state.reserve_pending_connection(remote) {
+            PendingConnectionReservation::Owner(owner) => Some((owner, addr)),
+            PendingConnectionReservation::Waiter(_) => None,
         }
     }
 
@@ -811,9 +867,18 @@ impl Node {
             return ClosedConnectionRecovery::AlreadyReplaced;
         }
         state.connections.remove(&remote);
-        match state.peers.get(&remote).map(|peer| peer.addr.clone()) {
-            Some(addr) => ClosedConnectionRecovery::Reconnect(addr),
-            None => ClosedConnectionRecovery::RemovePeer,
+        if !state.peers.contains_key(&remote) {
+            return ClosedConnectionRecovery::RemovePeer;
+        }
+        // The ticket comes with the removal, under the same lock, so the
+        // recovery for the latest close always holds the latest ticket,
+        // however long an earlier dispatcher takes to clean up.
+        ClosedConnectionRecovery::Reconnect {
+            ticket: state.redial_backoff.delay_before_redial(
+                remote,
+                std::time::Instant::now(),
+                rand::random::<f64>(),
+            ),
         }
     }
 
@@ -836,6 +901,11 @@ impl Node {
         }
     }
 
+    /// Reserve the pending handshake, then complete a recovered connection.
+    /// The closed-connection recovery claims the handshake before it dials
+    /// and completes through `complete_recovered_connection_owned`; this
+    /// entry point remains for the admission tests.
+    #[cfg(test)]
     pub(crate) async fn complete_recovered_connection(
         &self,
         remote: EndpointId,
@@ -849,6 +919,16 @@ impl Node {
                 return;
             }
         };
+        self.complete_recovered_connection_owned(remote, new_conn, owner)
+            .await;
+    }
+
+    async fn complete_recovered_connection_owned(
+        &self,
+        remote: EndpointId,
+        new_conn: Connection,
+        owner: PendingConnectionAttemptOwner,
+    ) {
         if self
             .recovered_connection_gossip_ok(remote, new_conn.clone())
             .await
@@ -856,6 +936,9 @@ impl Node {
             {
                 let mut state = self.state.lock().await;
                 state.connections.insert(remote, new_conn.clone());
+                state
+                    .redial_backoff
+                    .connected(remote, std::time::Instant::now());
             }
             let node = self.clone();
             tokio::spawn(async move {
@@ -875,6 +958,7 @@ impl Node {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn complete_recovered_connection_waiter(
         &self,
         waiter: PendingConnectionWaiter,
@@ -1312,20 +1396,30 @@ impl Node {
     ) -> Result<()> {
         match self.reserve_pending_connection(peer_id).await {
             PendingConnectionReservation::Owner(owner) => {
-                let result = self
-                    .complete_cached_connection_gossip(peer_id, conn, discover_peers)
-                    .await;
-                let outcome = match &result {
-                    Ok(()) => PendingConnectionOutcome::Admitted,
-                    Err(error) => PendingConnectionOutcome::Failed(error.to_string()),
-                };
-                self.finish_pending_connection(owner, outcome).await;
-                result
+                self.complete_owned_cached_connection_gossip(conn, owner, discover_peers)
+                    .await
             }
             PendingConnectionReservation::Waiter(waiter) => {
                 self.await_pending_connection(waiter).await
             }
         }
+    }
+
+    async fn complete_owned_cached_connection_gossip(
+        &self,
+        conn: Connection,
+        owner: PendingConnectionAttemptOwner,
+        discover_peers: bool,
+    ) -> Result<()> {
+        let result = self
+            .complete_cached_connection_gossip(owner.peer_id, conn, discover_peers)
+            .await;
+        let outcome = match &result {
+            Ok(()) => PendingConnectionOutcome::Admitted,
+            Err(error) => PendingConnectionOutcome::Failed(error.to_string()),
+        };
+        self.finish_pending_connection(owner, outcome).await;
+        result
     }
 
     async fn use_cached_connection_if_ready(&self, peer_id: EndpointId) -> Result<bool> {
@@ -1350,7 +1444,11 @@ impl Node {
         Ok(true)
     }
 
-    async fn outbound_connection_preflight_complete(&self, peer_id: EndpointId) -> Result<bool> {
+    async fn outbound_connection_preflight_complete(
+        &self,
+        peer_id: EndpointId,
+        discovery: bool,
+    ) -> Result<bool> {
         if peer_id == self.endpoint.id() {
             return Ok(true);
         }
@@ -1360,6 +1458,9 @@ impl Node {
             peer_id.fmt_short()
         );
 
+        if discovery {
+            return Ok(false);
+        }
         if self.use_cached_connection_if_ready(peer_id).await? {
             return Ok(true);
         }
@@ -1383,13 +1484,35 @@ impl Node {
         &self,
         peer_id: EndpointId,
     ) -> Result<Option<PendingConnectionAttemptOwner>> {
-        match self.reserve_pending_connection(peer_id).await {
-            PendingConnectionReservation::Owner(owner) => Ok(Some(owner)),
-            PendingConnectionReservation::Waiter(waiter) => {
-                self.await_pending_connection(waiter).await?;
-                self.schedule_selected_path_recheck(peer_id);
-                Ok(None)
+        let mut retry = true;
+        loop {
+            let reservation = {
+                let mut state = self.state.lock().await;
+                // Another waiter may have admitted the peer before this retry.
+                if state.connections.contains_key(&peer_id)
+                    && state.peers.get(&peer_id).is_some_and(PeerInfo::is_admitted)
+                {
+                    return Ok(None);
+                }
+                state.reserve_pending_connection(peer_id)
+            };
+            let waiter = match reservation {
+                PendingConnectionReservation::Owner(owner) => return Ok(Some(owner)),
+                PendingConnectionReservation::Waiter(waiter) => waiter,
+            };
+            let attempt = waiter.attempt_id;
+            let result = self.await_pending_connection(waiter).await;
+            // Another owner may have tried a different address. Retry once.
+            if result.is_err() && std::mem::take(&mut retry) {
+                self.state
+                    .lock()
+                    .await
+                    .remove_pending_connection_if_attempt(peer_id, attempt);
+                continue;
             }
+            result?;
+            self.schedule_selected_path_recheck(peer_id);
+            return Ok(None);
         }
     }
 
@@ -1434,25 +1557,6 @@ impl Node {
         Ok((conn, owner))
     }
 
-    async fn complete_outbound_pending_gossip(
-        &self,
-        peer_id: EndpointId,
-        conn: &Connection,
-        owner: PendingConnectionAttemptOwner,
-    ) -> Result<PendingConnectionAttemptOwner> {
-        if let Err(error) = self.initiate_gossip(conn.clone(), peer_id).await {
-            conn.close(0u32.into(), b"connect-peer-gossip-failed");
-            self.finish_pending_connection(
-                owner,
-                PendingConnectionOutcome::Failed(error.to_string()),
-            )
-            .await;
-            return Err(error);
-        }
-
-        Ok(owner)
-    }
-
     async fn publish_admitted_outbound_connection(
         &self,
         peer_id: EndpointId,
@@ -1464,6 +1568,9 @@ impl Node {
             state.dead_peers.remove(&peer_id);
             state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
+            state
+                .redial_backoff
+                .connected(peer_id, std::time::Instant::now());
         }
 
         let node_for_dispatch = self.clone();
@@ -1484,20 +1591,63 @@ impl Node {
     }
 
     pub(crate) async fn connect_to_peer(&self, addr: EndpointAddr) -> Result<()> {
-        let peer_id = addr.id;
-        if self.outbound_connection_preflight_complete(peer_id).await? {
+        self.connect_to_peer_inner(addr.id, Some(addr)).await
+    }
+
+    pub(super) async fn connect_to_discovered_peer(&self, peer_id: EndpointId) -> Result<()> {
+        self.connect_to_peer_inner(peer_id, None).await
+    }
+
+    async fn connect_to_peer_inner(
+        &self,
+        peer_id: EndpointId,
+        direct_addr: Option<EndpointAddr>,
+    ) -> Result<()> {
+        if self
+            .outbound_connection_preflight_complete(peer_id, direct_addr.is_none())
+            .await?
+        {
             return Ok(());
         }
 
-        let Some(owner) = self.reserve_outbound_pending_connection(peer_id).await? else {
+        let reservation = match direct_addr {
+            Some(addr) => self
+                .reserve_outbound_pending_connection(peer_id)
+                .await?
+                .map(|owner| ReservedDial {
+                    addr,
+                    owner,
+                    cached: None,
+                }),
+            None => self.reserve_discovery_connection(peer_id).await,
+        };
+        let Some(ReservedDial {
+            addr,
+            owner,
+            cached,
+        }) = reservation
+        else {
             return Ok(());
         };
+        if let Some(conn) = cached {
+            self.complete_owned_cached_connection_gossip(conn, owner, true)
+                .await?;
+            self.schedule_selected_path_recheck(peer_id);
+            return Ok(());
+        }
         let (conn, owner) = self.open_outbound_pending_connection(addr, owner).await?;
-        let owner = self
-            .complete_outbound_pending_gossip(peer_id, &conn, owner)
-            .await?;
+        if let Err(error) = self.exchange_and_apply_gossip(conn.clone(), peer_id).await {
+            conn.close(0u32.into(), b"connect-peer-gossip-failed");
+            self.finish_pending_connection(
+                owner,
+                PendingConnectionOutcome::Failed(error.to_string()),
+            )
+            .await;
+            return Err(error);
+        }
         self.publish_admitted_outbound_connection(peer_id, conn, owner)
             .await;
+        self.start_peer_discovery().await;
 
         Ok(())
     }

@@ -3,8 +3,8 @@
 <section class="sec pt-14 sm:pt-20 catalog" id="catalog">
   <div class="shell">
     {{ sectionHead(
-      "Mesh-ready model refs, ready to copy.",
-      "Browse live Hugging Face catalog data, copy <span class=\"mono\" style=\"color: var(--blue-3);\">org/repo:quant</span> refs, and see which models ship layer packages for multi-machine serving."
+      "Model catalog",
+      "Copy Hugging Face model references in <span class=\"mono\" style=\"color: var(--blue-3);\">org/repo:quant</span> format and find layer packages for running models across machines."
     ) }}
 
     <div class="toolbar" id="catalog-toolbar">
@@ -117,7 +117,7 @@
 
 
           <tr data-capability="Code" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-32B-Instruct</strong><br><span>Top-tier code gen, matches GPT-4o on code</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-32B-Instruct</strong><br><span>Code generation and debugging</span></td>
             <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -141,7 +141,7 @@
 
 
           <tr data-capability="Code" data-runtime="Single machine" data-hardware="20 GB+" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-Next</strong><br><span>~85B dense, frontier coding model</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-Next</strong><br><span>Mixture-of-experts coding model with 80B total and 3B active parameters</span></td>
             <td class="size-cell col-size" data-label="Size / quant">48 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -189,7 +189,7 @@
 
 
           <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-14B-Instruct</strong><br><span>Solid general chat</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-14B-Instruct</strong><br><span>General chat</span></td>
             <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -201,7 +201,7 @@
 
 
           <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-32B-Instruct</strong><br><span>Proven general chat</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-32B-Instruct</strong><br><span>General chat</span></td>
             <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -285,7 +285,7 @@
 
 
           <tr data-capability="" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="DeepSeek">
-            <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-V3.2</strong><br><span>MoE 671B, frontier general model, requires multi-node</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-V3.2</strong><br><span>671B mixture-of-experts model</span></td>
             <td class="size-cell col-size" data-label="Size / quant">382 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge green">61 layers</span></td>
@@ -382,7 +382,7 @@
 
 
           <tr data-capability="" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-235B-A22B</strong><br><span>MoE 235B/22B, proven at 16 tok/s across 2 nodes</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-235B-A22B</strong><br><span>Mixture-of-experts model with 235B total and 22B active parameters</span></td>
             <td class="size-cell col-size" data-label="Size / quant">134 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge green">94 layers</span></td>
@@ -407,7 +407,7 @@
 
 
           <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B</strong><br><span>Best Qwen3 dense, thinking/non-thinking modes</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B</strong><br><span>Dense model with thinking and non-thinking modes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">19.8 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -444,7 +444,7 @@
 
 
           <tr data-capability="" data-runtime="Multi-machine" data-hardware="≤ 8 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-8B</strong><br><span>Qwen3 mid-tier, strong for its size</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-8B</strong><br><span>Thinking and non-thinking modes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">5.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge green">36 layers</span></td>
@@ -469,7 +469,7 @@
 
 
           <tr data-capability="Code" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-480B-A35B-Instruct</strong><br><span>MoE 480B/35B, largest coding model, requires multi-node</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-480B-A35B-Instruct</strong><br><span>Mixture-of-experts coding model with 480B total and 35B active parameters</span></td>
             <td class="size-cell col-size" data-label="Size / quant">294 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge green">62 layers</span></td>
@@ -482,7 +482,7 @@
 
 
           <tr data-capability="Vision" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
-            <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-0.8B-Vision</strong><br><span>Tiny vision model, OCR, screenshots, runs anywhere</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-0.8B-Vision</strong><br><span>Vision model for OCR and screenshots</span></td>
             <td class="size-cell col-size" data-label="Size / quant">508 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>
@@ -518,7 +518,7 @@
 
 
           <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Gemma">
-            <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-12B-it</strong><br><span>Google Gemma 3 12B, punches above weight</span></td>
+            <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-12B-it</strong><br><span>Accepts text and images</span></td>
             <td class="size-cell col-size" data-label="Size / quant">7.3 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
             <td class="package-cell col-package" data-label="Layers"><span class="badge">—</span></td>

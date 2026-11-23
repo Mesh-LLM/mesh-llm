@@ -24,6 +24,12 @@ used to discover shared resident prefixes. Attention admission uses physical
 native occupancy rather than summing overlapping logical prefix lengths.
 Recurrent checkpoint RAM is bounded separately and works with disk disabled.
 
+Serving puts the request tier and private partition in the cache namespace
+(see `skippy-inference-api`'s request tiers), so a prefix one tier or partition
+computed never matches another's. Recurrent entries are evicted by the
+retention their owner gives them (`evict_recurrent_by_retention`), least
+recently used first among equals; serving uses the storing request's tier.
+
 This adopts SGLang's separation of radix-owned attention blocks and recurrent
 checkpoints through llama.cpp's native memory interfaces. It does not embed
 SGLang's Torch runtime. See [the prompt-cache design](../../docs/PROMPT_CACHE.md)

@@ -542,6 +542,12 @@ pub struct StageConfig {
     pub upstream: Option<PeerConfig>,
     #[serde(default)]
     pub downstream: Option<PeerConfig>,
+    /// The highest request tier (`local`, `trusted` or `mesh`) this stage
+    /// serves. The host sets it from its own classification of the node that
+    /// loaded the stage; a wire claim above it is lowered to it. `None` means
+    /// `local`: the stage trusts the tier its coordinator stamps.
+    #[serde(default)]
+    pub max_request_tier: Option<String>,
 }
 
 impl StageConfig {

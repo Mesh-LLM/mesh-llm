@@ -728,6 +728,7 @@ fn stage_config(
         upstream: load.upstream.as_ref().map(peer_config),
         downstream: load.downstream.as_ref().map(peer_config),
         admission: load.admission.clone(),
+        max_request_tier: load.max_request_tier.clone(),
     };
     options.validate()?;
     let resident_tensor_names = admitted_resident_tensor_names(load, package)?;

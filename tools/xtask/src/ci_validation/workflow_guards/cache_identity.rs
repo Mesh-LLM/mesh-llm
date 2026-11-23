@@ -120,8 +120,82 @@ fn rust_smoke(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
             return Err(format!("SDK cache source boundary missing: {path}"));
         }
     }
-    if all_steps(sdk).any(|s| text(s, "uses").starts_with("actions/cache")) {
+    let rust_actions_cache = all_steps(sdk)
+        .any(|s| text(s, "uses").starts_with("actions/cache") && !requires(text(s, "if"), KOTLIN));
+    if rust_actions_cache {
         return Err("SDK smoke must use dependency-aware Rust cache".into());
+    }
+    Ok(())
+}
+const KOTLIN: &str = "inputs.sdk_kind == 'kotlin'";
+const GRADLE_PATHS: &str = "~/.gradle/caches/modules-2\n~/.gradle/wrapper/dists";
+// The Kotlin smoke's Gradle download store: one exact restore and one save
+// that only a trusted main push may run.
+fn kotlin_gradle(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
+    let sdk = workflows.get("sdk-smoke.yml").ok_or("SDK smoke missing")?;
+    let caches: Vec<_> = all_steps(sdk)
+        .filter(|s| text(s, "uses").starts_with("actions/cache"))
+        .collect();
+    let [restore, save] = caches.as_slice() else {
+        return Err("Kotlin Gradle cache requires one restore and one save".into());
+    };
+    exact(
+        restore,
+        "uses",
+        "actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25",
+    )?;
+    exact(
+        save,
+        "uses",
+        "actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+    )?;
+    exact(restore, "id", "gradle_cache")?;
+    let restore_values = restore.get("with").ok_or("Gradle restore inputs missing")?;
+    let save_values = save.get("with").ok_or("Gradle save inputs missing")?;
+    for values in [restore_values, save_values] {
+        if text(values, "path").trim() != GRADLE_PATHS {
+            return Err("Gradle cache paths changed".into());
+        }
+    }
+    if restore_values.get("restore-keys").is_some() {
+        return Err("Gradle cache must restore an exact key".into());
+    }
+    exact(
+        save_values,
+        "key",
+        "${{ steps.gradle_cache.outputs.cache-primary-key }}",
+    )?;
+    let key = text(restore_values, "key");
+    for boundary in ["kotlin-sdk-gradle-v1", "runner.os", "runner.arch"] {
+        if !key.contains(boundary) {
+            return Err(format!("Gradle cache boundary missing: {boundary}"));
+        }
+    }
+    let paths = hashes(key)?;
+    for path in [
+        "mesh/sdk/kotlin/example/example-jvm/gradle/wrapper/gradle-wrapper.properties",
+        "mesh/sdk/kotlin/example/example-jvm/build.gradle.kts",
+        "mesh/sdk/kotlin/example/example-jvm/settings.gradle.kts",
+        ".github/cache-version.txt",
+    ] {
+        if !paths.contains(path) {
+            return Err(format!("Gradle cache source boundary missing: {path}"));
+        }
+    }
+    if !requires(text(restore, "if"), KOTLIN) {
+        return Err("Gradle cache restore must select Kotlin".into());
+    }
+    for clause in [
+        KOTLIN,
+        "steps.gradle_cache.outputs.cache-hit != 'true'",
+        "github.ref == 'refs/heads/main'",
+        "github.event_name != 'pull_request'",
+        "github.event.inputs.original_event_name != 'pull_request'",
+        "github.event.inputs.original_event_name != 'pull_request_target'",
+    ] {
+        if !requires(text(save, "if"), clause) {
+            return Err(format!("Gradle cache save must require {clause}"));
+        }
     }
     Ok(())
 }
@@ -214,5 +288,6 @@ fn seed(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
 pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
     swift(workflows)?;
     rust_smoke(workflows)?;
+    kotlin_gradle(workflows)?;
     seed(workflows)
 }

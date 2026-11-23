@@ -1,6 +1,11 @@
 # Public Mesh
 
-Use the public mesh when you want to try discovery without naming your own private mesh.
+Use the public mesh to discover and connect to publicly advertised nodes through Nostr. Publishing discovery information to Nostr makes it public, with or without a mesh name. A name helps people find a mesh; it does not restrict who can join.
+
+A **private mesh** restricts membership through enforced
+[admission control](/docs/pages/private-meshes/#restrict-membership). Publishing
+discovery information does not remove that policy, and withholding a name does
+not create one.
 
 Join as a serving node:
 
@@ -26,4 +31,4 @@ Point OpenAI-compatible tools at:
 http://localhost:9337/v1
 ```
 
-For predictable first-run behavior on your own hardware, use the [Quickstart](/docs/pages/quickstart/) private mesh flow instead.
+For predictable first-run behavior on your own hardware, use the [Quickstart](/docs/pages/quickstart/) single-node setup instead.

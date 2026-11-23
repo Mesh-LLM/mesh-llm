@@ -35,7 +35,6 @@ use skippy_protocol::SCHEMA_VERSION;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
-use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -1001,6 +1000,7 @@ impl StageOpenAiBackend {
             current,
             sampling: wire_sampling.clone(),
             native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+            request_class: request.ids.request_class(),
         })?;
         let has_downstream = request.config.downstream.is_some();
         let scheduler_kv = Arc::clone(kv);
@@ -1086,6 +1086,7 @@ impl StageOpenAiBackend {
                 sampling: wire_sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
                 native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+                request_class: request.ids.request_class(),
             })?;
         let forwarded = forwarded_stage_message_timed(
             request.config,
@@ -1194,8 +1195,11 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)
             },
         );
-        let stop =
-            StageWireMessage::stop_with_identity(request.ids.request_id, request.ids.session_id);
+        let stop = crate::frontend::wire_messages::stop_message(
+            request.ids.request_id,
+            request.ids.session_id,
+            request.ids.request_class(),
+        );
         if write_stage_message_conditioned(
             &mut *downstream,
             &stop,

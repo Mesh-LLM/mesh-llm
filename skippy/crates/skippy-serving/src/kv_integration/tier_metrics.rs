@@ -264,6 +264,7 @@ mod tests {
                     seq_id: 0,
                     token_count: 3,
                     recompute_cost: 1,
+                    retention_priority: 0,
                 },
             )
             .expect("resident checkpoint");

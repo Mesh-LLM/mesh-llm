@@ -576,6 +576,7 @@ impl StageOpenAiBackend {
         let stats = self.iteration_scheduler.generate(
             ScheduledGenerationRequest {
                 id: session_id,
+                priority: request.ids.request_tier().priority(),
                 prompt_tokens: request.prompt_token_ids,
                 max_tokens: request.max_tokens,
                 sampling: request.sampling.enabled.then_some(request.sampling),
@@ -967,6 +968,7 @@ impl StageOpenAiBackend {
             let stats = self.iteration_scheduler.resume_generation(
                 ScheduledResumeRequest {
                     id: session_id,
+                    priority: request.ids.request_tier().priority(),
                     prompt_tokens: request.prompt_token_ids,
                     generated_tokens: &initial_generated_tokens,
                     max_tokens: request.max_tokens,

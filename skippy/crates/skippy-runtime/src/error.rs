@@ -30,11 +30,14 @@ impl std::fmt::Display for NativeError {
 impl std::error::Error for NativeError {}
 
 impl NativeError {
-    /// Finds the native failure anywhere in an error chain.
+    /// Finds the native failure anywhere in an error chain, including where it
+    /// was attached as context, as `with_last_native_error` does.
     pub fn find(error: &anyhow::Error) -> Option<&NativeError> {
-        error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<NativeError>())
+        error.downcast_ref::<NativeError>().or_else(|| {
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<NativeError>())
+        })
     }
 }
 

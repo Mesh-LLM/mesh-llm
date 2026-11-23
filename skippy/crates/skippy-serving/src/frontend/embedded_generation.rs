@@ -217,6 +217,7 @@ impl StageOpenAiBackend {
                         tokens: chunk,
                         request_id,
                         session_id,
+                        request_class: request.ids.request_class(),
                     })?;
                     message.state.set_split_dflash_unattended_rows(unattended);
                     let stage0_timer = PhaseTimer::start();
@@ -796,6 +797,7 @@ impl StageOpenAiBackend {
                 sampling: wire_sampling.clone(),
                 sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
                 native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+                request_class: request.ids.request_class(),
             })?;
             decode_message.set_split_dflash(request.split_dflash());
             let mut native_mtp = NativeMtpVerifier::default();
@@ -1340,6 +1342,7 @@ impl StageOpenAiBackend {
                                     tokens: &input_tokens,
                                     sampling: wire_sampling.clone(),
                                     native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+                                    request_class: request.ids.request_class(),
                                 })?;
                             message.state.set_split_dflash(request.split_dflash());
                             let dispatched = self.dispatch_embedded_stage_message(
@@ -1740,6 +1743,7 @@ impl StageOpenAiBackend {
                                 tokens: &verify_inputs,
                                 sampling: wire_sampling.clone(),
                                 native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+                                request_class: request.ids.request_class(),
                             })?;
                         message.state.set_split_dflash(request.split_dflash());
                         let verify = self.execute_embedded_stage_message(

@@ -16,6 +16,7 @@ fn config_sync_full_config_roundtrip() {
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         private: Default::default(),
+        request_tiers: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: mesh_llm_config::UpdatesConfig {

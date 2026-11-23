@@ -48,13 +48,16 @@ val response = node.inference.chatCompletions(
 node.stop()
 ```
 
-Use `joinTokens = listOf(token)` for a private mesh. To serve local models,
+Use `joinTokens = listOf(token)` to join a mesh by token. To serve local models,
 choose `SERVE` or `COMBINED` and set `models = listOf(modelRef)`. Serving needs a
 matching native runtime. `ownerKeyPath` accepts a Mesh LLM keystore path; the
 old in-memory owner keypair constructor and `Client` class are removed.
 
 `node.inference.streamChatCompletions(bodyJson)` and `streamResponses(bodyJson)`
 return SSE flows. See [runtime artifacts](../SDK.md#native-runtime-artifacts).
+
+Join tokens locate a mesh; private membership requires enforced
+[admission control](../MESHES.md#ownership-and-admission-control).
 
 ## Thinking effort levels
 

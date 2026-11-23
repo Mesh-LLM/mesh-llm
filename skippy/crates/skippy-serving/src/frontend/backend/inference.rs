@@ -22,7 +22,17 @@ impl InferenceBackend for StageOpenAiBackend {
 
     /// Serve System One requests through the backend's selected execution path.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
-        self.serve_system_one(request).await
+        self.serve_system_one(request, Default::default()).await
+    }
+
+    /// Serve System One at the request's tier and in its cache partition.
+    async fn system_one_with_context(
+        &self,
+        request: SystemOneRequest,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<SystemOneResponse> {
+        self.serve_system_one(request, context.request_class())
+            .await
     }
 
     async fn chat_completion(
@@ -37,9 +47,10 @@ impl InferenceBackend for StageOpenAiBackend {
     /// Keep the scope through prompt preparation, native request IDs and cache selection.
     async fn chat_completion_with_context(
         &self,
-        request: GenerationRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationResponse> {
+        request.request_class = context.request_class();
         let ids = generation_ids(
             InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
@@ -194,9 +205,10 @@ impl InferenceBackend for StageOpenAiBackend {
     /// Retain the context in the native worker while producing bounded response events.
     async fn chat_completion_stream(
         &self,
-        request: GenerationRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationEventStream> {
+        request.request_class = context.request_class();
         let ids = generation_ids(
             InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),

@@ -1,8 +1,7 @@
-From cf937afd998fce2d584ed5ed092205deded25a01 Mon Sep 17 00:00:00 2001
+From a922d83e220feb2a4f00fd7d8b9837c131aee5b7 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Mon, 2 Nov 2026 09:00:00 +1100
-Subject: [PATCH 19/32] skippy: report native trace spans and GPU command
- timing
+Subject: [PATCH] skippy: report native trace spans and GPU command timing
 
 skippy/tracing.h reports where time goes inside a native call, for a
 caller that already times the call itself. skippy_set_native_span_callback
@@ -463,7 +462,7 @@ index e12c55a39..f89c8ebe6 100644
              [cmd_buf commit];
          }
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 8c21125d5..7c42724af 100644
+index 9ab481093..db9889c79 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -5,6 +5,7 @@
@@ -511,7 +510,7 @@ index 8c21125d5..7c42724af 100644
                  if (!dev->library) {
                      GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
                  }
-@@ -2305,6 +2314,8 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t buf) {
+@@ -2323,6 +2332,8 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t buf) {
          return true;
      }
  
@@ -520,7 +519,7 @@ index 8c21125d5..7c42724af 100644
  #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
      if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
          MTLResidencySetDescriptor * desc = [[MTLResidencySetDescriptor alloc] init];
-@@ -2364,6 +2375,10 @@ static void * ggml_metal_host_malloc(size_t n) {
+@@ -2382,6 +2393,10 @@ static void * ggml_metal_host_malloc(size_t n) {
  }
  
  ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size, bool shared) {
@@ -531,7 +530,7 @@ index 8c21125d5..7c42724af 100644
      ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
  
      res->dev = dev;
-@@ -2434,6 +2449,10 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
+@@ -2452,6 +2467,10 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
  }
  
  ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, size_t size, size_t max_tensor_size) {
@@ -542,7 +541,7 @@ index 8c21125d5..7c42724af 100644
      ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
  
      res->dev = dev;
-@@ -2588,6 +2607,9 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor *
+@@ -2606,6 +2625,9 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor *
          return;
      }
  
@@ -552,7 +551,7 @@ index 8c21125d5..7c42724af 100644
      @autoreleasepool {
          // src
          void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-@@ -2644,6 +2666,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
+@@ -2662,6 +2684,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
          return;
      }
  
@@ -1461,7 +1460,7 @@ index 000000000..e9e57357c
 +
 +#endif // SKIPPY_TRACING_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 75cb30503..6e4e9023b 100644
+index 211edbe3b..0e0970876 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -64,6 +64,7 @@ add_library(llama
@@ -1473,7 +1472,7 @@ index 75cb30503..6e4e9023b 100644
              skippy/graph_dependencies.cpp
              skippy/graph_identity.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index e460d2250..b3ec732f9 100644
+index 7cdb0c1f0..545f4eb5b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -17,6 +17,7 @@
@@ -1484,7 +1483,7 @@ index e460d2250..b3ec732f9 100644
  
  #include <algorithm>
  #include <atomic>
-@@ -499,6 +500,7 @@ llama_context::llama_context(
+@@ -494,6 +495,7 @@ llama_context::llama_context(
      }
  
      if (!hparams.vocab_only) {
@@ -1492,7 +1491,7 @@ index e460d2250..b3ec732f9 100644
          // GPU backends
          for (const auto & dev : model.devices) {
              ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
-@@ -580,6 +582,8 @@ llama_context::llama_context(
+@@ -575,6 +577,8 @@ llama_context::llama_context(
              /*.no_alloc  =*/ model.no_alloc(),
          };
  
@@ -1501,7 +1500,7 @@ index e460d2250..b3ec732f9 100644
          memory.reset(model.create_memory(params_mem, cparams, graph_build_inputs.selection));
      }
  
-@@ -852,6 +856,8 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -845,6 +849,8 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
          return;
      }
  
@@ -1510,7 +1509,7 @@ index e460d2250..b3ec732f9 100644
      sched_need_reserve = false;
      ++sched_reserve_count;
  
-@@ -1010,7 +1016,11 @@ void llama_context::synchronize() {
+@@ -1014,7 +1020,11 @@ void llama_context::synchronize() {
          return;
      }
  
@@ -1523,7 +1522,7 @@ index e460d2250..b3ec732f9 100644
  
      // FIXME: if multiple single tokens are evaluated without a synchronization,
      // the stats will be added to the prompt evaluation stats
-@@ -1138,6 +1148,8 @@ bool llama_context::memory_update(
+@@ -1132,6 +1142,8 @@ bool llama_context::memory_update(
                  }
          }
  
@@ -1532,7 +1531,7 @@ index e460d2250..b3ec732f9 100644
          // reset the previous graph results to make sure that they won't be reused
          // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
          for (auto & res : gf_res_prev) {
-@@ -1790,7 +1802,13 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1926,7 +1938,13 @@ llm_graph_result * llama_context::process_ubatch(
          llama_memory_context_i * mctx,
          ggml_status & ret,
          const skippy_graph_build_inputs & graph_build_inputs) {
@@ -1547,7 +1546,7 @@ index e460d2250..b3ec732f9 100644
          LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
          ret = GGML_STATUS_FAILED;
          return nullptr;
-@@ -1805,6 +1823,7 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1941,6 +1959,7 @@ llm_graph_result * llama_context::process_ubatch(
  
      if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
          //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1555,7 +1554,7 @@ index e460d2250..b3ec732f9 100644
  
          // with pipeline parallelism, the previous graph_compute_async may still be running
          // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-@@ -1823,7 +1842,10 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1959,7 +1978,10 @@ llm_graph_result * llama_context::process_ubatch(
  
          //const auto t_start_us = ggml_time_us();
  
@@ -1566,7 +1565,7 @@ index e460d2250..b3ec732f9 100644
  
          //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
  
-@@ -1843,11 +1865,13 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1979,11 +2001,13 @@ llm_graph_result * llama_context::process_ubatch(
              return nullptr;
          }
  
@@ -1580,7 +1579,7 @@ index e460d2250..b3ec732f9 100644
  
          gf_res_prev_active = res;
      }
-@@ -1857,12 +1881,16 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1993,12 +2017,16 @@ llm_graph_result * llama_context::process_ubatch(
          //const auto t_start_us = ggml_time_us();
  
          // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
@@ -1597,7 +1596,7 @@ index e460d2250..b3ec732f9 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2159,6 +2187,8 @@ int llama_context::decode(
+@@ -2295,6 +2323,8 @@ int llama_context::decode(
          return encode(batch_inp, graph_build_inputs);
      }
  
@@ -1606,7 +1605,7 @@ index e460d2250..b3ec732f9 100644
      if (batch_inp.tokens.empty()) {
          LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
          return -1;
-@@ -2219,12 +2249,14 @@ int llama_context::decode(
+@@ -2361,12 +2391,14 @@ int llama_context::decode(
          }
      }
  
@@ -1621,7 +1620,7 @@ index e460d2250..b3ec732f9 100644
  
      const uint32_t n_tokens_all  = balloc->get_n_tokens();
      const uint32_t n_outputs_all = balloc->get_n_outputs();
-@@ -2265,6 +2297,8 @@ int llama_context::decode(
+@@ -2407,6 +2439,8 @@ int llama_context::decode(
  
      llama_memory_context_ptr mctx;
  
@@ -1630,7 +1629,7 @@ index e460d2250..b3ec732f9 100644
      while (true) {
          mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
          if (!mctx) {
-@@ -2308,11 +2342,15 @@ int llama_context::decode(
+@@ -2450,11 +2484,15 @@ int llama_context::decode(
          break;
      }
  
@@ -1646,7 +1645,7 @@ index e460d2250..b3ec732f9 100644
  
      int64_t n_outputs_prev = 0;
      int64_t n_tokens_prev  = 0;
-@@ -2399,6 +2437,9 @@ int llama_context::decode(
+@@ -2557,6 +2595,9 @@ int llama_context::decode(
          //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
          //}
  
@@ -1656,7 +1655,7 @@ index e460d2250..b3ec732f9 100644
          auto * t_logits  = res->get_logits();
          auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;
          auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn()  : nullptr;
-@@ -2537,10 +2578,13 @@ int llama_context::decode(
+@@ -2696,10 +2737,13 @@ int llama_context::decode(
              copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
          }
  
@@ -1670,7 +1669,7 @@ index e460d2250..b3ec732f9 100644
              ggml_backend_sched_synchronize(sched.get());
          }
      } while (mctx->next());
-@@ -3106,6 +3150,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -3273,6 +3317,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
      LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
      GGML_ASSERT(n_outputs >= 1);
  
@@ -1679,7 +1678,7 @@ index e460d2250..b3ec732f9 100644
      if (n_tokens % n_seqs != 0) {
          n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
          LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
-@@ -4121,6 +4167,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
+@@ -4288,6 +4334,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
  }
  
  size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
@@ -1687,7 +1686,7 @@ index e460d2250..b3ec732f9 100644
      std::unique_ptr<llama_io_write_i> io;
      if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
          io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
-@@ -4140,6 +4187,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
+@@ -4307,6 +4354,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
  }
  
  size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
@@ -1696,7 +1695,7 @@ index e460d2250..b3ec732f9 100644
      if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
          // create a temporary io to read the magic and the src seq_id
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index fd12f9966..fe7101445 100644
+index b8fdbd578..2f4662742 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1,4 +1,5 @@
@@ -1705,7 +1704,7 @@ index fd12f9966..fe7101445 100644
  
  #include "llama-impl.h"
  #include "llama-io.h"
-@@ -452,6 +453,7 @@ void llama_kv_cache::init_rotation(const char * name_tag) {
+@@ -457,6 +458,7 @@ void llama_kv_cache::init_rotation(const char * name_tag) {
  }
  
  void llama_kv_cache::clear(bool data) {
@@ -1713,7 +1712,7 @@ index fd12f9966..fe7101445 100644
      for (uint32_t s = 0; s < n_stream; ++s) {
          v_cells[s].reset();
          v_heads[s] = 0;
-@@ -465,6 +467,7 @@ void llama_kv_cache::clear(bool data) {
+@@ -470,6 +472,7 @@ void llama_kv_cache::clear(bool data) {
  }
  
  bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -1721,7 +1720,7 @@ index fd12f9966..fe7101445 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return true;
-@@ -567,6 +570,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+@@ -572,6 +575,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
  }
  
  void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
@@ -1729,7 +1728,7 @@ index fd12f9966..fe7101445 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return;
-@@ -659,6 +663,7 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
+@@ -664,6 +668,7 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
  }
  
  void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
@@ -1737,7 +1736,7 @@ index fd12f9966..fe7101445 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return;
-@@ -686,6 +691,7 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+@@ -691,6 +696,7 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
  }
  
  void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
@@ -1745,7 +1744,7 @@ index fd12f9966..fe7101445 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return;
-@@ -1636,6 +1642,7 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1651,6 +1657,7 @@ bool llama_kv_cache::stage_export_kv_page(
          size_t output_capacity,
          size_t * out_bytes,
          std::string & error) const {
@@ -1753,7 +1752,7 @@ index fd12f9966..fe7101445 100644
      if (out_desc == nullptr || out_bytes == nullptr) {
          error = "out_desc and out_bytes are required";
          return false;
-@@ -1878,6 +1885,7 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1893,6 +1900,7 @@ bool llama_kv_cache::stage_import_kv_page(
          size_t input_bytes,
          std::string & error,
          bool validate_only) {
@@ -1761,7 +1760,7 @@ index fd12f9966..fe7101445 100644
      if (input == nullptr) {
          error = "input payload is required";
          return false;
-@@ -3527,6 +3535,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
+@@ -3574,6 +3582,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
  }
  
  void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
@@ -1769,7 +1768,7 @@ index fd12f9966..fe7101445 100644
      // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
      if (other) {
          return;
-@@ -3599,6 +3608,7 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
+@@ -3646,6 +3655,7 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
  }
  
  void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -1844,7 +1843,7 @@ index b7570d445..c488e921c 100644
  
      uint32_t cell_count;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 8ded67e17..f93cbad04 100644
+index 143c1f895..0f4d15e68 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,4 +1,5 @@
@@ -1853,7 +1852,7 @@ index 8ded67e17..f93cbad04 100644
  
  #include "llama-arch.h"
  #include "llama-ext.h"
-@@ -2193,11 +2194,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -2203,11 +2204,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
  
      // load tensor data
@@ -2021,7 +2020,7 @@ index 7167e5f7a..885b602e9 100644
      int32_t rc = 0;
      const bool decoded = skippy_contain_native_failure(
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index 40faff815..a31540652 100644
+index 7d7973520..2d34652b9 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -6,6 +6,7 @@
@@ -2049,15 +2048,15 @@ index 40faff815..a31540652 100644
      int32_t decode_rc = 0;
      if (!skippy_contain_native_failure(
                  out_error, [&] { decode_rc = first->ctx->decode(batch, graph_inputs); })) {
-@@ -461,6 +465,8 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -460,6 +464,8 @@ enum skippy_status skippy_iteration_batch_sampled(
+     }
      skippy_mark_context_work_pending(first->stage_model);
-     skippy_synchronize_context_if_pending(first->stage_model);
  
 +    // exports, readouts and sampling, request by request
 +    skippy_trace::scope outputs_trace("skippy.batch_outputs", "requests", static_cast<int64_t>(request_count));
      size_t sampled_index = 0;
-     for (size_t request_index = 0; request_index < request_count; ++request_index) {
-         const auto & request = requests[request_index];
+     // Synchronize only when this iteration consumes GPU results: a sampled
+     // last token, a causal readout, or a batched activation export. Prefill
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 index bbc1c2d42..a4bf2a475 100644
 --- a/src/skippy/model_loading.cpp
@@ -2539,7 +2538,7 @@ index 000000000..9aa48e08c
 +    }
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index b8b159025..638e84e37 100644
+index 7c55e2c5f..ce3fe92ac 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -185,6 +185,9 @@ llama_build_and_test(test-skippy-rerank-template.cpp)
@@ -2552,7 +2551,7 @@ index b8b159025..638e84e37 100644
      llama_build_and_test(test-skippy-cachegen-import.cpp)
      llama_build_and_test(test-skippy-sampling-suppress.cpp)
      llama_build_and_test(test-skippy-kv-page-export.cpp)
-@@ -330,6 +333,7 @@ llama_build_and_test(test-chat-template.cpp  LABEL behavior)
+@@ -344,6 +347,7 @@ llama_build_and_test(test-chat-template.cpp  LABEL behavior)
  
  if (GGML_METAL)
      llama_build_and_test(test-skippy-cachegen-metal.cpp)
@@ -3034,5 +3033,5 @@ index 000000000..804c2f7e0
 +    return 0;
 +}
 -- 
-2.43.0
+2.56.0
 

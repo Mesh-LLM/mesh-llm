@@ -50,9 +50,10 @@ pub use resolve::{
     show_model_variants_with_progress,
 };
 pub use search::{
-    SearchArtifactFilter, SearchHit, SearchProgress, SearchSort, search_catalog_json_payload,
-    search_catalog_models, search_huggingface, search_huggingface_json_payload,
+    search_catalog_json_payload, search_catalog_models, search_huggingface,
+    search_huggingface_json_payload,
 };
+pub use skippy_model_hf::search::{SearchArtifactFilter, SearchHit, SearchProgress, SearchSort};
 pub use topology::{ModelMoeInfo, ModelTopology, infer_local_model_topology};
 pub use usage::{
     ModelCleanupPlan, ModelCleanupResult, execute_model_cleanup, load_model_usage_record_for_path,

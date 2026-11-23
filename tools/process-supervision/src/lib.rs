@@ -55,8 +55,8 @@ pub use probe::{
 pub use projection::supervise_projected;
 pub use raw::{RawBytes, RawCaptureOptions, RawProcessReport};
 pub use report::{
-    Cleanup, Failure, GracefulRequest, Outcome, ProcessReport, ReadinessObservation, ReadinessStop,
-    Stream, StreamReport,
+    Cleanup, Failure, GracefulRequest, LeaderState, Outcome, PreForceObservation, ProcessMember,
+    ProcessReport, ReadinessObservation, ReadinessStop, Stream, StreamReport,
 };
 pub use spec::{Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value};
 pub use supervisor::{supervise, supervise_raw, supervise_raw_with_files};

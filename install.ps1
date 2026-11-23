@@ -4,6 +4,7 @@ param(
     [string]$Flavor,
     [switch]$NoPathUpdate,
     [switch]$NoSetup,
+    [switch]$NoShortcut,
     [switch]$Help
 )
 
@@ -29,6 +30,10 @@ if (Test-Truthy $env:MESH_LLM_INSTALL_PRERELEASE) {
     $PreRelease = $true
 }
 
+if (Test-Truthy $env:MESH_LLM_INSTALL_NO_SHORTCUT) {
+    $NoShortcut = $true
+}
+
 $RequireChecksum = Test-Truthy $env:MESH_LLM_REQUIRE_CHECKSUM
 
 if (-not $Flavor -and $env:MESH_LLM_INSTALL_FLAVOR) {
@@ -42,7 +47,7 @@ if (-not $InstallDir) {
 
 function Show-Usage {
     @"
-Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup]
+Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup] [-NoShortcut]
 
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
@@ -50,6 +55,7 @@ Options:
   -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
+  -NoShortcut             Do not add the MeshLLM Start menu shortcut, which opens the console and starts the node when it is not running.
   -Help                   Show this help text.
 
 Environment overrides:
@@ -58,6 +64,8 @@ Environment overrides:
   MESH_LLM_INSTALL_PRERELEASE=1
   MESH_LLM_INSTALL_REPO=Mesh-LLM/mesh-llm
   MESH_LLM_REQUIRE_CHECKSUM=1
+  MESH_LLM_INSTALL_NO_SHORTCUT=1
+  MESH_LLM_INSTALL_START_MENU_DIR (folder for the shortcut; defaults to the user's Start menu Programs folder)
 "@
 }
 
@@ -647,6 +655,143 @@ function Add-InstallDirToPath {
     return $true
 }
 
+$ConsoleLauncherName = "mesh-llm-console.ps1"
+# The first release whose `mesh-llm uninstall` removes the shortcut and its
+# launcher. An older bundle would leave a shortcut to a deleted launcher behind.
+$StartMenuMinimumVersion = [version]"0.81.0"
+
+# Run by the Start menu shortcut: open the console, starting the node first when
+# it is not answering. The node starts through the `mesh-llm` scheduled task when
+# `setup` installed it for this copy, else with the command that task runs. The
+# second line records the shortcut, so `mesh-llm uninstall` removes the one this
+# copy created and no other.
+$ConsoleLauncherScript = @'
+# Opens the MeshLLM console for the mesh-llm.exe beside this script.
+# Start menu shortcut: __MESH_LLM_START_MENU_SHORTCUT__
+$ErrorActionPreference = 'Stop'
+$mesh = Join-Path $PSScriptRoot 'mesh-llm.exe'
+$console = 'http://127.0.0.1:3131/'
+
+function Test-Console {
+    try {
+        Invoke-WebRequest -Uri ($console + 'api/status') -UseBasicParsing -TimeoutSec 2 | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# The `mesh-llm` task starts this copy only when setup registered it from this
+# directory: setup runs the task in the binary's own directory.
+function Test-TaskRunsThisCopy {
+    $xml = $null
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $xml = (& schtasks.exe /Query /TN mesh-llm /XML 2>$null) -join "`n"
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    }
+    try {
+        $directory = ([xml]$xml).Task.Actions.Exec.WorkingDirectory
+    } catch {
+        return $false
+    }
+    if (-not $directory) { return $false }
+    $directory = [Environment]::ExpandEnvironmentVariables($directory).TrimEnd('\')
+    return [string]::Equals($directory, $PSScriptRoot.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Show-Failure([string]$Message) {
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.MessageBox]::Show($Message, 'MeshLLM') | Out-Null
+}
+
+if (-not (Test-Console)) {
+    if (Test-TaskRunsThisCopy) {
+        # Start-Process, not &: with 'Stop', Windows PowerShell turns the stderr
+        # of a failed run into a terminating error.
+        $run = Start-Process -FilePath schtasks.exe -ArgumentList '/Run', '/TN', 'mesh-llm' -WindowStyle Hidden -Wait -PassThru
+        if ($run.ExitCode -ne 0) {
+            Show-Failure "MeshLLM's background task did not start (schtasks exit code $($run.ExitCode)). Run 'mesh-llm status' in PowerShell to see why."
+            exit 1
+        }
+    } else {
+        Start-Process -FilePath $mesh -ArgumentList 'serve' -WindowStyle Hidden
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Console)) {
+        Start-Sleep -Seconds 1
+    }
+}
+
+if (Test-Console) {
+    Start-Process $console
+} else {
+    Show-Failure "MeshLLM did not start within 90 seconds. Run 'mesh-llm status' in PowerShell to see why."
+}
+'@
+
+function Get-StartMenuDir {
+    if ($env:MESH_LLM_INSTALL_START_MENU_DIR) {
+        return $env:MESH_LLM_INSTALL_START_MENU_DIR
+    }
+    return [Environment]::GetFolderPath("Programs")
+}
+
+# The version in what `mesh-llm --version` printed, without any prerelease
+# suffix, or $null when there is none.
+function Get-MeshVersion {
+    param([string]$VersionText)
+
+    if ($VersionText -match '(\d+)\.(\d+)\.(\d+)') {
+        return [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    }
+    return $null
+}
+
+# A MeshLLM entry in the Start menu, so the console is one click away without
+# opening a terminal. Returns the shortcut path, or $null when there is none.
+function Install-StartMenuShortcut {
+    param([string]$MeshBinary, [string]$VersionText)
+
+    if ($NoShortcut) {
+        return $null
+    }
+    $version = Get-MeshVersion -VersionText $VersionText
+    if (-not $version -or $version -lt $StartMenuMinimumVersion) {
+        Write-Host "Skipping the Start menu shortcut: this mesh-llm cannot remove it on uninstall (it can from $StartMenuMinimumVersion)."
+        return $null
+    }
+
+    # The shortcut keeps these paths for Explorer, which does not know the
+    # directory this installer ran from.
+    $installDirFull = (Resolve-Path -LiteralPath $InstallDir).ProviderPath
+    $meshBinaryFull = (Resolve-Path -LiteralPath $MeshBinary).ProviderPath
+    $launcher = Join-Path $installDirFull $ConsoleLauncherName
+    $startMenu = Get-StartMenuDir
+    New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
+    $shortcutPath = Join-Path (Resolve-Path -LiteralPath $startMenu).ProviderPath "MeshLLM.lnk"
+
+    $script = $ConsoleLauncherScript.Replace("__MESH_LLM_START_MENU_SHORTCUT__", $shortcutPath)
+    # Written beside it, then moved over it, so a failed write leaves an
+    # earlier launcher whole.
+    $pending = "$launcher.tmp"
+    Set-Content -LiteralPath $pending -Value $script -Encoding UTF8
+    Move-Item -LiteralPath $pending -Destination $launcher -Force
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""
+    $shortcut.WorkingDirectory = $installDirFull
+    $shortcut.IconLocation = "$meshBinaryFull,0"
+    $shortcut.Description = "Open the MeshLLM console"
+    # 7: start minimized, so no console window shows while the node starts.
+    $shortcut.WindowStyle = 7
+    $shortcut.Save()
+    return $shortcutPath
+}
+
 function Test-InteractiveSession {
     if ($env:MESH_LLM_INSTALL_INTERACTIVE) {
         return Test-Truthy $env:MESH_LLM_INSTALL_INTERACTIVE
@@ -714,10 +859,28 @@ try {
 
     $meshBinary = Join-Path $InstallDir "mesh-llm.exe"
     Write-Host "Installed $asset to $InstallDir"
-    & $meshBinary --version
+    $versionText = (& $meshBinary --version) -join " "
+    Write-Host $versionText
 
     if ($NoPathUpdate -and -not $pathUpdated) {
         Write-Host "Install directory was not added to PATH. Use the full command below until you add $InstallDir to PATH."
+    }
+
+    # The shortcut is a convenience: a failure to add it must not stop setup.
+    # A launcher an earlier install left may still back a working shortcut,
+    # so only one this attempt created is removed.
+    $launcherExisted = Test-Path -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName)
+    try {
+        $shortcutPath = Install-StartMenuShortcut -MeshBinary $meshBinary -VersionText $versionText
+        if ($shortcutPath) {
+            Write-Host "Added MeshLLM to the Start menu: it opens the console and starts the node when it is not running."
+        }
+    } catch {
+        Write-Warning "Could not add MeshLLM to the Start menu: $($_.Exception.Message)"
+        Remove-Item -LiteralPath (Join-Path $InstallDir "$ConsoleLauncherName.tmp") -Force -ErrorAction SilentlyContinue
+        if (-not $launcherExisted) {
+            Remove-Item -LiteralPath (Join-Path $InstallDir $ConsoleLauncherName) -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Invoke-SetupOrPrint -MeshBinary $meshBinary

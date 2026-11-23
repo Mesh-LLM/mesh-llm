@@ -14,6 +14,7 @@ impl StageOpenAiBackend {
         &self,
         plan: &DecisionPlan,
         cancellation: &CancellationToken,
+        class: skippy_inference_api::InferenceRequestClass,
     ) -> InferenceResult<PreparedPrefixes> {
         let mut usage = DecisionReadoutUsage::default();
         if !self
@@ -28,7 +29,9 @@ impl StageOpenAiBackend {
         }
         if plan.questions.len() > 1 && plan.shared_prefix_tokens > 0 {
             let tokens = plan.questions[0].prompt[..plan.shared_prefix_tokens].to_vec();
-            let result = self.run_readout_job(warmup_job(tokens), cancellation).await;
+            let result = self
+                .run_readout_job(warmup_job(tokens), cancellation, class)
+                .await;
             if !accumulate_preparation(stream::iter([result]), cancellation, &mut usage).await? {
                 return Ok(PreparedPrefixes {
                     usage,
@@ -46,7 +49,7 @@ impl StageOpenAiBackend {
         let results = stream::iter(
             prompts
                 .into_iter()
-                .map(|job| self.run_readout_job(job, cancellation)),
+                .map(|job| self.run_readout_job(job, cancellation, class)),
         )
         .buffer_unordered(width);
         let reuse_cache = accumulate_preparation(results, cancellation, &mut usage).await?;

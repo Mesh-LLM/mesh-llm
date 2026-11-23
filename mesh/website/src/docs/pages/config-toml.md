@@ -64,6 +64,31 @@ nodes = ["8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"]
 - A running node rereads the list when the file changes, without a restart.
 - `mesh-llm private` takes the config file's lock, so its edits never collide with a running node saving a console change. A text editor does not: the node refuses to save over an edit it sees, but an edit landing in the instant before its save can be lost. While a node is running, prefer `mesh-llm private`.
 
+## Request tiers
+
+Every request this node serves gets a tier, from whom it is served for:
+
+- `local` — this machine, its private nodes, and nodes with a verified certificate from this node's own owner.
+- `trusted` — nodes with a verified certificate from an owner in this node's trust store.
+- `mesh` — everyone else.
+
+Higher tiers are admitted first (a waiting lower-tier request moves up one tier
+each time 16 higher-tier requests are admitted ahead of it, so it is not passed
+over indefinitely while it fits), their KV cache is evicted last, and each tier, plus private requests within it, keeps its own prompt
+cache. A node that forwards a request names its client's tier; the receiving
+node keeps the lower of that claim and its own classification of the sender.
+
+```toml
+[request_tiers]
+local_kv_reserve_percent = 20
+
+[request_tiers.owners]
+"8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c" = "trusted"
+```
+
+- `owners` — owner ids (64 hex characters, as `mesh-llm auth status` prints them) mapped to `local`, `trusted` or `mesh`. An entry replaces the tier the owner's verified nodes would otherwise get; it never affects nodes without a verified certificate. Owner ids that differ only in letter case are rejected. A running node rereads it when the file changes, and keeps the entries it last read while the file is missing or does not load.
+- `local_kv_reserve_percent` — share of each model's KV token budget that only `local` requests may use, 0 to 100. `0` (the default) reserves nothing. Applies when a model loads.
+
 ## Payments
 
 Paid inference is not part of the node and has no `config.toml` section. Payment

@@ -67,7 +67,8 @@ The micro-batch must be at least the GGUF's fixed diffusion canvas length. The
 server queries that metadata at runtime; the published Q4_K_M model uses a
 larger canvas than OpenJEV's vLLM default, so the branch does not hard-code 64.
 
-Start a private mesh first:
+Start an unpublished mesh first. For private membership, configure
+[admission control](../MESHES.md#ownership-and-admission-control):
 
 ```bash
 ./target/debug/mesh-llm serve \
@@ -76,7 +77,7 @@ Start a private mesh first:
   --headless
 ```
 
-After the private proof works, add `--publish` to advertise the mesh through
+After the unpublished setup works, add `--publish` to advertise the mesh through
 MeshLLM discovery. Other nodes can join for routing and other models, but this
 branch executes each System One read wholly on the DiffusionGemma worker.
 

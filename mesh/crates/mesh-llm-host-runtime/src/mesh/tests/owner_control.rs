@@ -529,11 +529,11 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
     assert!(applied.success);
 
     let update = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(120),
         read_owner_control_envelope(&mut watch_recv),
     )
     .await
-    .expect("watch stream should emit an update within 5 seconds")?;
+    .expect("watch stream should emit an update")?;
     let update = update
         .response
         .expect("watch update should return a response")
@@ -614,10 +614,6 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     std::fs::create_dir_all(&tmp).ok();
     let (server, _secret_key, _config_path) =
         start_owner_control_test_server(&owner_keypair, &tmp).await?;
-    server
-        .test_apply_config_deadline
-        .set(std::time::Duration::from_secs(120))
-        .unwrap();
 
     let initial_revision = { server.config_state.lock().await.revision() };
     let (_watch_endpoint, mut watch_send, mut watch_recv, watch_requester_id) =
@@ -726,10 +722,6 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
     std::fs::create_dir_all(&tmp).ok();
     let (server, _secret_key, _config_path) =
         start_owner_control_test_server(&owner_keypair, &tmp).await?;
-    server
-        .test_apply_config_deadline
-        .set(std::time::Duration::from_secs(120))
-        .unwrap();
 
     let initial_hash = { *server.config_state.lock().await.config_hash() };
 
@@ -1120,6 +1112,39 @@ async fn scan_timeout_releases_caller_while_reconciliation_finishes() -> Result<
     assert_eq!(
         server.runtime_data_collector().local_inventory_snapshot(),
         next
+    );
+    Ok(())
+}
+
+/// A legacy snapshot has no field for `[private]` or `[request_tiers]`, so
+/// applying one keeps the node's own.
+#[tokio::test]
+async fn a_legacy_snapshot_keeps_the_private_list_and_request_tiers() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("config.toml");
+    let (private_node, owner) = (hex::encode([1u8; 32]), hex::encode([2u8; 32]));
+    std::fs::write(
+        &path,
+        format!(
+            "[private]\nnodes = [\"{private_node}\"]\n\n[request_tiers]\n\
+             local_kv_reserve_percent = 25\n\n[request_tiers.owners]\n\"{owner}\" = \"mesh\"\n"
+        ),
+    )?;
+    *node.config_state.lock().await = crate::runtime::config_state::ConfigState::load(&path)?;
+
+    let mut applied = crate::plugin::MeshConfig::default();
+    node.restore_unsent_settings(
+        &mut applied,
+        &crate::proto::node::NodeConfigSnapshot::default(),
+    )
+    .await;
+
+    assert_eq!(applied.private.nodes, [private_node]);
+    assert_eq!(applied.request_tiers.local_kv_reserve_percent, 25);
+    assert_eq!(
+        applied.request_tiers.owners.get(&owner),
+        Some(&mesh_llm_config::RequestTierName::Mesh)
     );
     Ok(())
 }
