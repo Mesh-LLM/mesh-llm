@@ -392,6 +392,7 @@ async fn make_configured_test_node(
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
         gossip_reply_limiter: Arc::default(),
+        peer_discovery: Arc::default(),
         native_inference: Default::default(),
         adopted_membership_file: None,
         identity_state_dir: None,

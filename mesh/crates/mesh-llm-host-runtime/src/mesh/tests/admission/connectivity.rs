@@ -328,12 +328,8 @@ async fn pending_connection_handshake_single_flights_waiters() -> Result<()> {
         }
     };
     assert!(
-        node.discovered_peer_already_known(peer_id, true).await,
-        "connection-based discovery must treat pending handshakes as known"
-    );
-    assert!(
-        node.discovered_peer_already_known(peer_id, false).await,
-        "peer-based discovery must also avoid redialing pending handshakes"
+        node.state.lock().await.pending_connection_is_active(peer_id),
+        "the reservation must stay active while its owner is live"
     );
 
     let waiter = match node.reserve_pending_connection(peer_id).await {
@@ -490,7 +486,7 @@ async fn dropped_pending_connection_owner_is_pruned() -> Result<()> {
         "unexpected error: {error:#}"
     );
     assert!(
-        !node.discovered_peer_already_known(peer_id, true).await,
+        !node.state.lock().await.pending_connection_is_active(peer_id),
         "stale pending slots must not suppress rediscovery"
     );
 

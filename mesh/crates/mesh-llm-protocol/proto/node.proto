@@ -442,9 +442,14 @@ message CacheAffinityEntry {
   string model_name = 1;
   bytes prefix_digest = 2;         // exactly 16 bytes
   uint32 matched_tokens = 3;
+  // Still populated for v0.79 and earlier peers; current routing does not
+  // read it. Retire once v0.79 no longer needs to interoperate.
   uint32 suffix_prefill_tokens = 4;
   CacheTier tier = 5;
   uint64 restore_micros = 6;
+  // Still populated for v0.79 and earlier peers, which add it to a hit's
+  // cost; current routing does not read it. Retire once v0.79 no longer
+  // needs to interoperate.
   uint64 queue_delay_micros = 7;
   uint64 prefill_micros_per_token = 8; // measured; zero means unavailable
 }

@@ -706,12 +706,17 @@ pub struct CacheAffinityEntry {
     pub prefix_digest: ::prost::alloc::vec::Vec<u8>,
     #[prost(uint32, tag = "3")]
     pub matched_tokens: u32,
+    /// Still populated for v0.79 and earlier peers; current routing does not
+    /// read it. Retire once v0.79 no longer needs to interoperate.
     #[prost(uint32, tag = "4")]
     pub suffix_prefill_tokens: u32,
     #[prost(enumeration = "CacheTier", tag = "5")]
     pub tier: i32,
     #[prost(uint64, tag = "6")]
     pub restore_micros: u64,
+    /// Still populated for v0.79 and earlier peers, which add it to a hit's
+    /// cost; current routing does not read it. Retire once v0.79 no longer
+    /// needs to interoperate.
     #[prost(uint64, tag = "7")]
     pub queue_delay_micros: u64,
     /// measured; zero means unavailable

@@ -29,6 +29,13 @@ The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup
 to finish runtime configuration and, on macOS, Linux, and Windows, optionally
 install the background service.
 
+On Windows the installer also adds a **MeshLLM** entry to the Start menu. It
+opens the web console at `http://127.0.0.1:3131/`, starting the node first when
+it is not running: through the `mesh-llm` scheduled task when `setup` installed
+the service, otherwise with `mesh-llm serve` in the background. Set
+`MESH_LLM_INSTALL_NO_SHORTCUT=1` (or pass `-NoShortcut` to a saved copy of the
+script) to skip it.
+
 Source builds must use `just`:
 
 ```bash
