@@ -2,7 +2,8 @@
   "source": {
     "repo": "action-state-group/capsule-viewer",
     "path": "src/capsule_viewer/receipt_slot/wording-en.json",
-    "commit": "075ac4c239b662f37a8d634e7138aea78457c2df",
+    "release": "capsule-viewer 0.25.0 (tag ts/v0.25.0)",
+    "commit": "89b75d6ab5f34bada727082758562071d494ce0b",
     "note": "Entries are copied byte for byte from the source. Do not edit them here: change the source, then recopy and update the digest."
   },
   "sha256": "d80abd50518095dd90727d5efacb92419efb1d83b458442546add8643fdf5483",
