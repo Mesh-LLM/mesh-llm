@@ -12,7 +12,9 @@ describe('receipt wording copy', () => {
   })
 
   it('names the source commit it was copied at', () => {
-    expect(wording.source.release).toBe('capsule-viewer 0.25.0 (tag ts/v0.25.0)')
+    expect(wording.source.release).toBe(
+      'capsule-viewer 0.25.0 (GitHub Release go/v0.25.0; npm @action-state-group/capsule-viewer@0.25.0)'
+    )
     expect(wording.source.commit).toMatch(/^[0-9a-f]{40}$/)
   })
 })
