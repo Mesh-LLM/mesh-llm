@@ -1,14 +1,12 @@
 import { Archive, Database } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { LogArtifact, LogRequest } from '@/features/logs/api/schemas'
-import {
-  formatTimestamp,
-  machineValue,
-  type RetainedQueryState
-} from '@/features/logs/components/LogRequestOverviewDerivations'
+import { machineValue, type RetainedQueryState } from '@/features/logs/components/LogRequestOverviewDerivations'
 import { LogRequestOverviewPanel } from '@/features/logs/components/LogRequestOverviewPanel'
 import { deriveArtifactCounts } from '@/features/logs/lib/log-artifact-counts'
+import { formatInstant } from '@/features/logs/lib/log-instant'
 import { trailingRowSpanClass } from '@/features/logs/lib/log-grid'
+import { groupThousands } from '@/features/logs/lib/receipt-words'
 import { cn } from '@/lib/cn'
 
 type LogRequestOverviewMetadataProps = {
@@ -58,14 +56,14 @@ function MetadataGrid({
 function requestMetadata(request: LogRequest): readonly MetadataField[] {
   return [
     { label: 'Request ID', value: request.requestId.toString() },
-    { label: 'Created', value: <time dateTime={request.createdAt}>{formatTimestamp(request.createdAt)}</time> },
+    { label: 'Created', value: <time dateTime={request.createdAt}>{formatInstant(request.createdAt)}</time> },
     {
       label: 'Terminal',
       value:
         request.terminalAt === undefined ? (
           'Not recorded'
         ) : (
-          <time dateTime={request.terminalAt}>{formatTimestamp(request.terminalAt)}</time>
+          <time dateTime={request.terminalAt}>{formatInstant(request.terminalAt)}</time>
         )
     },
     { label: 'Route', value: machineValue(request.route) },
@@ -107,11 +105,11 @@ function ArtifactSummary({
   const items = artifacts.items
   const counts = deriveArtifactCounts(items)
   const fields: readonly MetadataField[] = [
-    { label: 'Artifact records', value: counts.total.toLocaleString() },
+    { label: 'Artifact records', value: groupThousands(counts.total) },
     { label: 'Content states', value: counts.contentStates },
-    { label: 'Redacted', value: `${counts.redacted.toLocaleString()} of ${counts.total.toLocaleString()}` },
-    { label: 'Truncated', value: `${counts.truncated.toLocaleString()} of ${counts.total.toLocaleString()}` },
-    { label: 'Stored bytes', value: `${counts.bytes.toLocaleString()} B` },
+    { label: 'Redacted', value: `${groupThousands(counts.redacted)} of ${groupThousands(counts.total)}` },
+    { label: 'Truncated', value: `${groupThousands(counts.truncated)} of ${groupThousands(counts.total)}` },
+    { label: 'Stored bytes', value: `${groupThousands(counts.bytes)} B` },
     { label: 'Versions', value: counts.versions.map((version) => `v${version}`).join(' · ') },
     { label: 'Request source', value: source }
   ]

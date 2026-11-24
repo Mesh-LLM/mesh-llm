@@ -57,7 +57,6 @@ describe('LogRequestEvidenceTimeline', () => {
         ariaLabel="Offset evidence"
         attemptEmptyMessage={undefined}
         attempts={attempts}
-        eventEmptyMessage={undefined}
         events={events}
       />
     )
@@ -79,7 +78,6 @@ describe('LogRequestEvidenceTimeline', () => {
         ariaLabel="Target wrap"
         attemptEmptyMessage={undefined}
         attempts={attempts}
-        eventEmptyMessage={undefined}
         events={[event('2026-08-04T11:00:00Z')]}
       />
     )
@@ -96,7 +94,6 @@ describe('LogRequestEvidenceTimeline', () => {
         ariaLabel="Usage evidence"
         attemptEmptyMessage={undefined}
         attempts={[]}
-        eventEmptyMessage={undefined}
         events={[
           event('2026-08-04T11:00:00Z', {
             kind: 'usage_recorded',

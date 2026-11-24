@@ -1,0 +1,14 @@
+{
+  "source": {
+    "repo": "action-state-group/capsule-viewer",
+    "path": "src/capsule_viewer/receipt_slot/wording-en.json",
+    "commit": "075ac4c239b662f37a8d634e7138aea78457c2df",
+    "note": "Entries are copied byte for byte from the source. Do not edit them here: change the source, then recopy and update the digest."
+  },
+  "sha256": "d80abd50518095dd90727d5efacb92419efb1d83b458442546add8643fdf5483",
+  "entries": {
+    "section.anomalies": "Problems spotted",
+    "anomalies.none": "None reported.",
+    "verify.self_reported": "Reported by {verifier}: {checks}. This view shows that report; it did not re-check anything itself."
+  }
+}

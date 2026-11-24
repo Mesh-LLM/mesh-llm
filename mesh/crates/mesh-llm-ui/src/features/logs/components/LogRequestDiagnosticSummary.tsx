@@ -2,8 +2,11 @@ import { CircleCheckBig, TriangleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import type { LogArtifact, LogOutcome, LogRequest } from '@/features/logs/api/schemas'
+import { LogTokenWords } from '@/features/logs/components/LogTokenWords'
 import { formatRequestDuration, machineValue } from '@/features/logs/components/LogRequestOverviewDerivations'
 import { trailingRowSpanClass } from '@/features/logs/lib/log-grid'
+import { formatInstant } from '@/features/logs/lib/log-instant'
+import { groupThousands, outcomeLabels, selfReportedLine } from '@/features/logs/lib/receipt-words'
 import { cn } from '@/lib/cn'
 
 export type LogRequestDiagnosticEvidence = {
@@ -61,18 +64,18 @@ function contentStateSummary(artifacts: readonly LogArtifact[] | undefined): str
     count: artifacts.filter((artifact) => artifact.contentState === state).length
   }))
     .filter(({ count }) => count > 0)
-    .map(({ state, count }) => `${count.toLocaleString()} ${state}`)
+    .map(({ state, count }) => `${groupThousands(count)} ${state}`)
     .join(' · ')
 }
 
 function countedArtifacts(artifacts: readonly LogArtifact[] | undefined, field: 'redacted' | 'truncated'): string {
   if (artifacts === undefined) return 'Not available'
   const count = artifacts.filter((artifact) => artifact[field]).length
-  return `${count.toLocaleString()} of ${artifacts.length.toLocaleString()}`
+  return `${groupThousands(count)} of ${groupThousands(artifacts.length)}`
 }
 
 function countValue(value: number | undefined): string {
-  return value === undefined ? 'Not available' : value.toLocaleString()
+  return value === undefined ? 'Not available' : groupThousands(value)
 }
 
 function SummaryGrid({ metrics }: { readonly metrics: readonly DiagnosticMetric[] }) {
@@ -118,7 +121,7 @@ function successMetrics(
 
 function evidenceMetrics(request: LogRequest, evidence: LogRequestDiagnosticEvidence): readonly DiagnosticMetric[] {
   return [
-    { label: 'Outcome', value: request.outcome },
+    { label: 'Outcome', value: <LogTokenWords token={request.outcome} words={outcomeLabels[request.outcome]} /> },
     { label: 'HTTP status', value: machineValue(request.statusCode) },
     { label: 'Provider', value: machineValue(request.provider) },
     { label: 'Engine', value: machineValue(request.engine) },
@@ -139,7 +142,8 @@ function TerminalRecord({ request }: { readonly request: LogRequest }) {
     >
       <h3 className="type-label text-fg-faint">Terminal record</h3>
       <p className="mt-2 min-w-0 font-mono text-[length:var(--density-type-caption)] text-foreground [overflow-wrap:anywhere]">
-        {machineValue(request.terminalAt)} / HTTP {machineValue(request.statusCode)}
+        {request.terminalAt === undefined ? 'Not recorded' : formatInstant(request.terminalAt)} / HTTP{' '}
+        {machineValue(request.statusCode)}
       </p>
       <p className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption)] text-fg-dim [overflow-wrap:anywhere]">
         route {machineValue(request.route)} / model {machineValue(request.model)}
@@ -184,9 +188,15 @@ export function LogRequestDiagnosticSummary({ request, evidence, successful }: L
         <div className="min-w-0 flex-1">
           <h2 className="type-panel-title text-foreground">{summaryTitle}</h2>
           <p className="mt-1 break-words type-caption text-fg-dim">{summaryDetail}</p>
+          <p className="mt-1 break-words type-caption text-fg-dim" data-testid="diagnostic-self-report">
+            {selfReportedLine({
+              attemptCount: evidence.attemptCount,
+              errorsRecorded: evidence.diagnosticMarkerCount
+            })}
+          </p>
         </div>
         <StatusBadge className="max-w-full shrink-0" dot size="caption" tone={summaryTone}>
-          {request.outcome}
+          <LogTokenWords token={request.outcome} words={outcomeLabels[request.outcome]} />
         </StatusBadge>
       </div>
       <SummaryGrid metrics={metrics} />

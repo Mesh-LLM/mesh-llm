@@ -2,6 +2,7 @@ import { type ReactNode, useId } from 'react'
 import type { LogArtifact } from '@/features/logs/api/schemas'
 import { LogArtifactDownloadControl } from '@/features/logs/components/LogArtifactDownloadControl'
 import { LogArtifactStateBadges } from '@/features/logs/components/LogArtifactStateBadges'
+import { formatInstant } from '@/features/logs/lib/log-instant'
 import type { ClassifiedLogArtifacts } from '@/features/logs/lib/log-payload-content'
 
 export type LogArtifactMetadataProps = {
@@ -10,11 +11,6 @@ export type LogArtifactMetadataProps = {
 
 export type LogArtifactInventoryProps = {
   readonly classified: ClassifiedLogArtifacts
-}
-
-function formatTimestamp(value: string): string {
-  const timestamp = new Date(value)
-  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString()
 }
 
 function MetadataValue({ label, children }: { readonly label: string; readonly children: ReactNode }) {
@@ -62,7 +58,7 @@ export function LogArtifactMetadata({ artifact }: LogArtifactMetadataProps) {
 
       <dl className="mt-3 grid gap-x-[var(--shell-normal)] gap-y-2 sm:grid-cols-2 lg:grid-cols-4">
         <MetadataValue label="Captured">
-          <time dateTime={artifact.occurredAt}>{formatTimestamp(artifact.occurredAt)}</time>
+          <time dateTime={artifact.occurredAt}>{formatInstant(artifact.occurredAt)}</time>
         </MetadataValue>
         <MetadataValue label="Media">{artifact.mediaKind ?? 'Unknown'}</MetadataValue>
         <MetadataValue label="Bytes / version">

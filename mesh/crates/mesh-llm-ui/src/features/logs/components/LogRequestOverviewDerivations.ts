@@ -1,5 +1,6 @@
 import type { LogLifecycleEvent, LogProxyAttempt, LogRequest } from '@/features/logs/api/schemas'
 import { compareLogInstants } from '@/features/logs/lib/log-instant'
+import { groupThousands } from '@/features/logs/lib/receipt-words'
 import { completionTokenCount } from '@/features/logs/lib/log-token-usage'
 
 export type RetainedQueryState<T> = {
@@ -14,10 +15,6 @@ const STREAM_EVENT_KINDS = new Set<LogLifecycleEvent['kind']>([
   'stream_completed',
   'stream_error'
 ])
-
-export function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString()
-}
 
 export function formatClockTime(value: string): string {
   const parsed = new Date(value)
@@ -54,7 +51,7 @@ export function formatRequestDuration(request: LogRequest): string {
 }
 
 function countLabel(count: number, singular: string, plural: string): string {
-  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`
+  return `${groupThousands(count)} ${count === 1 ? singular : plural}`
 }
 
 export function formatAttemptEvidence(attempts: readonly LogProxyAttempt[] | undefined): string {
