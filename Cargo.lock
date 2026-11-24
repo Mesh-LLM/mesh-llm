@@ -4064,7 +4064,6 @@ dependencies = [
  "skippy-package-format",
  "skippy-protocol",
  "skippy-runtime",
- "skippy-runtime-install",
  "skippy-serving",
  "skippy-topology",
  "socket2",

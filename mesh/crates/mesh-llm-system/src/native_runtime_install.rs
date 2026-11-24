@@ -1,6 +1,8 @@
 //! Mesh release policy over the runtime installer. Generic installation accepts explicit inputs.
 
 mod product;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub use product::{product_runtime_release, product_runtime_tree_sha256};
 pub use skippy_runtime_install::*;
 use std::ffi::OsString;

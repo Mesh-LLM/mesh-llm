@@ -59,7 +59,7 @@ libc = "0.2"
 [dev-dependencies]
 skippy-coordinator = { workspace = true }
 # rerun_without_bundle_env! for the runtime discovery tests.
-skippy-runtime-install = { workspace = true, features = ["test-support"] }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.80.0", features = ["test-support"] }
 clap.workspace = true
 rand = "0.10"
 serial_test = "4"
