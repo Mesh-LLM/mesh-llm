@@ -437,7 +437,7 @@ impl StageControlState {
             last_stage_decode_batch: effective_load.last_stage_decode_batch,
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
-            receipts: None,
+            receipts: super::receipts::later_stage_options(&effective_load),
             compute_meter: Some(compute_meter.clone()),
             split_dflash: effective_load.dflash.clone(),
         });

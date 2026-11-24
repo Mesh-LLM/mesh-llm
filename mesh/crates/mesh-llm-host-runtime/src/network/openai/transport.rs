@@ -449,32 +449,6 @@ async fn refuse_private_at_bootstrap(
     None
 }
 
-/// Reads the request this proxy will route, with the node's plugin
-/// transforms applied. `None` when the client was already answered: the
-/// request could not be read, or it is a private request, which this path
-/// refuses ([`refuse_private_at_bootstrap`]).
-async fn read_bootstrap_request(
-    node: &mesh::Node,
-    mut tcp_stream: ClientStream,
-) -> Option<(ClientStream, BufferedHttpRequest)> {
-    let plugin_manager = node.plugin_manager().await;
-    let mut request = match read_http_request_with_plugin_manager_with_context(
-        &mut tcp_stream,
-        plugin_manager.as_ref(),
-        super::request_parse::RequestTransforms::Apply,
-    )
-    .await
-    {
-        Ok(request) => request,
-        Err(error) => {
-            let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
-            return None;
-        }
-    };
-    let tcp_stream = refuse_private_at_bootstrap(node, tcp_stream, &mut request).await?;
-    Some((tcp_stream, request))
-}
-
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
 ///
 /// Peeks at the HTTP request, handles `/v1/models`, resolves the target host
@@ -487,8 +461,49 @@ pub async fn handle_mesh_request(
     track_demand: bool,
     affinity: AffinityRouter,
 ) {
+    let mut tcp_stream = tcp_stream;
     let source_addr = tcp_stream.peer_addr().ok();
-    let Some((tcp_stream, mut request)) = read_bootstrap_request(&node, tcp_stream).await else {
+    let plugin_manager = node.plugin_manager().await;
+    let request = match read_http_request_with_plugin_manager_with_context(
+        &mut tcp_stream,
+        plugin_manager.as_ref(),
+        super::request_parse::RequestTransforms::Apply,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = super::parse_failure::send_read_failure(tcp_stream, &err).await;
+            return;
+        }
+    };
+    // Every client of this port is local; one may lower its own request.
+    let tier = crate::mesh::request_tier::claimed_request_tier(&request.raw);
+    crate::mesh::request_tier::with_request_tier(
+        tier,
+        Box::pin(serve_mesh_request(
+            node,
+            tcp_stream,
+            request,
+            source_addr,
+            track_demand,
+            affinity,
+        )),
+    )
+    .await;
+}
+
+/// Serve a request read by [`handle_mesh_request`], at the tier in scope.
+async fn serve_mesh_request(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    mut request: BufferedHttpRequest,
+    source_addr: Option<std::net::SocketAddr>,
+    track_demand: bool,
+    affinity: AffinityRouter,
+) {
+    let Some(tcp_stream) = refuse_private_at_bootstrap(&node, tcp_stream, &mut request).await
+    else {
         return;
     };
     // The one trust policy decision of the request. This proxy serves every

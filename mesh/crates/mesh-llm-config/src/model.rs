@@ -3,6 +3,7 @@ mod multimodal;
 mod private;
 mod profile;
 mod receipts;
+mod request_tiers;
 mod runtime;
 mod schema_types;
 mod updates;
@@ -16,6 +17,7 @@ pub use multimodal::MultimodalConfig;
 pub(crate) use multimodal::merge_multimodal;
 pub use private::{PrivateConfig, is_node_id};
 pub use receipts::{DEFAULT_AUDIT_THREADS, MAX_AUDIT_THREADS, ReceiptsConfig};
+pub use request_tiers::{RequestTierName, RequestTiersConfig};
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,

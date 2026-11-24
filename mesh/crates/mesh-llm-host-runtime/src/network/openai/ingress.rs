@@ -30,6 +30,9 @@ mod missing_model;
 mod private_scope_tests;
 mod realtime_relay;
 mod rejection_telemetry;
+#[cfg(test)]
+#[path = "ingress/request_tier_tests.rs"]
+mod request_tier_tests;
 mod routing_headers;
 mod trust_routing;
 mod unnamed_model;
@@ -676,6 +679,43 @@ async fn resolve_remote_mesh_route(
             .collect(),
     );
     RemoteMeshRoute::Targets(mesh_targets)
+}
+
+/// Proxy `request` to the plugin endpoint serving `model_name`. The plugin's
+/// own inference for the request runs no higher than its tier, until the
+/// plugin has answered it.
+async fn route_to_plugin_endpoint(
+    ctx: &IngressRouteContext<'_>,
+    plugin_manager: &crate::plugin::PluginManager,
+    endpoint: &crate::plugin::InferenceEndpointRoute,
+    tcp_stream: &mut ClientStream,
+    request: &proxy::BufferedHttpRequest,
+    model_name: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    let tiered_call = plugin_manager.begin_tiered_invocation(
+        &endpoint.plugin_name,
+        crate::mesh::request_tier::current_request_tier(),
+    );
+    let outcome = proxy::route_http_endpoint_request(
+        ctx.node,
+        Some(model_name),
+        proxy::RouteSelectionMetadata {
+            provider: Some(&endpoint.plugin_name),
+            engine: Some(&endpoint.endpoint_id),
+        },
+        tcp_stream,
+        &endpoint.address,
+        request,
+        route_observer,
+    )
+    .await;
+    if let Some(call) = tiered_call
+        && outcome.response_written()
+    {
+        call.finish();
+    }
+    outcome
 }
 
 /// Dispatch an inference request to an out-of-process plugin endpoint that

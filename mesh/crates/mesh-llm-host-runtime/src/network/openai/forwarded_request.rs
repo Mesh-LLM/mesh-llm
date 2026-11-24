@@ -237,6 +237,8 @@ fn finalize_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // A client's scope headers never pass through as is; see below.
         super::routing_scope::MESH_SCOPE_HEADER,
         super::routing_scope::MESH_SCOPE_NODES_HEADER,
+        // Restamped below with the tier this node serves the request at.
+        crate::mesh::request_tier::REQUEST_TIER_HEADER,
         // The trust policy is the routing node's to apply.
         crate::network::request_trust::MESH_TRUST_HEADER,
     ];
@@ -359,7 +361,7 @@ mod tests {
         let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nX-Mesh-Request-Tier: local\r\nContent-Length: 2\r\n\r\n{}";
         let forwarded = crate::mesh::request_tier::with_request_tier(
             crate::mesh::request_tier::InferenceRequestTier::Trusted,
-            async { prepare_peer_forwarded_request(raw) },
+            async { prepare_peer_forwarded_request(raw, None) },
         )
         .await
         .unwrap();
