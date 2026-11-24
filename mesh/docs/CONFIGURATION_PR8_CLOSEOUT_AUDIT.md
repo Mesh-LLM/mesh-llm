@@ -35,6 +35,7 @@ schema row or stale manifest row from passing review:
 `mesh_requirements.min_protocol_version`, `mesh_requirements.max_protocol_version`,
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,
 `mesh_requirements.require_signed_gossip`,
+`private.nodes`, `request_tiers.owners`, `request_tiers.local_kv_reserve_percent`,
 `owner_control.bind`, `owner_control.advertise_addr`, `payments.wallet`,
 `receipts.enabled`, `receipts.audit`, `receipts.require`, `receipts.offline`,
 `receipts.audit_one_in`, `receipts.audit_threads`,

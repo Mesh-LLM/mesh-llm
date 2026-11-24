@@ -151,8 +151,9 @@ Integrity for public nodes. Each turn has a signed commitment. A verifiable
 random function draws four layers, four positions in each, and four sampled
 tokens. The routing node challenges the serving node and checks the opening
 on its CPU against weight rows that it reads from Hugging Face. The tier
-gives no privacy. The protocol is in [RECEIPTS.md](RECEIPTS.md), and its
-measurements are in [RECEIPTS_MEASUREMENTS.md](RECEIPTS_MEASUREMENTS.md).
+gives no privacy. The protocol is in Skippy's
+[RECEIPTS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md), and its measurements are in
+[RECEIPTS_MEASUREMENTS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS_MEASUREMENTS.md).
 
 **Guarantee:** the request goes only to a runtime that issues receipts for
 the model, and the routing node audits about one in ten of the turns that a
@@ -169,7 +170,7 @@ audit. The names are in
 
 **Does not guarantee** that a given response was checked. The audit is a
 sample of turns, and in each audited turn a sample of layers and positions.
-[What a pass proves](RECEIPTS.md#what-a-pass-proves) lists what an audit
+[What a pass proves](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md#what-a-pass-proves) lists what an audit
 shows and what it does not show.
 
 **What satisfies the tier today:**
@@ -288,7 +289,7 @@ Changes:
    `repo@revision/file` reports the published digest without downloading the
    file. Split GGUFs use a digest per part. Skippy layer packages use their
    manifest digest (`manifest_sha256` in
-   `skippy/crates/skippy-protocol/proto/stage.proto`).
+   `crates/skippy-protocol/proto/stage.proto` in the Skippy repository).
 4. In the `measured` and `tee` tiers, the measured binary computes the digest
    from the file descriptor it actually maps for serving, which closes the
    TOCTOU gap. In `trusted` and `any`, the digest remains the operator's word.

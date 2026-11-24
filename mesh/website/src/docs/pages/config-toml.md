@@ -116,9 +116,9 @@ turn.
 
 Receipts are experimental and off by default. An audit checks a sample of
 each turn, and some parts of the design are not built. Read the
-[open limitations](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/design/RECEIPTS.md#open-limitations)
+[open limitations](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md#open-limitations)
 before you rely on them. The
-[receipts guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/RECEIPTS.md)
+[receipts guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/RECEIPTS.md)
 has the procedures.
 
 ```toml

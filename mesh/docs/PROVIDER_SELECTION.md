@@ -94,12 +94,12 @@ incoming peer request to hop to another peer.
 ## Require verifiable receipts
 
 Inference receipts are experimental. Read
-[what a pass proves](design/RECEIPTS.md#what-a-pass-proves) and the
-[open limitations](design/RECEIPTS.md#open-limitations) before you rely on
+[what a pass proves](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md#what-a-pass-proves) and the
+[open limitations](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md#open-limitations) before you rely on
 them.
 
 Send `x-mesh-trust: receipts` to serve a chat completion only on a runtime
-that issues [inference receipts](../../skippy/docs/RECEIPTS.md): this node's
+that issues [inference receipts](RECEIPTS.md): this node's
 own, or a peer that advertises receipts for the model. Your node then audits
 about one turn in ten from those peers, also when `[receipts] audit` is off.
 It blocks a peer for 7 days when an audit fails in something that the peer
