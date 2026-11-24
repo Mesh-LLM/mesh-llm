@@ -123,7 +123,7 @@ function AttemptEvidence({
           </code>
         </div>
         <StatusBadge size="caption" tone={tone}>
-          <LogTokenWords token={attemptStatus(attempt)} words={tokenWords(attemptStatus(attempt))} />
+          {attemptStatus(attempt)}
         </StatusBadge>
       </div>
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[length:var(--density-type-caption)] text-fg-faint">

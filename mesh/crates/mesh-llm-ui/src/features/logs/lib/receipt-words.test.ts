@@ -6,7 +6,7 @@ import { groupThousands, receiptWord, selfReportedLine, tokenWords } from '@/fea
 describe('receipt wording copy', () => {
   it('matches the digest of the capsule-viewer pack entries it was copied from', () => {
     const canonical = JSON.stringify(
-      Object.fromEntries(Object.entries(wording.entries).sort(([a], [b]) => a.localeCompare(b)))
+      Object.fromEntries(Object.entries(wording.entries).sort(([a], [b]) => (a < b ? -1 : 1)))
     )
     expect(createHash('sha256').update(canonical).digest('hex')).toBe(wording.sha256)
   })
@@ -32,6 +32,8 @@ describe('groupThousands', () => {
     expect(groupThousands(2000)).toBe('2,000')
     expect(groupThousands(1234567)).toBe('1,234,567')
     expect(groupThousands(-1234)).toBe('-1,234')
+    expect(groupThousands(Number.NaN)).toBe('NaN')
+    expect(groupThousands(1.5)).toBe('1.5')
   })
 })
 

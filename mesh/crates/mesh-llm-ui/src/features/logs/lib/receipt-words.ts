@@ -14,10 +14,11 @@ export function receiptWord(key: WordingKey, values: Readonly<Record<string, str
 
 /** R5: group thousands with a comma by hand, so the text cannot change with the reader's locale. */
 export function groupThousands(value: number): string {
-  const digits = Math.trunc(Math.abs(value)).toString()
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  const fraction = Number.isInteger(value) ? '' : `.${Math.abs(value).toString().split('.')[1] ?? ''}`
-  return `${value < 0 ? '-' : ''}${grouped}${fraction}`
+  if (!Number.isInteger(value)) return String(value)
+  const grouped = Math.abs(value)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return value < 0 ? `-${grouped}` : grouped
 }
 
 /** R3: a recorded token such as `attempt_failed` read as words; the caller keeps the token small beside it. */

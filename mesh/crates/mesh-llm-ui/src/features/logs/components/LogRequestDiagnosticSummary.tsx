@@ -142,8 +142,12 @@ function TerminalRecord({ request }: { readonly request: LogRequest }) {
     >
       <h3 className="type-label text-fg-faint">Terminal record</h3>
       <p className="mt-2 min-w-0 font-mono text-[length:var(--density-type-caption)] text-foreground [overflow-wrap:anywhere]">
-        {request.terminalAt === undefined ? 'Not recorded' : formatInstant(request.terminalAt)} / HTTP{' '}
-        {machineValue(request.statusCode)}
+        {request.terminalAt === undefined ? (
+          'Not recorded'
+        ) : (
+          <time dateTime={request.terminalAt}>{formatInstant(request.terminalAt)}</time>
+        )}{' '}
+        / HTTP {machineValue(request.statusCode)}
       </p>
       <p className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption)] text-fg-dim [overflow-wrap:anywhere]">
         route {machineValue(request.route)} / model {machineValue(request.model)}

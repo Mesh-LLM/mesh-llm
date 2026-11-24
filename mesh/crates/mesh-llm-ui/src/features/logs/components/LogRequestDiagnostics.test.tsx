@@ -335,4 +335,19 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
 
     expect(screen.queryByText('None reported.')).not.toBeInTheDocument()
   })
+
+  it('R7: does not say "None reported." above a failed attempt the summary reports', () => {
+    renderDiagnostics({ request: request(), attempts: [attempt(1)] })
+
+    expect(screen.queryByText('None reported.')).not.toBeInTheDocument()
+    expect(screen.getByText('HTTP 502', { exact: true })).toBeInTheDocument()
+  })
+
+  it('R6: keeps the recorded terminal instant on a time element', () => {
+    renderDiagnostics({ request: request({ outcome: 'failed' }) })
+
+    const terminal = within(screen.getByRole('region', { name: 'Terminal record' })).getByText(/2026/)
+    expect(terminal.tagName).toBe('TIME')
+    expect(terminal).toHaveAttribute('datetime', '2026-08-04T12:00:04Z')
+  })
 })

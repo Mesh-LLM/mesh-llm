@@ -98,7 +98,7 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
     evidenceComplete,
     hasErrorEvidence
   }
-  const noProblems = eventsReady && artifactsReady && diagnosticEvents.length === 0 && errorArtifacts.length === 0
+  const noProblems = evidenceComplete && !hasErrorEvidence
   const successful =
     props.request.outcome === 'completed' && diagnosticEvidence.evidenceComplete && !diagnosticEvidence.hasErrorEvidence
 
