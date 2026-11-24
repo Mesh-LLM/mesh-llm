@@ -17,7 +17,7 @@ type FormatInstantOptions = {
 }
 
 /**
- * Says a recorded instant with its date and zone ("Oct 27, 2026, 5:09 PM CDT"), the receipt
+ * Says a recorded instant with its date and zone ("Oct 27, 2026, 5:09:03 PM CDT", seconds kept so retries within one minute stay ordered), the receipt
  * presentation rule R6. The text locale is fixed to en-US so only the zone comes from the reader;
  * the sealed instant stays on the caller's `<time dateTime>` attribute.
  */
@@ -30,6 +30,7 @@ export function formatInstant(value: string, options: FormatInstantOptions = {})
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    second: '2-digit',
     timeZoneName: 'short',
     timeZone: options.timeZone
   }).format(parsed)

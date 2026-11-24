@@ -288,7 +288,7 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
     renderDiagnostics({ request: request(), attempts: [attempt(1), attempt(2)] })
 
     expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent(
-      "Reported by this node's own request log: errors recorded: none; retries: 1. This view shows that report; it did not re-check anything itself."
+      "Reported by this node's own request log: errors recorded: 2; retries: 1. This view shows that report; it did not re-check anything itself."
     )
   })
 
@@ -314,7 +314,7 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
     const instants = document.querySelectorAll('time')
     expect(instants.length).toBeGreaterThan(0)
     for (const instant of instants) {
-      expect(instant.textContent).toMatch(/^[A-Z][a-z]{2} \d{1,2}, 2026, \d{1,2}:\d{2}\s[AP]M \S+$/)
+      expect(instant.textContent).toMatch(/^[A-Z][a-z]{2} \d{1,2}, 2026, \d{1,2}:\d{2}:\d{2}\s[AP]M \S+$/)
       expect(instant.getAttribute('datetime')).toMatch(/^2026-08-04T12:00:0\dZ$/)
     }
   })
@@ -349,5 +349,11 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
     const terminal = within(screen.getByRole('region', { name: 'Terminal record' })).getByText(/2026/)
     expect(terminal.tagName).toBe('TIME')
     expect(terminal).toHaveAttribute('datetime', '2026-08-04T12:00:04Z')
+  })
+
+  it('R1: counts a failed attempt among the errors the log recorded', () => {
+    renderDiagnostics({ request: request(), attempts: [attempt(1)] })
+
+    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent('errors recorded: 1; retries: 0')
   })
 })

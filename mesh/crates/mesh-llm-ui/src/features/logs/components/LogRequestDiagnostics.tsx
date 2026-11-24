@@ -82,10 +82,10 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
   const attemptsReady = !props.attemptsLoading && !props.attemptsError
   const artifactsReady = !props.artifactsLoading && !props.artifactsError
   const evidenceComplete = eventsReady && attemptsReady && artifactsReady
-  const hasErrorEvidence =
-    diagnosticEvents.length > 0 ||
-    (props.attempts ?? []).some((attempt) => attempt.statusCode !== undefined && attempt.statusCode >= 400) ||
-    errorArtifacts.length > 0
+  const failedAttempts = (props.attempts ?? []).filter(
+    (attempt) => attempt.statusCode !== undefined && attempt.statusCode >= 400
+  )
+  const hasErrorEvidence = diagnosticEvents.length > 0 || failedAttempts.length > 0 || errorArtifacts.length > 0
 
   if (props.requestError) return <RequestQueryState state="error" />
   if (props.requestLoading) return <RequestQueryState state="loading" />
@@ -94,6 +94,7 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
   const diagnosticEvidence: LogRequestDiagnosticEvidence = {
     artifacts: artifactsReady ? (props.artifacts ?? []) : undefined,
     attemptCount: attemptsReady ? (props.attempts ?? []).length : undefined,
+    failedAttemptCount: attemptsReady ? failedAttempts.length : undefined,
     diagnosticMarkerCount: eventsReady && artifactsReady ? diagnosticEvents.length + errorArtifacts.length : undefined,
     evidenceComplete,
     hasErrorEvidence

@@ -13,6 +13,7 @@ export type LogRequestDiagnosticEvidence = {
   readonly artifacts: readonly LogArtifact[] | undefined
   readonly attemptCount: number | undefined
   readonly diagnosticMarkerCount: number | undefined
+  readonly failedAttemptCount: number | undefined
   readonly evidenceComplete: boolean
   readonly hasErrorEvidence: boolean
 }
@@ -195,7 +196,10 @@ export function LogRequestDiagnosticSummary({ request, evidence, successful }: L
           <p className="mt-1 break-words type-caption text-fg-dim" data-testid="diagnostic-self-report">
             {selfReportedLine({
               attemptCount: evidence.attemptCount,
-              errorsRecorded: evidence.diagnosticMarkerCount
+              errorsRecorded:
+                evidence.diagnosticMarkerCount === undefined || evidence.failedAttemptCount === undefined
+                  ? undefined
+                  : evidence.diagnosticMarkerCount + evidence.failedAttemptCount
             })}
           </p>
         </div>
