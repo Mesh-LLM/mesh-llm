@@ -6,6 +6,7 @@ pub(crate) struct PolicyApplicator {
     store: Arc<PolicyStore>,
     management_port: u16,
     owner_control_token: String,
+    data_dir: Option<std::path::PathBuf>,
 }
 
 impl PolicyApplicator {
@@ -13,11 +14,13 @@ impl PolicyApplicator {
         store: Arc<PolicyStore>,
         management_port: u16,
         owner_control_token: String,
+        data_dir: Option<std::path::PathBuf>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             management_port,
             owner_control_token,
+            data_dir,
         })
     }
 
@@ -43,6 +46,14 @@ impl PolicyApplicator {
         }
         match self.store.update(incoming).await {
             PolicyUpdateResult::Accepted { .. } => {
+                if let Some(state_dir) = self.data_dir.clone() {
+                    let store = Arc::clone(&self.store);
+                    tokio::spawn(async move {
+                        if let Err(e) = store.persist(&state_dir).await {
+                            tracing::warn!("PolicyApplicator: gossip policy persist failed: {e:#}");
+                        }
+                    });
+                }
                 if let Some(stored) = self.store.current().await {
                     let applicator = Arc::clone(self);
                     let payload = stored.payload.clone();
@@ -53,6 +64,14 @@ impl PolicyApplicator {
             }
             _ => {}
         }
+    }
+
+    /// Apply model intents from a payload directly, bypassing the store's
+    /// generation check. Used after an owner-signed policy is accepted via the
+    /// management API so intents run on this host immediately without waiting
+    /// for the next gossip round (a second gossip call would return `Stale`).
+    pub(crate) async fn apply_policy_payload(self: &Arc<Self>, payload: &MeshPolicyPayload) {
+        self.apply_model_intents(payload).await;
     }
 
     async fn intent_already_satisfied(

@@ -738,8 +738,10 @@ impl GlobalMetrics {
                 if let Some(tokens) = completion_tokens {
                     self.completion_tokens_observed
                         .fetch_add(tokens, Ordering::Relaxed);
-                    self.cumulative_completion_tokens
-                        .fetch_add(tokens, Ordering::Relaxed);
+                    if matches!(target_kind, TargetKind::Local) {
+                        self.cumulative_completion_tokens
+                            .fetch_add(tokens, Ordering::Relaxed);
+                    }
                     if let Some(tps_milli) = tokens_per_second_milli(tokens, attempt_time) {
                         self.throughput_tps_milli_sum
                             .fetch_add(tps_milli, Ordering::Relaxed);

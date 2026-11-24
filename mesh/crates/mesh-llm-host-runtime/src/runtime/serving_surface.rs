@@ -897,6 +897,10 @@ pub(super) struct RunAutoConsoleStateContext<'a> {
     pub(super) model_name: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) api_port: u16,
+    /// The management/console port that hosts `/api/runtime/*` routes. The
+    /// `PolicyApplicator` must call these routes, so it needs this port rather
+    /// than the OpenAI inference port (`api_port`).
+    pub(super) console_port: Option<u16>,
     pub(super) plugin_manager: &'a plugin::PluginManager,
     pub(super) affinity_router: &'a affinity::AffinityRouter,
     pub(super) control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
@@ -978,7 +982,7 @@ async fn apply_owner_control_token(
 async fn wire_policy_store_into_node(
     console_state: &api::MeshApi,
     node: &mesh::Node,
-    api_port: u16,
+    console_port: Option<u16>,
 ) {
     let store = console_state.policy_store();
     let token = console_state
@@ -986,16 +990,30 @@ async fn wire_policy_store_into_node(
         .await
         .map(|t| t.as_str().to_string())
         .unwrap_or_default();
+    // The PolicyApplicator calls `/api/runtime/*` management routes, which are
+    // served on the console port (3131 by default), NOT on the OpenAI inference
+    // port (9337). Use 0 when the console is disabled so the applicator is
+    // wired but harmless.
+    let management_port = console_port.unwrap_or(0);
+    // Resolve a state directory for all node types: prefer the scoped identity
+    // dir (set for explicit-identity nodes) and fall back to the default
+    // identity_state_dir so ordinary `Node::start` nodes also persist policy.
+    let state_dir = node
+        .identity_state_dir
+        .clone()
+        .or_else(|| crate::mesh::identity_state_dir().ok());
     let applicator = crate::policy::applicator::PolicyApplicator::new(
         store.clone(),
-        api_port,
+        management_port,
         token,
+        state_dir.clone(),
     );
     node.set_policy_store(store.clone(), applicator.clone());
     // Phase 3.2: load persisted policy from disk and re-apply it so the fleet
     // intent survives a restart without waiting for the next gossip round.
-    if let Some(state_dir) = &node.identity_state_dir {
-        match crate::policy::PolicyStore::load_from_disk(state_dir).await {
+    if let Some(ref dir) = state_dir {
+        store.restore_owner_gens(dir).await;
+        match crate::policy::PolicyStore::load_from_disk(dir).await {
             Ok(Some(signed)) => {
                 applicator.apply_if_newer(signed).await;
             }
@@ -1038,7 +1056,7 @@ pub(super) async fn setup_run_auto_console_state(
     // Wire the shared PolicyStore and PolicyApplicator into the Node so that
     // inbound gossip and outbound gossip both use the same store that the
     // management API reads and writes.
-    wire_policy_store_into_node(&console_state, ctx.node, ctx.api_port).await;
+    wire_policy_store_into_node(&console_state, ctx.node, ctx.console_port).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;

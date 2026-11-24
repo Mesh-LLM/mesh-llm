@@ -211,7 +211,23 @@ async fn handle_control_clear_mesh_policy(
     stream: &mut TcpStream,
     state: &MeshApi,
 ) -> anyhow::Result<()> {
-    state.policy_store().clear().await;
+    let policy_store = state.policy_store();
+    policy_store.clear().await;
+    // Resolve state dir the same way as the POST handler so the persisted file
+    // is removed and the old policy cannot be re-applied on restart.
+    let state_dir = {
+        let inner = state.inner.lock().await;
+        inner
+            .node
+            .identity_state_dir
+            .clone()
+            .or_else(|| crate::mesh::identity_state_dir().ok())
+    };
+    if let Some(dir) = state_dir {
+        if let Err(error) = policy_store.delete_persisted(&dir).await {
+            tracing::warn!("fleet policy: delete_persisted failed: {error:#}");
+        }
+    }
     respond_json(stream, 200, &serde_json::json!({"cleared": true})).await
 }
 
@@ -2206,13 +2222,14 @@ async fn handle_fleet_metrics(
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }
-    let peers = state.node().await.peers().await;
+    let node = state.node().await;
+    let peers = node.peers().await;
     let mut fleet_total_tps = 0f64;
     let mut fleet_cumulative_completion = 0u64;
     let mut fleet_cumulative_prompt = 0u64;
     let mut model_aggregate: std::collections::HashMap<String, (f64, u64)> =
         std::collections::HashMap::new();
-    let mut nodes = Vec::with_capacity(peers.len());
+    let mut nodes = Vec::with_capacity(peers.len() + 1);
 
     for peer in &peers {
         let role_str = match &peer.role {
@@ -2251,6 +2268,53 @@ async fn handle_fleet_metrics(
             cumulative_completion_tokens: cumulative_completion,
             cumulative_prompt_tokens: cumulative_prompt,
             models: node_models,
+        });
+    }
+
+    // Include this node's own counters so a one-node fleet is non-zero and
+    // the serving node handling this request is always represented.
+    {
+        let local_role_str = match node.role().await {
+            mesh_llm_membership::NodeRole::Worker => "Worker",
+            mesh_llm_membership::NodeRole::Host { .. } => "Host",
+            mesh_llm_membership::NodeRole::Client => "Client",
+        };
+        let global_snap = node.routing_metrics.status_snapshot(0);
+        let local_cumulative = global_snap.cumulative_completion_tokens;
+        let mut local_total_tps = 0f64;
+        let local_model_snapshots = node.routing_metrics.model_snapshots();
+        let mut local_models: Vec<FleetModelThroughput> = local_model_snapshots
+            .iter()
+            .filter_map(|(model_name, snap)| {
+                let tps = snap.avg_tokens_per_second?;
+                local_total_tps += tps;
+                fleet_total_tps += tps;
+                let entry = model_aggregate
+                    .entry(model_name.clone())
+                    .or_insert((0.0, 0));
+                entry.0 += tps;
+                entry.1 += snap.throughput_samples;
+                Some(FleetModelThroughput {
+                    model: model_name.clone(),
+                    avg_tokens_per_second: tps,
+                    samples: snap.throughput_samples,
+                })
+            })
+            .collect();
+        local_models.sort_by(|a, b| a.model.cmp(&b.model));
+        fleet_cumulative_completion += local_cumulative;
+        nodes.push(FleetNodeMetrics {
+            node_id: hex::encode(node.id().as_bytes()),
+            hostname: None,
+            role: local_role_str.to_string(),
+            total_avg_tokens_per_second: local_total_tps,
+            cumulative_completion_tokens: if local_cumulative > 0 {
+                Some(local_cumulative)
+            } else {
+                None
+            },
+            cumulative_prompt_tokens: None,
+            models: local_models,
         });
     }
 
@@ -2344,19 +2408,36 @@ async fn handle_set_mesh_policy(
             reason: Some(msg.clone()),
         },
     };
-    // Phase 3.2: persist accepted policy so it survives a restart.
+    // Phase 3.2: persist accepted policy so it survives a restart, then trigger
+    // the applicator directly so model intents run on this host immediately
+    // without waiting for the next gossip round.
     if matches!(result, crate::policy::PolicyUpdateResult::Accepted { .. }) {
-        let state_dir = state
-            .inner
-            .lock()
-            .await
-            .node
-            .identity_state_dir
-            .clone();
+        let (state_dir, applicator) = {
+            let inner = state.inner.lock().await;
+            let state_dir = inner.node.identity_state_dir.clone();
+            let applicator = inner
+                .node
+                .policy_applicator
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            (state_dir, applicator)
+        };
         if let Some(state_dir) = state_dir {
             if let Err(error) = policy_store.persist(&state_dir).await {
                 tracing::warn!("fleet policy: persist failed: {error:#}");
             }
+        }
+        // Trigger model intents immediately — the store was just updated so
+        // `apply_if_newer` will return `Stale` if called again via gossip, but
+        // the applicator spawns the intent loop only on `Accepted`, so we call
+        // it via a stored snapshot to avoid the stale-rejection short-circuit.
+        if let (Some(applicator), Some(stored)) =
+            (applicator, policy_store.current().await)
+        {
+            tokio::spawn(async move {
+                applicator.apply_policy_payload(&stored.payload).await;
+            });
         }
     }
     let status = if response.accepted { 200 } else { 409 };

@@ -1864,6 +1864,7 @@ async fn run_auto_inner(
         model_name: &model_name_for_console,
         model_path: &PathBuf::new(),
         api_port,
+        console_port,
         plugin_manager: &plugin_manager,
         affinity_router: &affinity_router,
         control_tx: &control_tx,

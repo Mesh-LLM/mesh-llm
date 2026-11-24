@@ -96,8 +96,8 @@ pub(crate) fn node_record_to_local(
         latency_observer_id: (!hop.latency_observer_id.is_empty())
             .then_some(hop.latency_observer_id),
         advertised_model_throughput: record.throughput.clone(),
-        cumulative_completion_tokens: None,
-        cumulative_prompt_tokens: None,
+        cumulative_completion_tokens: record.cumulative_completion_tokens,
+        cumulative_prompt_tokens: record.cumulative_prompt_tokens,
         mesh_policy_hash: non_empty(&record.mesh_policy_hash),
         genesis_policy: record.genesis_policy.clone(),
         release_attestation: record.release_attestation.clone(),

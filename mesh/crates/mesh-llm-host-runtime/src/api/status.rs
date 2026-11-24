@@ -537,6 +537,10 @@ pub(crate) struct PeerPayload {
     pub(crate) hosted_models_known: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) advertised_model_throughput: Vec<metrics::ModelThroughputHint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cumulative_completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cumulative_prompt_tokens: Option<u64>,
     pub(crate) version: Option<String>,
     pub(crate) rtt_ms: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

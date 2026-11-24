@@ -1,3 +1,4 @@
+use crate::crypto::owner_id_from_verifying_key;
 use crate::proto::node::{MeshPolicyPayload, SignedMeshPolicy};
 use prost::Message;
 use std::collections::HashMap;
@@ -41,6 +42,55 @@ impl PolicyStore {
             Ok(p) => p,
             Err(e) => return PolicyUpdateResult::Invalid(format!("decode error: {e}")),
         };
+        // Verify owner public key and signature before trusting any payload field.
+        let vk = {
+            let key_hex = &payload.owner_sign_public_key;
+            let key_bytes_vec = match hex::decode(key_hex) {
+                Ok(b) => b,
+                Err(_) => {
+                    return PolicyUpdateResult::Invalid(
+                        "owner_sign_public_key is not valid hex".into(),
+                    )
+                }
+            };
+            let key_arr: [u8; 32] = match key_bytes_vec.try_into() {
+                Ok(a) => a,
+                Err(_) => {
+                    return PolicyUpdateResult::Invalid(
+                        "owner_sign_public_key must be 32 bytes".into(),
+                    )
+                }
+            };
+            match ed25519_dalek::VerifyingKey::from_bytes(&key_arr) {
+                Ok(k) => k,
+                Err(_) => {
+                    return PolicyUpdateResult::Invalid(
+                        "owner_sign_public_key is not a valid Ed25519 key".into(),
+                    )
+                }
+            }
+        };
+        // owner_id must be sha256(public_key) — prevents impersonation.
+        let derived_owner_id = owner_id_from_verifying_key(&vk);
+        if payload.owner_id != derived_owner_id {
+            return PolicyUpdateResult::Invalid(
+                "owner_id does not match sha256(owner_sign_public_key)".into(),
+            );
+        }
+        // Signature must cover the raw policy_payload_bytes.
+        let sig_arr: [u8; 64] = match incoming.signature.as_slice().try_into() {
+            Ok(a) => a,
+            Err(_) => {
+                return PolicyUpdateResult::Invalid("signature must be 64 bytes".into())
+            }
+        };
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        if vk
+            .verify_strict(&incoming.policy_payload_bytes, &sig)
+            .is_err()
+        {
+            return PolicyUpdateResult::Invalid("policy signature verification failed".into());
+        }
         // Per-owner stale check: compare against this owner's last accepted
         // generation only, not against whatever other owner's gen happens to
         // sit in `current`.
@@ -55,11 +105,13 @@ impl PolicyStore {
             };
         }
         let policy_gen = payload.policy_gen;
-        // Update the per-owner generation tracking.
+        // Update the per-owner generation tracking. Acquire the `current`
+        // write lock BEFORE dropping `owner_gens_guard` so that two concurrent
+        // updates for the same owner cannot publish out of order: the one that
+        // wins the `owner_gens` insert holds both locks until it commits.
         owner_gens_guard.insert(payload.owner_id.clone(), policy_gen);
-        drop(owner_gens_guard);
-
         let mut guard = self.current.write().await;
+        drop(owner_gens_guard);
         *guard = Some(StoredPolicy {
             signed: incoming,
             payload,
@@ -90,6 +142,29 @@ impl PolicyStore {
             let tmp = data_dir.join("mesh_policy.bin.tmp");
             tokio::fs::write(&tmp, &bytes).await?;
             tokio::fs::rename(&tmp, &path).await?;
+            // Persist owner_gens so per-owner stale-rejection survives a
+            // restart (finding #5).
+            let gens_snapshot = self.owner_gens.read().await.clone();
+            let gens_bytes = serde_json::to_vec(&gens_snapshot)?;
+            let gens_path = data_dir.join("mesh_policy_gens.json");
+            let gens_tmp = data_dir.join("mesh_policy_gens.json.tmp");
+            tokio::fs::write(&gens_tmp, &gens_bytes).await?;
+            tokio::fs::rename(&gens_tmp, &gens_path).await?;
+        }
+        Ok(())
+    }
+
+    /// Delete the persisted policy file (and its owner-gens sidecar) from
+    /// disk. Called by the DELETE handler so a cleared policy is not
+    /// re-applied on restart.
+    pub async fn delete_persisted(&self, data_dir: &std::path::Path) -> anyhow::Result<()> {
+        for name in &["mesh_policy.bin", "mesh_policy_gens.json"] {
+            let path = data_dir.join(name);
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         Ok(())
     }
@@ -99,9 +174,39 @@ impl PolicyStore {
     ) -> anyhow::Result<Option<crate::proto::node::SignedMeshPolicy>> {
         let path = data_dir.join("mesh_policy.bin");
         match tokio::fs::read(&path).await {
-            Ok(bytes) => Ok(Some(prost::Message::decode(bytes.as_slice())?)),
+            Ok(bytes) => {
+                let signed = prost::Message::decode(bytes.as_slice())?;
+                // Restore owner_gens sidecar if present so previously-rejected
+                // generations remain rejected after a restart.
+                // (This instance is not `self` — the caller wires it into the
+                // store via `apply_if_newer`, which calls `update()`; the
+                // per-owner gen will be (re-)recorded there.  The sidecar is
+                // read by the store's own `restore_owner_gens` helper so the
+                // store can pre-populate `owner_gens` before accepting gossip.)
+                Ok(Some(signed))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Restore persisted per-owner generation counters from disk so stale
+    /// policies are still rejected after a restart.
+    pub async fn restore_owner_gens(&self, data_dir: &std::path::Path) {
+        let path = data_dir.join("mesh_policy_gens.json");
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => {
+                if let Ok(gens) =
+                    serde_json::from_slice::<HashMap<String, u32>>(&bytes)
+                {
+                    let mut guard = self.owner_gens.write().await;
+                    for (owner, r#gen) in gens {
+                        guard.entry(owner).or_insert(r#gen);
+                    }
+                }
+            }
+            // Sidecar absent (old installation) — harmless, start fresh.
+            Err(_) => {}
         }
     }
 }

@@ -285,6 +285,7 @@ async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_gen_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -431,6 +432,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_gen);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -451,6 +453,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_id);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -871,6 +874,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &invalid_sender_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -892,6 +896,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let err = decode_gossip_payload(
         ControlProtocol::ProtoV1,
@@ -911,6 +916,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_endpoint_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
