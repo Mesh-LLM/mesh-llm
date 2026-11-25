@@ -35,7 +35,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -89,7 +89,7 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
 /// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -887,6 +887,7 @@ pub(crate) fn local_ann_to_proto_ann(
                     terms: r.terms.clone(),
                 })
                 .collect(),
+            receipts: descriptor.receipts.then_some(true),
             capabilities: Some(crate::proto::node::ModelCapabilities {
                 vision: local_capability_level_to_proto(descriptor.capabilities.vision),
                 reasoning: local_capability_level_to_proto(descriptor.capabilities.reasoning),
@@ -1524,6 +1525,7 @@ fn legacy_proto_config_to_mesh(
         models,
         plugins,
         logging: Default::default(),
+        receipts: Default::default(),
         extra: Default::default(),
     };
     if let Some(mode) = snapshot

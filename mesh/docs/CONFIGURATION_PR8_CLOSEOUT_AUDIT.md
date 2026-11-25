@@ -37,6 +37,8 @@ schema row or stale manifest row from passing review:
 `mesh_requirements.require_signed_gossip`,
 `private.nodes`, `request_tiers.owners`, `request_tiers.local_kv_reserve_percent`,
 `owner_control.bind`, `owner_control.advertise_addr`, `payments.wallet`,
+`receipts.enabled`, `receipts.audit`, `receipts.require`, `receipts.offline`,
+`receipts.audit_one_in`, `receipts.audit_threads`,
 `telemetry.enabled`,
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
 `telemetry.export_interval_secs`, `telemetry.queue_size`,

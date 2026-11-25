@@ -550,6 +550,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         available_model_sizes: model_sizes.clone(),
         served_model_descriptors: vec![ServedModelDescriptor {
             requires: Vec::new(),
+            receipts: false,
             identity: ServedModelIdentity {
                 model_name: "Qwen3-8B-Q4_K_M".to_string(),
                 is_primary: true,
@@ -721,6 +722,7 @@ fn proto_ann_to_local_treats_missing_default_capability_provenance_as_unknown() 
         role: NodeRole::Worker as i32,
         served_model_descriptors: vec![crate::proto::node::ServedModelDescriptor {
             requires: Vec::new(),
+            receipts: None,
             identity: Some(crate::proto::node::ServedModelIdentity {
                 model_name: "Qwen3VL-2B-Instruct-Q4_K_M".to_string(),
                 source_kind: crate::proto::node::ModelSourceKind::LocalGguf as i32,
@@ -1699,6 +1701,7 @@ fn weights_digest_does_not_cross_the_gossip_wire() {
     });
     local_ann.served_model_descriptors = vec![ServedModelDescriptor {
         requires: Vec::new(),
+        receipts: false,
         identity: ServedModelIdentity {
             model_name: "test-model".to_string(),
             source_kind: ModelSourceKind::LocalGguf,

@@ -71,6 +71,8 @@ skippy-model = { workspace = true }
 skippy-serving = { workspace = true }
 skippy-topology = { workspace = true }
 skippy-package-format = { workspace = true }
+skippy-receipts = { workspace = true }
+skippy-receipt-audit = { workspace = true }
 iroh = { version = "1.4.1", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -143,6 +145,8 @@ tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 serial_test = "4"
 skippy-serving = { workspace = true, features = ["test-support"] }
+# The toy model and its honest turn, for the receipt audit's policy tests.
+skippy-receipts = { workspace = true, features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.80.0"  }
 # Enables the membership crate's `test-support` home override during the host's

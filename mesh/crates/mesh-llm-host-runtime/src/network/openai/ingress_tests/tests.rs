@@ -44,6 +44,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 
@@ -221,6 +222,7 @@ fn dispatch_kind_request(
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 
@@ -320,6 +322,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
     let decision = AutoRouteDecision {
         effective_model: None,
@@ -1082,7 +1085,7 @@ fn exchange_usage_from_outcome_extracts_real_counts_and_omits_otherwise() {
 // --- #1668 round-2: call-site test for route_missing_local_model ---
 // --- x-mesh-target / x-mesh-exclude header parsing and fail-closed routing ---
 
-fn test_endpoint_id(seed: u8) -> iroh::EndpointId {
+pub(super) fn test_endpoint_id(seed: u8) -> iroh::EndpointId {
     iroh::EndpointId::from(iroh::SecretKey::from_bytes(&[seed; 32]).public())
 }
 
@@ -1247,6 +1250,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     // Confirm the nonce header round-trips through the raw bytes before the
@@ -1418,6 +1422,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     // Confirm both headers are readable before the routing function runs.
@@ -1523,190 +1528,6 @@ fn remote_mesh_test_ctx<'a>(
     }
 }
 
-#[test]
-fn parse_mesh_target_header_absent_is_a_no_op() {
-    assert_eq!(parse_mesh_target_header(&[]), Ok(None));
-}
-
-#[test]
-fn parse_mesh_target_header_parses_one_valid_value() {
-    let id = test_endpoint_id(0x42);
-    let value = hex::encode(id.as_bytes());
-    assert_eq!(parse_mesh_target_header(&[value]), Ok(Some(id)));
-}
-
-#[test]
-fn parse_mesh_target_header_rejects_malformed_value() {
-    assert!(parse_mesh_target_header(&["not-a-hex-endpoint-id".to_string()]).is_err());
-}
-
-#[test]
-fn parse_mesh_target_header_rejects_multiple_values_as_ambiguous() {
-    let value = hex::encode(test_endpoint_id(0x11).as_bytes());
-    assert!(parse_mesh_target_header(&[value.clone(), value]).is_err());
-}
-
-#[test]
-fn parse_twin_bracket_header_copies_one_valid_value() {
-    assert_eq!(parse_twin_bracket_header(&[]), Ok(None));
-    assert_eq!(
-        parse_twin_bracket_header(&[" run-2026.09:pair_7 ".to_string()]),
-        Ok(Some("run-2026.09:pair_7".to_string()))
-    );
-}
-
-#[test]
-fn parse_twin_bracket_header_rejects_malformed_or_repeated_values() {
-    let too_long = "x".repeat(129);
-    for bad in ["", "has space", "slash/no", too_long.as_str()] {
-        assert!(
-            parse_twin_bracket_header(&[bad.to_string()]).is_err(),
-            "{bad:?} must be rejected"
-        );
-    }
-    assert!(parse_twin_bracket_header(&["a".to_string(), "b".to_string()]).is_err());
-}
-
-#[test]
-fn parse_twin_bracket_header_trims_only_http_whitespace() {
-    for padded in [" pair-7", "pair-7 ", "\tpair-7\t", " \t pair-7 \t "] {
-        assert_eq!(
-            parse_twin_bracket_header(&[padded.to_string()]),
-            Ok(Some("pair-7".to_string())),
-            "{padded:?} is SP/HTAB-padded and must be trimmed"
-        );
-    }
-    for ws in ['\u{00A0}', '\u{2003}', '\u{3000}'] {
-        for bad in [
-            format!("{ws}pair-7"),
-            format!("pair-7{ws}"),
-            format!("pa{ws}ir-7"),
-            format!(" {ws}pair-7 "),
-        ] {
-            assert!(
-                parse_twin_bracket_header(std::slice::from_ref(&bad)).is_err(),
-                "{bad:?} carries non-HTTP whitespace and must be rejected"
-            );
-        }
-    }
-}
-
-#[test]
-fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
-    let raw = "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nx-mesh-twin-bracket: \u{00A0}pair-7\u{3000}\r\nContent-Length: 2\r\n\r\n{}";
-    let request = proxy::BufferedHttpRequest {
-        raw: raw.as_bytes().to_vec(),
-        method: "POST".to_owned(),
-        path: "/v1/chat/completions".to_owned(),
-        client_path: "/v1/chat/completions".to_owned(),
-        request_id: RequestId::default(),
-        body_json: None,
-        body_json_attempted: false,
-        body_bytes: None,
-        body_len_bytes: 2,
-        completion_tokens: None,
-        stream: None,
-        model_name: None,
-        request_object_request_ids: Vec::new(),
-        response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
-        correlation_id: None,
-        exchange_observation_id: None,
-        automatic_route: false,
-    };
-
-    let values = request.twin_bracket_header_values().unwrap();
-    assert_eq!(values, vec!["\u{00A0}pair-7\u{3000}".to_string()]);
-    assert!(
-        twin_bracket_id(&request).is_err(),
-        "must be a 400, not accepted"
-    );
-}
-
-#[test]
-fn parse_mesh_exclude_header_absent_is_empty() {
-    assert_eq!(parse_mesh_exclude_header(&[]), Ok(vec![]));
-}
-
-#[test]
-fn parse_mesh_exclude_header_splits_comma_separated_list() {
-    let id_a = test_endpoint_id(0x11);
-    let id_b = test_endpoint_id(0x22);
-    let combined = format!(
-        "{},{}",
-        hex::encode(id_a.as_bytes()),
-        hex::encode(id_b.as_bytes())
-    );
-    assert_eq!(parse_mesh_exclude_header(&[combined]), Ok(vec![id_a, id_b]));
-}
-
-#[test]
-fn parse_mesh_exclude_header_rejects_malformed_entry() {
-    assert!(parse_mesh_exclude_header(&["not-a-hex-endpoint-id".to_string()]).is_err());
-}
-
-#[test]
-fn parse_mesh_exclude_header_rejects_an_empty_entry() {
-    assert!(parse_mesh_exclude_header(&["".to_string()]).is_err());
-}
-
-#[test]
-fn parse_mesh_exclude_header_rejects_an_empty_entry_between_valid_ones() {
-    let id_a = hex::encode(test_endpoint_id(0x11).as_bytes());
-    let id_b = hex::encode(test_endpoint_id(0x22).as_bytes());
-    assert!(parse_mesh_exclude_header(&[format!("{id_a},,{id_b}")]).is_err());
-}
-
-#[test]
-fn parse_mesh_exclude_header_rejects_a_trailing_comma() {
-    let id_a = hex::encode(test_endpoint_id(0x11).as_bytes());
-    assert!(parse_mesh_exclude_header(&[format!("{id_a},")]).is_err());
-}
-
-// --- the local-first bypass: `mesh_headers_force_remote` must be consulted
-// before a request is ever handed to the local-candidate path ---
-
-#[test]
-fn mesh_headers_force_remote_is_false_with_no_headers() {
-    let self_id = test_endpoint_id(0x01);
-    assert!(!mesh_headers_force_remote(self_id, None, &[]));
-}
-
-#[test]
-fn mesh_headers_force_remote_is_true_when_target_names_another_peer() {
-    let self_id = test_endpoint_id(0x01);
-    let peer_id = test_endpoint_id(0x02);
-    assert!(
-        mesh_headers_force_remote(self_id, Some(peer_id), &[]),
-        "a target naming a remote peer must force routing away from local candidates"
-    );
-}
-
-#[test]
-fn mesh_headers_force_remote_is_false_when_target_names_this_node() {
-    let self_id = test_endpoint_id(0x01);
-    assert!(
-        !mesh_headers_force_remote(self_id, Some(self_id), &[]),
-        "a target naming this node is allowed to serve locally"
-    );
-}
-
-#[test]
-fn mesh_headers_force_remote_is_true_when_excluding_this_node() {
-    let self_id = test_endpoint_id(0x01);
-    let other_id = test_endpoint_id(0x02);
-    assert!(
-        mesh_headers_force_remote(self_id, None, &[other_id, self_id]),
-        "excluding this node must remove the local candidate"
-    );
-}
-
-#[test]
-fn mesh_headers_force_remote_is_false_when_excluding_a_different_peer() {
-    let self_id = test_endpoint_id(0x01);
-    let other_id = test_endpoint_id(0x02);
-    assert!(!mesh_headers_force_remote(self_id, None, &[other_id]));
-}
-
 #[tokio::test]
 async fn resolve_remote_mesh_route_forces_single_candidate_for_serving_target() {
     let model = "acme/code-model:Q4_K_M";
@@ -1720,7 +1541,16 @@ async fn resolve_remote_mesh_route_forces_single_candidate_for_serving_target() 
     let affinity = affinity::AffinityRouter::new();
     let ctx = remote_mesh_test_ctx(&node, &targets, &affinity);
 
-    match resolve_remote_mesh_route(&ctx, model, Some(target_id), &[]).await {
+    match resolve_remote_mesh_route(
+        &ctx,
+        model,
+        Some(target_id),
+        &[],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await
+    {
         RemoteMeshRoute::Targets(mesh_targets) => {
             assert_eq!(
                 mesh_targets.targets.get(model),
@@ -1745,7 +1575,15 @@ async fn resolve_remote_mesh_route_fails_closed_for_a_target_that_does_not_serve
 
     // A syntactically valid EndpointId that no peer advertises for this model.
     let stray_target = test_endpoint_id(0x99);
-    let route = resolve_remote_mesh_route(&ctx, model, Some(stray_target), &[]).await;
+    let route = resolve_remote_mesh_route(
+        &ctx,
+        model,
+        Some(stray_target),
+        &[],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await;
     assert!(
         matches!(route, RemoteMeshRoute::TargetUnavailable { .. }),
         "a target that doesn't serve the model must fail closed, never substitute another peer"
@@ -1769,7 +1607,15 @@ async fn resolve_remote_mesh_route_names_the_operator_block_on_a_blocked_target(
 
     assert!(
         matches!(
-            resolve_remote_mesh_route(&ctx, model, Some(target), &[]).await,
+            resolve_remote_mesh_route(
+                &ctx,
+                model,
+                Some(target),
+                &[],
+                crate::network::request_trust::RequestTrust::UNRESTRICTED,
+                "/v1/chat/completions"
+            )
+            .await,
             RemoteMeshRoute::Targets(_)
         ),
         "setup: an unblocked target that serves the model resolves to a forced pool"
@@ -1785,7 +1631,16 @@ async fn resolve_remote_mesh_route_names_the_operator_block_on_a_blocked_target(
         )
         .expect("block the peer");
 
-    match resolve_remote_mesh_route(&ctx, model, Some(target), &[]).await {
+    match resolve_remote_mesh_route(
+        &ctx,
+        model,
+        Some(target),
+        &[],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await
+    {
         RemoteMeshRoute::TargetUnavailable { blocked, .. } => assert!(
             blocked,
             "the operator's block, not a missing model, is why the target is unavailable"
@@ -1816,7 +1671,16 @@ async fn resolve_remote_mesh_route_exclude_removes_a_peer_from_the_candidate_set
     let affinity = affinity::AffinityRouter::new();
     let ctx = remote_mesh_test_ctx(&node, &targets, &affinity);
 
-    match resolve_remote_mesh_route(&ctx, model, None, &[id_a]).await {
+    match resolve_remote_mesh_route(
+        &ctx,
+        model,
+        None,
+        &[id_a],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await
+    {
         RemoteMeshRoute::Targets(mesh_targets) => {
             assert_eq!(
                 mesh_targets.targets.get(model),
@@ -1851,7 +1715,15 @@ async fn resolve_remote_mesh_route_excluding_the_named_target_fails_closed() {
     // Excluding the very peer named by x-mesh-target is a contradiction; it
     // must fail closed rather than silently ignore the exclude and route
     // there anyway.
-    let route = resolve_remote_mesh_route(&ctx, model, Some(target_id), &[target_id]).await;
+    let route = resolve_remote_mesh_route(
+        &ctx,
+        model,
+        Some(target_id),
+        &[target_id],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await;
     assert!(matches!(route, RemoteMeshRoute::TargetUnavailable { .. }));
 }
 
@@ -1865,7 +1737,15 @@ async fn resolve_remote_mesh_route_with_no_headers_and_no_remote_host_falls_thro
     let affinity = affinity::AffinityRouter::new();
     let ctx = remote_mesh_test_ctx(&node, &targets, &affinity);
 
-    let route = resolve_remote_mesh_route(&ctx, model, None, &[]).await;
+    let route = resolve_remote_mesh_route(
+        &ctx,
+        model,
+        None,
+        &[],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await;
     assert!(
         matches!(route, RemoteMeshRoute::NoRemoteHost),
         "absent headers with no serving peer must fall through exactly as before"
@@ -1887,7 +1767,16 @@ async fn resolve_remote_mesh_route_with_no_headers_pools_every_serving_peer() {
     let affinity = affinity::AffinityRouter::new();
     let ctx = remote_mesh_test_ctx(&node, &targets, &affinity);
 
-    match resolve_remote_mesh_route(&ctx, model, None, &[]).await {
+    match resolve_remote_mesh_route(
+        &ctx,
+        model,
+        None,
+        &[],
+        crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        "/v1/chat/completions",
+    )
+    .await
+    {
         RemoteMeshRoute::Targets(mesh_targets) => {
             let mut pool: Vec<iroh::EndpointId> = mesh_targets
                 .targets
@@ -1939,6 +1828,7 @@ pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 
@@ -2364,6 +2254,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     let ctx = IngressRouteContext {
@@ -2673,6 +2564,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
     let peer_hex = "ab".repeat(32);
     let outcome = proxy::RouteDispatchOutcome::Responded(200);
@@ -2924,6 +2816,16 @@ pub(super) async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
     port
 }
 
+/// `request` as ingress hands it to routing when it runs under no trust
+/// policy: reading a request decides nothing, and nothing serves a request
+/// nothing decided for.
+pub(super) fn without_a_trust_policy(
+    mut request: proxy::BufferedHttpRequest,
+) -> proxy::BufferedHttpRequest {
+    request.trust = crate::network::request_trust::RequestTrust::UNRESTRICTED;
+    request
+}
+
 /// Parse a chat request as this node's ingress receives it.
 async fn ingress_chat_request(model: &str) -> proxy::BufferedHttpRequest {
     use tokio::io::AsyncWriteExt;
@@ -2936,14 +2838,16 @@ async fn ingress_chat_request(model: &str) -> proxy::BufferedHttpRequest {
     .into_bytes();
     let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
     writer.write_all(&raw).await.expect("write request");
-    proxy::read_http_request(&mut reader)
-        .await
-        .expect("parse request")
+    without_a_trust_policy(
+        proxy::read_http_request(&mut reader)
+            .await
+            .expect("parse request"),
+    )
 }
 
 /// A connected loopback pair: the router writes into the first, the second
 /// stands in for the client.
-async fn ingress_client_socket_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
+pub(super) async fn ingress_client_socket_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind loopback listener");
@@ -3220,9 +3124,11 @@ async fn ingress_chat_request_excluding(model: &str, exclude: &str) -> proxy::Bu
     .into_bytes();
     let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
     writer.write_all(&raw).await.expect("write request");
-    proxy::read_http_request(&mut reader)
-        .await
-        .expect("parse request")
+    without_a_trust_policy(
+        proxy::read_http_request(&mut reader)
+            .await
+            .expect("parse request"),
+    )
 }
 
 /// Peer inference executes on this node, so a remote advertisement it cannot

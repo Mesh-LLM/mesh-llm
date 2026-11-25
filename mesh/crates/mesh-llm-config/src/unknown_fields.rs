@@ -1,3 +1,6 @@
+mod receipts;
+pub(crate) use receipts::unknown_receipts_field_diagnostics;
+
 use crate::model::RawModelConfigEntry;
 use crate::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSource, ConfigPath, MeshConfig,
@@ -65,7 +68,7 @@ mod tests {
         validate_config_diagnostics_with_plugin_schemas,
     };
 
-    fn unknown_field_keys(raw: &str) -> Vec<String> {
+    pub(super) fn unknown_field_keys(raw: &str) -> Vec<String> {
         let config: crate::MeshConfig = toml::from_str(raw).expect("config parses");
         validate_config_diagnostics_with_plugin_schemas(&config, Some(raw), |_| {
             crate::PluginSchemaAvailability::NotInstalled

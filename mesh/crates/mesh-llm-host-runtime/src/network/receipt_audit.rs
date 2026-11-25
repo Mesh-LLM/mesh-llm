@@ -1,0 +1,463 @@
+//! Audits of the turns this node's peers serve with receipts, when
+//! `[receipts] audit` is on or the request's trust policy requires receipts
+//! (`mesh/docs/design/RECEIPTS.md`, `network/request_trust.rs`).
+//!
+//! A chat completion a local client sends through this node to a peer names
+//! a fresh receipts VRF key (`x-receipt-client-key`), so a peer that issues
+//! receipts binds the turn to it and returns the signed receipt with the
+//! response. The VRF of the turn root picks one turn in ten, or one in
+//! `[receipts] audit_one_in`, to audit, so the peer cannot tell which. The audit runs
+//! off the request path on one worker thread: it challenges the peer within
+//! the challenge window, reads the bytes the checks need from the claimed
+//! Hugging Face GGUF by range, and checks the opening on the CPU.
+//!
+//! Every watched turn ends in one of these verdicts (`verdict`), and each is
+//! logged:
+//!
+//! - **passed:** nothing happens.
+//! - **failed:** the peer signed a defect. The evidence is kept
+//!   (`evidence_store`) and the peer is blocked locally for seven days.
+//! - **strike:** the peer sent no usable receipt though it advertises
+//!   them, named another model than a request that pinned its repository
+//!   and commit asked for, gave no usable signed answer to the challenge,
+//!   answered in a shape the request did not allow, or failed a check only
+//!   this node saw.
+//!   Three strikes within a day block the peer for seven days (`strikes`).
+//! - **no audit:** the VRF did not draw the turn, or this node could not
+//!   audit it: it cannot tie the model's name to a Hugging Face file
+//!   (`requested_model`), Hugging Face is out of reach, the worker was busy,
+//!   the challenge window passed before the challenge was ready. It says nothing about
+//!   the peer.
+//! - **unauditable:** the receipt states something no audit covers. The
+//!   peer loses the `receipts` tier on this node for a day, and is struck
+//!   when this node audited it for the model within that day
+//!   (`auditability`).
+//!
+//! What the audit holds a peer to is what this node knows without it: the
+//! request it sent (`chat_request`), the peer's identity key, and the
+//! Hugging Face file the requested model's name stands for. Everything a
+//! peer sends is bounded before it is kept (`collector`, `answer_limits`)
+//! and escaped before it is logged (`peer_text`).
+
+use std::sync::{Arc, Mutex};
+
+use iroh::EndpointId;
+use mesh_llm_plugin::openai_exchange::ReceiptAuditStatus;
+use skippy_receipts::sampler_request::RequestedSampling;
+use skippy_receipts::vrf;
+use tokio::sync::oneshot;
+
+use crate::mesh;
+use chat_request::ChatRequest;
+
+mod answer_limits;
+mod auditability;
+mod chat_request;
+mod claimed_models;
+mod collector;
+mod commit_budget;
+#[cfg(test)]
+pub(crate) use collector::probe::CollectorProbe;
+mod drawn_turn;
+mod enforcement;
+mod evidence_store;
+mod http_answer;
+mod intake;
+mod opener;
+mod peer_text;
+#[cfg(test)]
+mod policy_tests;
+mod requested_model;
+mod standing;
+mod strikes;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+pub(crate) mod two_node_seam;
+mod verdict;
+mod worker;
+mod worker_pool;
+
+/// How long the verdict of a watched turn may take from its response: a
+/// drawn turn may wait in the audit queue for the whole challenge window,
+/// and a peer can then hold its audit for a while. This node's own part of
+/// an audit has no bound, so a verdict later than this is not waited for.
+pub(crate) const VERDICT_WAIT: std::time::Duration = opener::CHALLENGE_WINDOW
+    .saturating_add(drawn_turn::PEER_HOLD)
+    .saturating_add(std::time::Duration::from_secs(25));
+
+/// Whether this node can tie the model name `name` to a Hugging Face file
+/// by its own word (`requested_model`), which an audit of a turn asked
+/// under that name needs. Under any other name every audit ends as no
+/// audit, so such a request cannot satisfy the `receipts` tier
+/// (`network/request_trust.rs`).
+pub(crate) fn ties_model_name(name: &str) -> bool {
+    requested_model::RequestedModel::of(name, &requested_model::node_catalog).is_ok()
+}
+
+/// What this node asked a peer for, and what it knew of the peer when it
+/// asked. The audit holds the peer to this, and to nothing the peer says
+/// of itself afterwards.
+struct Asked {
+    /// The peer the request was sent to, whose identity key signs its
+    /// receipts.
+    host: EndpointId,
+    /// The receipts VRF key the request named.
+    key: vrf::SecretKey,
+    /// The model the request named.
+    model: String,
+    /// The receipt id this node chose for the attempt
+    /// (`x-receipt-id`), which a peer that knows the header issues its
+    /// receipt under.
+    id: String,
+    /// The request's own id (`x-request-id`), which a peer that does not
+    /// know `x-receipt-id` issues its receipt under; `None` when the
+    /// request names no one id, and the peer then names one of its own.
+    request_id: Option<String>,
+    /// The last user message's text, when the receipt's tokens must hold it.
+    prompt: Option<String>,
+    sampling: RequestedSampling,
+    /// Why the response's text need not be the sampled tokens' text.
+    text_unavailable: Option<&'static str>,
+    /// Why the answer may call tools or hold several choices, when the
+    /// request allows it.
+    shaped_answer: Option<&'static str>,
+    /// The peer advertised, when the request was sent, that it serves the
+    /// model with receipts.
+    advertised: bool,
+    /// The request's trust policy requires receipts.
+    tier: bool,
+    /// The share of turns the VRF draws for an audit (`[receipts]
+    /// audit_one_in`).
+    rate: f64,
+}
+
+/// A turn this node watches for a receipt to audit.
+pub(crate) struct WatchedTurn {
+    node: mesh::Node,
+    asked: Asked,
+    verdict: Option<oneshot::Sender<ReceiptAuditStatus>>,
+    /// The VRF drew the turn for an audit.
+    drawn: bool,
+}
+
+impl WatchedTurn {
+    fn conclude(
+        self,
+        subject: &enforcement::Subject,
+        verdict: verdict::Verdict,
+        runtime: Option<&tokio::runtime::Handle>,
+    ) {
+        let status = verdict.status(self.drawn);
+        if self.verdict.is_some() && self.drawn {
+            self.note_drawn(subject, &verdict);
+        }
+        enforcement::conclude_for(&self.node, subject, verdict, runtime);
+        if let Some(sender) = self.verdict {
+            let _ = sender.send(status);
+        }
+    }
+}
+
+impl WatchedTurn {
+    /// Counts the verdict of a drawn turn that a plugin waits on toward the
+    /// peer's standing (`standing`): a pass proves it a little more, and
+    /// anything else makes it unproven. A turn that ended without a verdict
+    /// for a reason a peer can cause is counted as well, and the peer
+    /// leaves the `receipts` tier on this node when it has as many of those
+    /// in a day as strikes would block it.
+    fn note_drawn(&self, subject: &enforcement::Subject, verdict: &verdict::Verdict) {
+        let audits = &self.node.receipt_audits;
+        let host = self.asked.host;
+        let mut standing = audits
+            .standing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(verdict, verdict::Verdict::Passed) {
+            standing.passed(host, &self.asked.model);
+            return;
+        }
+        standing.lapsed(&host, &self.asked.model);
+        drop(standing);
+        let verdict::Verdict::Unsettled(reason) = verdict else {
+            return;
+        };
+        let now_ms = crate::network::peer_blocks::now_ms();
+        let counted = audits
+            .unsettled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(host, subject.strike(reason, now_ms));
+        if !matches!(counted, strikes::Count::Limit(_)) {
+            return;
+        }
+        let newly = audits
+            .auditability
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .demote(host, now_ms);
+        if newly {
+            tracing::warn!(
+                "peer {} does not satisfy the receipts trust tier on this node for {} h, or {} days when that happened within a week: {} of its drawn turns in {} h ended without a verdict, for reasons a peer can cause; the last: {reason}",
+                host.fmt_short(),
+                auditability::DEMOTION.as_secs() / 3600,
+                auditability::REPEAT_DEMOTION.as_secs() / 86_400,
+                strikes::STRIKE_LIMIT,
+                strikes::STRIKE_WINDOW.as_secs() / 3600
+            );
+        }
+    }
+}
+
+/// What forwarding a watched request needs: the request naming this node's
+/// key, the receipt id the peer is asked to issue its receipt under, and
+/// the observer that collects the response for the audit.
+pub(crate) struct Watch {
+    pub(crate) request: Vec<u8>,
+    pub(crate) receipt_id: String,
+    pub(crate) observer: Arc<dyn skippy_inference_api::wire_bytes::WireBytesObserver>,
+    /// Present only when the exchange lifecycle needs an authoritative verdict.
+    pub(crate) verdict: Option<oneshot::Receiver<ReceiptAuditStatus>>,
+}
+
+/// A receipt requested with the caller's key cannot prove a local audit.
+pub(crate) fn can_watch_with_host_key(request: &[u8]) -> bool {
+    matches!(ChatRequest::read(request), Ok(Some(_)))
+}
+
+/// When this node audits the turn `request` asks `host` for: the request
+/// to forward instead, and the observer to attach to the client stream.
+/// `None` for a request this node leaves alone: it audits no turn of the
+/// request (`request_trust::audits_turn`: auditing is off and no policy
+/// requires receipts, or the node is offline), it is not a chat completion,
+/// or its client named a receipt key of its own. An error for a chat
+/// completion this node cannot read when its policy requires receipts
+/// (`tier`): such a request is never served unwatched.
+pub(crate) async fn watch(
+    node: &mesh::Node,
+    host: EndpointId,
+    request: &[u8],
+    tier: bool,
+    require_verdict: bool,
+) -> Result<Option<Watch>, String> {
+    if !crate::network::request_trust::audits_turn(node, request).await {
+        return if require_verdict {
+            Err("this node cannot audit the selected attempt".into())
+        } else {
+            Ok(None)
+        };
+    }
+    let parsed = match ChatRequest::read(request) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) if require_verdict => {
+            return Err(
+                "this request cannot carry a receipt bound to this node's audit key".into(),
+            );
+        }
+        Ok(None) => return Ok(None),
+        Err(why) if tier => return Err(why.to_owned()),
+        Err(why) => {
+            tracing::info!(
+                "receipt audit: a turn on {} is not watched: {why}",
+                host.fmt_short()
+            );
+            return Ok(None);
+        }
+    };
+    let key = vrf::SecretKey::generate(&mut rand::rng());
+    let fresh_seed = rand::RngExt::random_range(&mut rand::rng(), 1..=u32::MAX);
+    let (headers, sampling) = chat_request::receipt_headers(
+        &hex::encode(key.public()),
+        parsed.sampling,
+        parsed.seed_header,
+        fresh_seed,
+    );
+    let request = chat_request::with_headers(request, parsed.header_end, &headers);
+    let advertised =
+        crate::network::request_trust::peer_advertises_receipts(node, &host, &parsed.model).await;
+    // each attempt its own id, so no other turn, of this client or
+    // another, holds it at the peer
+    let receipt_id = uuid::Uuid::new_v4().hyphenated().to_string();
+    // a turn that needs a verdict is drawn like any other: the peer cannot
+    // tell which turns the VRF will draw, and a turn it does not draw says so
+    let (rate, threads) = {
+        let config = node.config_state.lock().await;
+        let receipts = &config.config().receipts;
+        (receipts.audit_rate(), receipts.audit_threads())
+    };
+    let rate = node
+        .receipt_audits
+        .draw_rate(&host, &parsed.model, rate, require_verdict);
+    node.receipt_audits
+        .threads
+        .store(threads, std::sync::atomic::Ordering::Relaxed);
+    let asked = Asked {
+        host,
+        key,
+        model: parsed.model,
+        id: receipt_id.clone(),
+        request_id: parsed.asked_id,
+        prompt: parsed.prompt,
+        sampling,
+        text_unavailable: parsed.text_unavailable,
+        shaped_answer: parsed.shaped_answer,
+        advertised,
+        tier,
+        rate,
+    };
+    let (verdict, receiver) = if require_verdict {
+        let (sender, receiver) = oneshot::channel();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+    let turn = WatchedTurn {
+        node: node.clone(),
+        asked,
+        verdict,
+        drawn: false,
+    };
+    Ok(Some(Watch {
+        request,
+        receipt_id,
+        observer: Arc::new(collector::Collector::new(turn)),
+        verdict: receiver,
+    }))
+}
+
+/// This node's audits of its peers: the workers that run them and the
+/// strikes they count. A node and its mesh memberships share one, so a
+/// peer's strikes count wherever it was asked.
+#[derive(Default)]
+pub(crate) struct Audits {
+    strikes: Mutex<strikes::Strikes>,
+    auditability: Mutex<auditability::Auditability>,
+    commits: Mutex<commit_budget::CommitBudget>,
+    /// Which peers' drawn turns passed, of those a plugin waited on.
+    standing: Mutex<standing::Standing>,
+    /// Drawn turns that ended without a verdict for a reason a peer can
+    /// cause, of those a plugin waited on: counted like strikes.
+    unsettled: Mutex<strikes::Strikes>,
+    workers: worker_pool::Pool<drawn_turn::Job>,
+    /// The workers that take drawn turns (`[receipts] audit_threads`), as
+    /// the last watched turn read the setting. Zero until one did.
+    threads: std::sync::atomic::AtomicU32,
+    /// Drawn turns not audited because every worker was busy.
+    busy: std::sync::atomic::AtomicU64,
+    /// The audits each peer has waiting or running on the workers: a peer
+    /// whose own audits hold workers may be the reason one is busy.
+    queued: Mutex<std::collections::HashMap<EndpointId, u32>>,
+    /// What the worker opens a claimed model with, in a test that audits
+    /// the toy model (`two_node_seam`); Hugging Face otherwise.
+    #[cfg(test)]
+    claimed_opener: std::sync::OnceLock<claimed_models::Opener>,
+    /// A test's stand-in for a node with no native runtime loaded.
+    #[cfg(test)]
+    auditor_unavailable: std::sync::atomic::AtomicBool,
+}
+
+impl Audits {
+    /// Ends the audits with the node: turns still waiting are dropped, each
+    /// worker ends after the step it is in and its claimed models are
+    /// released. Later turns are no audit.
+    pub(crate) async fn shut_down(&self) {
+        self.workers.shut_down().await;
+    }
+
+    /// The share of `peer`'s turns the VRF draws, where `rate` is the
+    /// configured one. A peer earns that sampling: until its drawn turns
+    /// passed, every turn of it that a plugin waits on (`awaited`) is drawn
+    /// (`standing`).
+    fn draw_rate(&self, peer: &EndpointId, model: &str, rate: f64, awaited: bool) -> f64 {
+        match awaited && !self.proven(peer, model, rate) {
+            true => 1.0,
+            false => rate,
+        }
+    }
+
+    /// Whether `peer` earned that its turns of `model` are sampled at
+    /// `rate`.
+    fn proven(&self, peer: &EndpointId, model: &str, rate: f64) -> bool {
+        self.standing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .proven(peer, model, standing::proving_turns(rate))
+    }
+
+    /// An audit of a turn of `peer` was queued.
+    fn audit_queued(&self, peer: EndpointId) {
+        let mut queued = self
+            .queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *queued.entry(peer).or_default() += 1;
+    }
+
+    /// A queued audit of a turn of `peer` ended.
+    fn audit_ended(&self, peer: &EndpointId) {
+        let mut queued = self
+            .queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(audits) = queued.get_mut(peer) {
+            *audits = audits.saturating_sub(1);
+            if *audits == 0 {
+                queued.remove(peer);
+            }
+        }
+    }
+
+    /// Whether an audit of a turn of `peer` waits or runs on a worker.
+    fn holds_a_worker(&self, peer: &EndpointId) -> bool {
+        self.queued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(peer)
+    }
+
+    /// The workers that take drawn turns.
+    fn threads(&self) -> usize {
+        match self.threads.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => mesh_llm_config::DEFAULT_AUDIT_THREADS as usize,
+            threads => threads as usize,
+        }
+    }
+
+    /// Whether this node can audit a peer's turn: an audit replays it on the
+    /// native runtime, which a `client` loads only with `[receipts] audit`
+    /// or `require` set. Tests have no runtime loaded and stand in for one.
+    pub(crate) fn auditor_ready(&self) -> bool {
+        #[cfg(test)]
+        return !self
+            .auditor_unavailable
+            .load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(test))]
+        skippy_runtime::native_runtime_loaded()
+    }
+
+    /// Makes [`Self::auditor_ready`] false, as on a node without a runtime.
+    #[cfg(test)]
+    pub(crate) fn set_auditor_unavailable(&self) {
+        self.auditor_unavailable
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether `peer` stopped satisfying the `receipts` tier on this node:
+    /// a receipt of it this node could not audit, for a reason in the
+    /// receipt, came within the last day (`auditability`).
+    pub(crate) fn demoted(&self, peer: &EndpointId, now_ms: u64) -> bool {
+        self.auditability
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .demoted(peer, now_ms)
+    }
+
+    /// What the audit worker opens a claimed model with.
+    fn claimed_opener(&self) -> claimed_models::Opener {
+        #[cfg(test)]
+        if let Some(open) = self.claimed_opener.get() {
+            return *open;
+        }
+        claimed_models::open_from_hub
+    }
+}

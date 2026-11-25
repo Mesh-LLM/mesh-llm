@@ -12,7 +12,7 @@ enum Phase {
 }
 
 /// Retain parsing progress so each payload byte is copied at most once.
-pub(super) struct ChunkedDecoder {
+pub(crate) struct ChunkedDecoder {
     phase: Phase,
     cursor: usize,
     line_scan: usize,
@@ -22,7 +22,7 @@ pub(super) struct ChunkedDecoder {
 
 impl ChunkedDecoder {
     /// Create a decoder with a cumulative decoded-payload limit.
-    pub(super) fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize) -> Self {
         Self {
             phase: Phase::Size,
             cursor: 0,
@@ -33,7 +33,7 @@ impl ChunkedDecoder {
     }
 
     /// Accept the same wire prefix plus newly read bytes; return its consumed length.
-    pub(super) fn decode(&mut self, wire: &[u8]) -> Result<Option<usize>> {
+    pub(crate) fn decode(&mut self, wire: &[u8]) -> Result<Option<usize>> {
         loop {
             match self.phase {
                 Phase::Size => {
@@ -108,13 +108,13 @@ impl ChunkedDecoder {
     }
 
     /// Transfer the accumulated payload without an additional copy.
-    pub(super) fn into_body(self) -> Vec<u8> {
+    pub(crate) fn into_body(self) -> Vec<u8> {
         self.decoded
     }
 }
 
 /// Decode a complete buffered request for callers that do not read incrementally.
-pub(super) fn try_decode_chunked_body(
+pub(crate) fn try_decode_chunked_body(
     wire: &[u8],
     limit: usize,
 ) -> Result<Option<(usize, Vec<u8>)>> {

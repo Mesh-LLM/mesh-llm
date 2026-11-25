@@ -33,6 +33,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/CONFIGURATION.md](../../skippy/docs/CONFIGURATION.md) | Authoritative operator matrix for Skippy config keys and rejection boundaries |
 | [skippy/PROMPT_CACHE.md](../../skippy/docs/PROMPT_CACHE.md) | OpenAI prompt-prefix cache behavior, defaults, telemetry, and benchmark flow |
 | [skippy/KV_CACHE_DISK.md](../../skippy/docs/KV_CACHE_DISK.md) | Operator guide for the node-local disk prompt cache (L3): config, modes, status, prune/clear, corruption handling |
+| [RECEIPTS.md](RECEIPTS.md) | Experimental inference receipts on a Mesh node: turn them on, name a model so that the node can audit it, read the verdicts, lift a block. Serving and auditing with Skippy, the four outcomes, the HTTP API and troubleshooting are in the [Skippy guide](https://github.com/Mesh-LLM/skippy/blob/main/docs/RECEIPTS.md) |
 | [skippy/PIPELINED_VERIFY_WINDOW.md](../../skippy/docs/PIPELINED_VERIFY_WINDOW.md) | Native MTP, anchored N-gram extension, VerifyWindow protocol, pipeline behavior, and telemetry |
 | [skippy/SUFFIX_NGRAM_PROPOSER.md](../../skippy/docs/SUFFIX_NGRAM_PROPOSER.md) | Long exact-suffix proposer design, invariants, telemetry, and benchmark contract |
 | [skippy/DATA_FLOW.md](../../skippy/docs/DATA_FLOW.md) | Stage data flow and transport details |
@@ -54,6 +55,8 @@ Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serv
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
 | [design/NATIVE_RUNTIMES.md](../../skippy/docs/design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
+| [design/RECEIPTS.md](design/RECEIPTS.md) | Inference receipts in Mesh: which turns a node audits, what it holds a peer to, and what a verdict costs a peer. The protocol, what a pass proves, the threat model and the measurements are in the [Skippy design](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/RECEIPTS.md) |
+| [design/TRUST_TIERS.md](design/TRUST_TIERS.md) | Request trust policy and tiers. Only `any` and `receipts` are built |
 | [design/EMITTER_HOOKS.md](design/EMITTER_HOOKS.md) | Inventory of hook, callback, and emitter surfaces plus readiness ownership. |
 | [plugins/](plugins/) | Plugin architecture, web UI projection contract, exemplars, and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |

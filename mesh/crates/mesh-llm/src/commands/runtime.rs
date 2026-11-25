@@ -1018,6 +1018,7 @@ mod tests {
             logging: Default::default(),
             defaults: None,
             runtime: Default::default(),
+            receipts: Default::default(),
             extra: Default::default(),
         };
 

@@ -99,6 +99,7 @@ impl SkippyModelHandle {
             session_lifecycle_observer: Some(Arc::new(
                 runtime_events::SkippySessionRuntimeEventObserver::new(),
             )),
+            receipts: options.receipts.clone().map(Into::into),
         };
         let embedded_args = options.embedded_openai.unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
@@ -169,6 +170,7 @@ impl SkippyModelHandle {
                 telemetry_queue_capacity: telemetry.queue_capacity,
                 telemetry_level: telemetry.level,
                 session_lifecycle_observer: Some(session_observer),
+                receipts: None,
             },
             embedded_args,
             hook_policy,

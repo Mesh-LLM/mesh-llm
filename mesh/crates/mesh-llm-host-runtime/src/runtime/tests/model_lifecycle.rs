@@ -449,6 +449,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             port: 0,
             capabilities: vision_capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            receipts: false,
         },
     )
     .await;
@@ -465,6 +466,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             port: 0,
             capabilities: models::ModelCapabilities::default(),
             workload_class: mesh::ModelWorkloadClass::Embedding,
+            receipts: false,
         },
     )
     .await;

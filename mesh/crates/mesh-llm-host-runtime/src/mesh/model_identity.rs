@@ -38,6 +38,7 @@ pub(crate) fn infer_remote_served_descriptors(
             };
             ServedModelDescriptor {
                 requires: Vec::new(),
+                receipts: false,
                 identity,
                 capabilities_known: false,
                 capabilities: crate::models::ModelCapabilities::default(),

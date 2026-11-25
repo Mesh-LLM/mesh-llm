@@ -5,9 +5,12 @@ use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mesh_llm_config::{OpenAiExchangeFailurePolicy, OpenAiExchangeGrant};
-use mesh_llm_plugin::openai_exchange::{OpenAiAdmissionDecision, OpenAiExchangeDecision};
+use mesh_llm_plugin::openai_exchange::{
+    OpenAiAdmissionDecision, OpenAiExchangeDecision, ReceiptAuditStatus,
+};
 use serde_json::{Value, json};
 use skippy_inference_api::wire_bytes::{WireBytesCommitment, WireBytesObserver, commit_wire_bytes};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use super::{PluginManager, proto};
@@ -17,6 +20,10 @@ mod exchange_metadata;
 mod exchange_terminal_completion;
 #[path = "exchange_terminal_outcome.rs"]
 mod exchange_terminal_outcome;
+
+// The audit performs its own challenge timing. A slow local model open or a
+// stopped worker must never keep a settlement callback pending indefinitely.
+const RECEIPT_AUDIT_TIMEOUT: Duration = crate::network::receipt_audit::VERDICT_WAIT;
 
 #[derive(Default)]
 pub(super) struct ExchangeHealth {
@@ -140,6 +147,38 @@ fn project_event(mut event: Value, grant: &OpenAiExchangeGrant, name: &str) -> V
 }
 
 impl PluginManager {
+    /// Attach the verifier of the attempt that delivered the selected peer's
+    /// response. Routing passes a host-owned observation id, never HTTP metadata.
+    pub(crate) fn record_receipt_audit(
+        &self,
+        observation_id: &str,
+        attempt_id: uuid::Uuid,
+        peer: iroh::EndpointId,
+        verdict: oneshot::Receiver<ReceiptAuditStatus>,
+    ) {
+        let state = self
+            .inner
+            .exchange_observations
+            .0
+            .lock()
+            .unwrap()
+            .get(observation_id)
+            .and_then(Weak::upgrade);
+        if let Some(state) = state {
+            let mut state = state.lock().unwrap();
+            if state.selected.as_ref().is_some_and(|selected| {
+                selected["receipt_audit"] == "pending"
+                    && selected["receipt_audit_attempt_id"] == attempt_id.to_string()
+                    && selected["target_peer_id"] == hex::encode(peer.as_bytes())
+            }) {
+                state.receipt_audit = Some(ReceiptAuditCompletion {
+                    verdict,
+                    deadline: Instant::now() + RECEIPT_AUDIT_TIMEOUT,
+                });
+            }
+        }
+    }
+
     pub(crate) fn record_typed_execution_outcome(&self, backend_exchange_id: &str, outcome: &str) {
         let state = self
             .inner
@@ -296,6 +335,7 @@ impl PluginManager {
             state.evidence_unavailable = true;
         }
         state.selected = Some(event);
+        state.receipt_audit = None;
         result
     }
     pub(crate) async fn plugin_exchange_callback_active(&self, name: &str) -> bool {
@@ -660,11 +700,29 @@ struct EmissionState {
     required_failure: bool,
     denied: bool,
     selected: Option<Value>,
+    receipt_audit: Option<ReceiptAuditCompletion>,
     evidence_unavailable: bool,
     internal_hook_failure: bool,
     /// The exchange's request tier: a phase reached from the backend runs on
     /// the backend's task, not the request's.
     tier: crate::mesh::request_tier::InferenceRequestTier,
+}
+
+struct ReceiptAuditCompletion {
+    verdict: oneshot::Receiver<ReceiptAuditStatus>,
+    deadline: Instant,
+}
+
+impl ReceiptAuditCompletion {
+    async fn status(self) -> ReceiptAuditStatus {
+        match tokio::time::timeout_at(self.deadline, self.verdict).await {
+            Ok(Ok(ReceiptAuditStatus::Passed)) => ReceiptAuditStatus::Passed,
+            Ok(Ok(ReceiptAuditStatus::Failed)) => ReceiptAuditStatus::Failed,
+            Ok(Ok(ReceiptAuditStatus::NotDrawn)) => ReceiptAuditStatus::NotDrawn,
+            Ok(Ok(ReceiptAuditStatus::NotAudited)) => ReceiptAuditStatus::NotAudited,
+            _ => ReceiptAuditStatus::Unverified,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -836,9 +894,16 @@ impl ExchangeSession {
             .lock()
             .unwrap()
             .remove(self.observation_id());
+        let wait_for_audit = self.emission.lock().unwrap().receipt_audit.is_some();
         let owner = self.terminal_owner();
         let outcome = outcome.to_owned();
-        exchange_terminal_completion::complete(owner.run_terminal(outcome)).await;
+        if wait_for_audit {
+            // The caller has its response. Let the terminal owner wait for
+            // this proof independently of the client connection.
+            tokio::spawn(owner.run_terminal(outcome));
+        } else {
+            exchange_terminal_completion::complete(owner.run_terminal(outcome)).await;
+        }
     }
     fn terminal_owner(&mut self) -> Self {
         Self {
@@ -873,7 +938,21 @@ impl ExchangeSession {
     async fn final_terminal_event(&mut self, outcome: &str) -> Value {
         let mut copies = std::mem::take(&mut self.emission.lock().unwrap().copies);
         self.response_delivery = copies.close_with_receipts().await;
-        self.terminal_event(outcome)
+        let mut event = self.terminal_event(outcome);
+        if event.get("receipt_audit_attempt_id").is_some() {
+            let audit = self.emission.lock().unwrap().receipt_audit.take();
+            let status = match audit {
+                Some(audit)
+                    if event["execution_outcome"] == "completed"
+                        && matches!(event["status"].as_u64(), Some(200..=299)) =>
+                {
+                    audit.status().await
+                }
+                _ => ReceiptAuditStatus::Unverified,
+            };
+            event["receipt_audit"] = json!(status);
+        }
+        event
     }
     fn terminal_event(&self, outcome: &str) -> Value {
         let emission = self.emission.lock().unwrap();
@@ -904,7 +983,9 @@ impl ExchangeSession {
                 "model",
                 "provider",
                 "target",
+                "target_peer_id",
                 "attempt",
+                "receipt_audit_attempt_id",
             ] {
                 if let Some(value) = selected.get(key) {
                     event[key] = value.clone();
