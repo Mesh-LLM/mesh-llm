@@ -13,14 +13,8 @@ supported rail. Stablecoin support is in development—coming soon.
 
 ## 1. Install payments plugins
 
-Install the Lightning payment engine (`pay-lightning`) on each node that buys or
-serves paid inference. Its repository is `Mesh-LLM/ln-payments-plugin`.
-
-```sh
-mesh-llm plugins install Mesh-LLM/ln-payments-plugin
-```
-
-Then install one wallet plugin.
+Install the Lightning payment engine (`pay-lightning`) with one wallet plugin
+on each node that buys or serves paid inference.
 
 **Lexe** provisions a mainnet wallet when Mesh starts with a fresh profile.
 
@@ -30,7 +24,7 @@ before upgrading. Legacy `wallet-lexe` profiles require migration. Preserve your
 wallet state and recovery seed.
 
 ```sh
-mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin
+mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/lexe-wallet-plugin
 ```
 
 Lexe's default recovery seed location is
@@ -41,7 +35,7 @@ keep it private.
 **Nostr Wallet Connect (NWC)** connects to an existing mainnet wallet.
 
 ```sh
-mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin
+mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/nwc-wallet-plugin
 ```
 
 Before starting Mesh, save the connection URI in a private file and set
@@ -95,7 +89,7 @@ On a running local node, look for `pay.ln.v1` in each model provider's
 `requires[].channel` gossip. The same model can have free and paid providers.
 
 ```sh
-curl -fsS 'http://127.0.0.1:9337/mesh/v1/models?limit=500' |
+curl -fsS 'http://127.0.0.1:3131/mesh/v1/models?limit=500' |
   jq '.data[] | .id as $model | .providers[]
       | select(any(.requires[]?; .channel == "pay.ln.v1"))
       | {model:$model, node:.provider_id, available}'
