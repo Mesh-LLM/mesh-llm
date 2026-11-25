@@ -2,6 +2,88 @@ use super::*;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 
+#[test]
+fn refused_rotation_preserves_the_active_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("audit.log");
+    std::fs::write(&path, b"first").unwrap();
+    let held = std::fs::File::open(&path).unwrap();
+    // Deny new sibling names while retaining delete access to the file itself.
+    let change_directory_acl = |args: &[&str]| {
+        let result = std::process::Command::new("icacls")
+            .arg(directory.path())
+            .args(args)
+            .creation_flags(0x0800_0000)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    };
+    change_directory_acl(&["/deny", "*S-1-1-0:(WD)"]);
+    let rotation = discard_rotated_file(&path);
+    let contents = std::fs::read(&path);
+    change_directory_acl(&["/remove:d", "*S-1-1-0"]);
+
+    assert_eq!(
+        rotation.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(contents.unwrap(), b"first");
+    discard_rotated_file(&path).unwrap();
+    std::fs::write(&path, b"next").unwrap();
+    drop(held);
+    assert_eq!(std::fs::read(path).unwrap(), b"next");
+}
+
+#[test]
+fn rotation_reuses_names_while_another_sink_holds_the_old_file() {
+    for max_files in [1, 2] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.log");
+        let config = FileAuditSinkConfig {
+            path: path.clone(),
+            max_file_size: 1,
+            max_files,
+            ..FileAuditSinkConfig::default()
+        };
+        let idle = FileAuditSink::new(config.clone()).unwrap();
+        let writer = FileAuditSink::new(config).unwrap();
+        let emit = |sink: &FileAuditSink, action: &str| {
+            sink.emit_audit(&AuditEvent::new(
+                AuditCategory::System,
+                action,
+                AuditOutcome::Success,
+            ))
+            .unwrap();
+        };
+        emit(&writer, "first");
+        let held = std::fs::File::open(&path).unwrap();
+        emit(&writer, "second");
+        emit(&writer, "third");
+        emit(&idle, "fourth");
+
+        let action = |file: std::fs::File| {
+            serde_json::from_reader::<_, AuditEvent>(file)
+                .unwrap()
+                .action
+        };
+        assert_eq!(action(std::fs::File::open(&path).unwrap()), "fourth");
+        if max_files == 2 {
+            assert_eq!(
+                action(std::fs::File::open(rotated_path(&path, 1)).unwrap()),
+                "third"
+            );
+        }
+        assert_eq!(action(held), "first");
+        drop(idle);
+        drop(writer);
+        // The retained generations and the sibling lock are the only entries.
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            max_files + 1
+        );
+    }
+}
+
 fn grant_everyone_read(path: &Path, directory: bool) {
     let grant = if directory {
         "*S-1-1-0:(OI)(CI)R"

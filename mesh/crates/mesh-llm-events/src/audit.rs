@@ -391,7 +391,7 @@ impl FileAuditSink {
         if self.config.max_files > 1 {
             let oldest = rotated_path(&self.config.path, self.config.max_files - 1);
             if oldest.try_exists()? {
-                std::fs::remove_file(&oldest)?;
+                discard_rotated_file(&oldest)?;
             }
             for index in (1..self.config.max_files - 1).rev() {
                 let from = rotated_path(&self.config.path, index);
@@ -401,7 +401,7 @@ impl FileAuditSink {
             }
             std::fs::rename(&self.config.path, rotated_path(&self.config.path, 1))?;
         } else {
-            std::fs::remove_file(&self.config.path)?;
+            discard_rotated_file(&self.config.path)?;
         }
         let file = self.open_active_file()?;
         self.harden_replacement(&file, private_file)?;
@@ -448,6 +448,36 @@ fn rotated_path(path: &std::path::Path, index: usize) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(format!(".{index}"));
     PathBuf::from(value)
+}
+
+#[cfg(windows)]
+fn discard_rotated_file(path: &std::path::Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular audit file for rotation",
+        ));
+    }
+    // Other sinks can still hold this generation's identity handle. Give it a
+    // unique name before requesting removal so classic Windows deletion
+    // leaves the active and numbered names immediately reusable.
+    let retired = path.with_file_name(format!(".mesh-audit-{}.tmp", Uuid::new_v4()));
+    std::fs::rename(path, &retired)?;
+    std::fs::remove_file(&retired).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to remove retired audit file {}: {error}",
+                retired.display()
+            ),
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn discard_rotated_file(path: &std::path::Path) -> io::Result<()> {
+    std::fs::remove_file(path)
 }
 
 fn reject_symlink(path: &std::path::Path) -> io::Result<()> {
