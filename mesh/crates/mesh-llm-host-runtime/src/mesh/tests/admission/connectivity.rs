@@ -648,61 +648,62 @@ async fn failed_redial_keeps_a_peer_that_reconnected_meanwhile() -> Result<()> {
     Ok(())
 }
 
-/// #3095 follow-up: the peer can reconnect on its own while a recovered
-/// connection is still in its gossip exchange. Publishing the recovered one
-/// must not replace the live connection the peer opened.
+/// #3095 follow-up: both peers recover at once. Each dials the other, and
+/// each dial reaches the other side before its own recovered gossip
+/// completes. Neither side may close a connection the other keeps, so the
+/// pair still has a live connection on both sides.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recovered_connection_keeps_a_live_replacement() -> Result<()> {
-    let requester = make_test_node(super::super::NodeRole::Worker).await?;
-    let remote = make_test_node(super::super::NodeRole::Worker).await?;
+async fn simultaneous_recoveries_keep_a_live_connection_on_both_sides() -> Result<()> {
+    let a = make_test_node(super::super::NodeRole::Worker).await?;
+    let b = make_test_node(super::super::NodeRole::Worker).await?;
     let trusted_signer = test_release_signer_key_id(9);
     let policy = requirement_policy(&trusted_signer);
-
-    configure_requirement_node(&requester, &policy, Some(&trusted_signer)).await?;
-    configure_requirement_node(&remote, &policy, Some(&trusted_signer)).await?;
-    requester.start_accepting();
-    remote.start_accepting();
-    {
-        let mut peer = make_test_peer(remote.id(), Some(20), 8);
-        peer.addr = remote.endpoint_addr_for_advertisement();
-        requester.state.lock().await.peers.insert(remote.id(), peer);
+    configure_requirement_node(&a, &policy, Some(&trusted_signer)).await?;
+    configure_requirement_node(&b, &policy, Some(&trusted_signer)).await?;
+    a.start_accepting();
+    b.start_accepting();
+    for (node, other) in [(&a, &b), (&b, &a)] {
+        let mut peer = make_test_peer(other.id(), Some(20), 8);
+        peer.addr = other.endpoint_addr_for_advertisement();
+        node.state.lock().await.peers.insert(other.id(), peer);
     }
-    let live = connect_mesh(
-        &requester.endpoint,
-        remote.endpoint_addr_for_advertisement(),
-    )
-    .await?;
-    let live_id = live.stable_id();
-    requester
-        .state
-        .lock()
-        .await
-        .connections
-        .insert(remote.id(), live.clone());
 
-    let recovered = connect_mesh(
-        &requester.endpoint,
-        remote.endpoint_addr_for_advertisement(),
-    )
-    .await?;
-    requester
-        .complete_recovered_connection(remote.id(), recovered.clone())
-        .await;
+    // Each side's dial, accepted and cached by the other before either
+    // recovered gossip runs.
+    let x = connect_mesh(&a.endpoint, b.endpoint_addr_for_advertisement()).await?;
+    let y = connect_mesh(&b.endpoint, a.endpoint_addr_for_advertisement()).await?;
+    for (node, other) in [(&a, &b), (&b, &a)] {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !node.state.lock().await.connections.contains_key(&other.id()) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+    }
 
-    assert_eq!(
-        requester
-            .state
-            .lock()
-            .await
-            .connections
-            .get(&remote.id())
-            .map(|conn| conn.stable_id()),
-        Some(live_id),
-        "the live connection the peer opened must stay"
+    tokio::join!(
+        a.complete_recovered_connection(b.id(), x.clone()),
+        b.complete_recovered_connection(a.id(), y.clone()),
     );
-    assert!(live.close_reason().is_none());
-    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), recovered.closed()).await;
-    assert!(closed.is_ok(), "the superseded recovered connection must be closed");
+
+    let held_by_a = a.state.lock().await.connections.get(&b.id()).cloned();
+    let held_by_b = b.state.lock().await.connections.get(&a.id()).cloned();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    for (dial, conn) in [("a's dial", &x), ("b's dial", &y)] {
+        assert!(
+            conn.close_reason().is_none(),
+            "{dial} was closed: {:?}",
+            conn.close_reason()
+        );
+    }
+    for (who, held) in [("a", held_by_a), ("b", held_by_b)] {
+        let held = held.unwrap_or_else(|| panic!("{who} holds no connection"));
+        assert!(
+            held.close_reason().is_none(),
+            "{who} holds a connection that was closed: {:?}",
+            held.close_reason()
+        );
+    }
     Ok(())
 }
 
