@@ -260,6 +260,7 @@ fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
         SetupPluginsOutcome::Finished {
             unavailable,
             failed,
+            record_error,
             ..
         } => {
             for (name, reason) in unavailable {
@@ -273,6 +274,12 @@ fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
             }
             if !failed.is_empty() {
                 let _ = writeln!(err, "{retry}");
+            }
+            if let Some(error) = record_error {
+                let _ = writeln!(
+                    err,
+                    "warning: could not record that setup offered the `{DEFAULT_SET}` plugin set, so the next setup offers it again: {error}"
+                );
             }
         }
         SetupPluginsOutcome::NotRequested | SetupPluginsOutcome::AlreadyOffered => {}

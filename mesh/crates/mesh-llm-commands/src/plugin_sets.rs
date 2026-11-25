@@ -32,10 +32,13 @@ pub enum SetupPluginsOutcome {
     AlreadyOffered,
     /// The set resolved. Members may have been installed, left as they were
     /// (already installed), found unavailable on this platform, or failed.
+    /// `record_error` says why the offer record could not be written; the
+    /// next setup then offers the set again.
     Finished {
         installed: Vec<String>,
         unavailable: Vec<(String, String)>,
         failed: Vec<(String, String)>,
+        record_error: Option<String>,
     },
     /// The set could not be read or the install did not finish; nothing
     /// further was attempted.
@@ -58,10 +61,14 @@ fn no_set_reason(catalog: &PluginCatalog, set_name: &str, problem: Option<String
         Some(problem) => format!("the plugin catalog has no set '{set_name}' ({problem})"),
         None => {
             let known: Vec<&str> = catalog.sets().iter().map(|set| set.name.as_str()).collect();
-            format!(
-                "the plugin catalog has no set '{set_name}'; available sets: {}",
-                known.join(", ")
-            )
+            if known.is_empty() {
+                format!("the plugin catalog has no set '{set_name}' (it lists no sets)")
+            } else {
+                format!(
+                    "the plugin catalog has no set '{set_name}'; available sets: {}",
+                    known.join(", ")
+                )
+            }
         }
     }
 }
@@ -127,10 +134,8 @@ async fn install_set_for_setup(
                     set_name,
                     offer.after(&set_members, &result),
                 );
-                if let Err(error) = recorded {
-                    return SetupPluginsOutcome::Unavailable(format!("{error:#}"));
-                }
                 SetupPluginsOutcome::Finished {
+                    record_error: recorded.err().map(|error| format!("{error:#}")),
                     installed: result
                         .installed
                         .into_iter()
@@ -306,6 +311,58 @@ mod tests {
         assert!(reason.contains("no set 'recommended'"), "{reason}");
     }
 
+    #[test]
+    fn a_catalog_that_lists_no_sets_says_so() {
+        let catalog = PluginCatalog::parse_jsonl(PLUGINS).unwrap();
+        let reason = no_set_reason(&catalog, "recommended", None);
+        assert!(reason.ends_with("(it lists no sets)"), "{reason}");
+    }
+
+    /// When the offer record cannot be written, setup still reports the set's
+    /// result, plus the record error, rather than claiming nothing installed.
+    #[tokio::test]
+    async fn a_failed_offer_record_keeps_the_set_result() {
+        let temp = TempDir::new().unwrap();
+        // A directory where the record's temporary file goes makes the write fail.
+        std::fs::create_dir_all(
+            temp.path()
+                .join(format!("offered-sets.json.{}.tmp", std::process::id())),
+        )
+        .unwrap();
+        let base = serve(
+            &[
+                ("/plugins.jsonl", PLUGINS),
+                (
+                    "/plugin-sets.jsonl",
+                    r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+                ),
+            ],
+            false,
+        );
+        let outcome = install_set_for_setup(
+            "recommended",
+            &options(format!("{base}/plugins.jsonl"), temp.path()),
+            &mut |_| {},
+            CATALOG_TIMEOUT,
+            SETUP_INSTALL_TIMEOUT,
+        )
+        .await;
+        let SetupPluginsOutcome::Finished {
+            unavailable,
+            record_error,
+            ..
+        } = outcome
+        else {
+            panic!("expected Finished, got {outcome:?}");
+        };
+        assert_eq!(unavailable.len(), 1);
+        assert!(record_error.is_some());
+        assert_eq!(
+            read_set_offer(temp.path(), "recommended").unwrap(),
+            SetOffer::default()
+        );
+    }
+
     #[tokio::test]
     async fn a_custom_catalog_url_says_sets_are_unavailable_for_it() {
         let temp = TempDir::new().unwrap();
@@ -351,6 +408,7 @@ mod tests {
             installed,
             unavailable,
             failed,
+            ..
         } = outcome
         else {
             panic!("expected Finished");

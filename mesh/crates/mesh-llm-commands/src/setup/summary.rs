@@ -96,6 +96,7 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
                 installed,
                 unavailable,
                 failed,
+                ..
             },
         ) => {
             let mut parts = Vec::new();
@@ -420,6 +421,7 @@ mod tests {
                 installed: installed.iter().map(|name| name.to_string()).collect(),
                 unavailable: vec![("x".to_string(), "no release".to_string()); unavailable],
                 failed: vec![("y".to_string(), "boom".to_string()); failed],
+                record_error: None,
             };
         assert_eq!(
             plugins_line(Skip, &SetupPluginsOutcome::NotRequested),
