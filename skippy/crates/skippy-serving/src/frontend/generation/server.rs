@@ -674,8 +674,8 @@ mod tests {
     #[test]
     fn backend_setup_stores_capped_native_mtp_plan() {
         for (state_kind, expected_min, expected_max) in [
-            (skippy_runtime::ModelStateKind::Hybrid, 1, 1),
-            (skippy_runtime::ModelStateKind::Recurrent, 1, 1),
+            (skippy_runtime::ModelStateKind::Hybrid, 2, 2),
+            (skippy_runtime::ModelStateKind::Recurrent, 2, 2),
             (skippy_runtime::ModelStateKind::Dense, 2, 3),
         ] {
             let mut args =
