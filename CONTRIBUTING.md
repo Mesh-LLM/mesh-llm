@@ -57,13 +57,18 @@ just
 This produces `target/debug/mesh-llm` and `target/debug/native-runtimes`. `just build` is the same thing, and
 `just build-dev` is a faster build for local iteration.
 
-`just build` also builds the inference runtime from source. It fetches the
-Skippy revision pinned in `Cargo.toml` into `.deps/skippy`, builds Skippy's
-native runtime for this machine, and puts it in `target/debug/native-runtimes`,
-where the host finds it with no settings. The backend is detected (Metal on
+`just build` also gets the inference runtime. It downloads the native runtime
+that the Skippy release pinned in `Cargo.toml` published for this machine,
+checks it against the release's checksums, and puts it in
+`target/debug/native-runtimes`, where the host finds it with no settings.
+It builds the runtime from source instead (the pinned commit, fetched into
+`.deps/skippy`) when the release has no package for this machine and backend
+(ROCm, Vulkan, Windows), when you select another Skippy source (below), or when
+you ask: `MESH_LLM_RUNTIME_FROM_SOURCE=1 just build`. The backend is detected (Metal on
 macOS; CUDA, ROCm or Vulkan on Linux and Windows when their tools are installed; otherwise
-CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. A runtime
-already built from the same pin and backend is reused. `just mesh` rebuilds the
+CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. Naming
+`cuda_arch` or `rocm_arch` builds from source. A runtime
+already there for the same pin and backend is reused. `just mesh` rebuilds the
 host alone, and `just runtime` the runtime alone. On Windows the runtime step
 needs Git Bash.
 
@@ -75,6 +80,8 @@ checkout, and go back to the pin when done:
 
 ```bash
 scripts/skippy-source.sh ../skippy     # build against that checkout
+scripts/skippy-source.sh --ref main    # or fetch a branch, tag, commit or pull/<number>
+scripts/skippy-source.sh --ref my-branch https://github.com/me/skippy   # from a fork
 scripts/skippy-source.sh               # show what the build uses
 scripts/skippy-source.sh --pinned      # back to the pinned revision
 ```

@@ -21,11 +21,11 @@ The canonical repo-local skills live under `.agents/skills/`; the selectable rel
 
 ## Building
 
-Always use `just`. Never build manually. Bare `just` (or `just build`) builds the Skippy runtime from the pinned Skippy commit (into `target/debug/native-runtimes`), then the MeshLLM host and its console; `just mesh` builds the host alone. `just release-build` builds the release host and no runtime.
+Always use `just`. Never build manually. Bare `just` (or `just build`) downloads the runtime published by the pinned Skippy release (into `target/debug/native-runtimes`), then the MeshLLM host and its console; `just mesh` builds the host alone. The runtime is built from source instead when the pinned release has no package for the machine and backend, when another Skippy source is selected, or with `MESH_LLM_RUNTIME_FROM_SOURCE=1`. `just release-build` builds the release host and no runtime.
 
 `cargo check` and `cargo build` do not count as complete product builds: they skip the console, and `cargo check` produces no binary. See `mesh/AGENTS.md` for packaging commands and `CONTRIBUTING.md` for the full workflow.
 
-To build against a local Skippy checkout instead of the pinned revision, run `scripts/skippy-source.sh <checkout>`; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. Do not commit the `Cargo.lock` it produces.
+To build against a local Skippy checkout instead of the pinned revision, run `scripts/skippy-source.sh <checkout>`, or `scripts/skippy-source.sh --ref <branch|tag|commit|pull/N> [repository-url]` to have it fetched; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. Do not commit the `Cargo.lock` it produces.
 
 ### Distribution builds
 
@@ -119,7 +119,7 @@ Run Cargo commands serially. Do not run multiple Cargo commands in parallel: thi
 - `just test-all` runs what a pull request must pass except the inference smoke: `just lint`, `just test-rust` and `just test-ui`. Use it for a broad change, and when you change a `just` recipe or a script that CI calls.
 - `--lib` skips the integration-test binaries and the doc tests, and CI runs both, so a `--lib`-only run can be green while CI is red.
 - `cargo clippy --all-targets` type-checks test code but never executes it, so a green Clippy run is not a test run either. Treat a failure caught locally as cheap and a failure caught by pushed CI as expensive.
-- CI's inference smoke (`just smoke <runtime-dir> <model.gguf>`, Unix only) needs a packaged Skippy CPU runtime and a GGUF model. `scripts/ci-skippy-runtime.sh` builds that runtime from a Skippy checkout.
+- CI's inference smoke (`just smoke <runtime-dir> <model.gguf>`, Unix only) needs a packaged Skippy CPU runtime and a GGUF model. `scripts/fetch-skippy-runtime.sh <dir> cpu` downloads the one the pinned Skippy release published, which is what CI does; `scripts/ci-skippy-runtime.sh` builds it from a Skippy checkout, which CI does only for a named `Skippy-Ref`.
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 - When CI fails on a PR, first confirm the failing run belongs to the current head commit and

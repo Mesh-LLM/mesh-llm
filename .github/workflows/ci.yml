@@ -77,9 +77,10 @@ jobs:
   #
   #     Skippy-Ref: pull/123
   #
-  # This job then builds MeshLLM against that Skippy source too. Lint and the
-  # Rust tests still use the pinned revision. Either way the runtime comes
-  # from the same commit this job compiles MeshLLM against. A branch or pull
+  # This job then builds the runtime and MeshLLM from that Skippy source. Lint
+  # and the Rust tests still use the pinned revision. With no such line the
+  # runtime is the one the pinned Skippy release published. Either way the
+  # runtime comes from the same commit this job compiles MeshLLM against. A branch or pull
   # request is resolved once per run: after a new Skippy push, re-run this
   # workflow, or name a full commit SHA.
   smoke:
@@ -108,36 +109,24 @@ jobs:
           scripts/ci-resolve-skippy.sh "$ref" | tee -a "$GITHUB_OUTPUT"
           echo "override=${ref:+true}" >> "$GITHUB_OUTPUT"
 
-      # Runner image, compiler and build recipe, so a change to any of them
-      # is a different runtime.
-      - name: Name the runtime build
-        id: identity
-        env:
-          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
-          RECIPE: ${{ hashFiles('scripts/ci-skippy-runtime.sh', '.github/actions/setup/action.yml') }}
-        run: echo "key=skippy-cpu-runtime-$ImageOS-$ImageVersion-$(uname -m)-$(cc -dumpfullversion)-$RECIPE-$SKIPPY_SHA" >> "$GITHUB_OUTPUT"
+      # The pinned Skippy release publishes the runtime; a named ref has
+      # none, so it is built here from that ref's source. Dispatching this
+      # workflow on main with a Skippy ref means you trust that code.
+      - name: Download the CPU runtime of the pinned Skippy release
+        if: steps.skippy.outputs.override != 'true'
+        run: scripts/fetch-skippy-runtime.sh skippy-runtime cpu
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.skippy.outputs.override == 'true'
         with:
           repository: ${{ steps.skippy.outputs.repository }}
           ref: ${{ steps.skippy.outputs.sha }}
           path: .deps/skippy
           persist-credentials: false
 
-      # A named Skippy ref is always built fresh, so its build never writes
-      # to the runtime cache that pinned runs read. The compiler and model
-      # caches are still used. Dispatching this workflow on main with a
-      # Skippy ref means you trust that code.
-      - name: Restore the CPU runtime built from the pinned Skippy commit
-        if: steps.skippy.outputs.override != 'true'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: skippy-runtime
-          key: ${{ steps.identity.outputs.key }}
-
-      - name: Build or verify the CPU runtime
+      - name: Build the CPU runtime from the named Skippy source
+        if: steps.skippy.outputs.override == 'true'
         env:
-          CI_BUILD_IDENTITY: ${{ steps.identity.outputs.key }}
           SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
         run: scripts/ci-skippy-runtime.sh .deps/skippy "$SKIPPY_SHA" skippy-runtime
 
@@ -161,7 +150,7 @@ jobs:
       - name: Build MeshLLM
         env:
           MESH_LLM_SKIP_UI: "1"
-        # Host only: the runtime was built or restored above.
+        # Host only: the runtime was downloaded or built above.
         run: just mesh
 
       - name: Run inference
@@ -183,10 +172,11 @@ jobs:
         env:
           SKIPPY_REPOSITORY: ${{ steps.skippy.outputs.repository }}
           SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+          OVERRIDE: ${{ steps.skippy.outputs.override }}
         run: |
           {
             echo "Skippy source: $SKIPPY_REPOSITORY@$SKIPPY_SHA"
-            echo "Checked out:   $(git -C .deps/skippy rev-parse HEAD)"
+            echo "Runtime from:  $([[ "$OVERRIDE" == true ]] && echo "built from that source" || echo "the published release")"
             for manifest in skippy-runtime/*/manifest.json; do
               echo "Runtime:       $(jq -r '.runtime.id' "$manifest") manifest sha256 $(sha256sum "$manifest" | cut -d ' ' -f 1)"
             done

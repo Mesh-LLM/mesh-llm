@@ -5,6 +5,12 @@
 #
 #   scripts/skippy-source.sh              show what the build uses
 #   scripts/skippy-source.sh <checkout>   build against that checkout or worktree
+#   scripts/skippy-source.sh --ref <ref> [repository-url]
+#                                         fetch that Skippy commit into
+#                                         .deps/skippy-ref and build against it.
+#                                         <ref> is a branch, tag, full commit
+#                                         SHA or pull/<number>; the URL names a
+#                                         fork (default: the pinned repository)
 #   scripts/skippy-source.sh --pinned     go back to the pinned revision
 #
 # The override is .cargo/skippy-local.toml (not committed). While it exists,
@@ -33,6 +39,18 @@ if [[ "$1" == "--pinned" ]]; then
     git -C "$REPO_ROOT" checkout -- Cargo.lock
     echo "using pinned $pin_rev"
     exit 0
+fi
+
+if [[ "$1" == "--ref" ]]; then
+    (($# == 2 || $# == 3)) || { echo "usage: $0 --ref <ref> [repository-url]" >&2; exit 2; }
+    ref_url="${3:-$pin_url}"
+    sha="$(SKIPPY_GIT_URL="$ref_url" "$REPO_ROOT/scripts/ci-resolve-skippy.sh" "$2" | sed -n 's/^sha=//p')"
+    checkout="$REPO_ROOT/.deps/skippy-ref"
+    mkdir -p "$checkout"
+    [[ -d "$checkout/.git" ]] || git -C "$checkout" init -q
+    git -C "$checkout" fetch -q --depth 1 "$ref_url" "$sha"
+    git -C "$checkout" checkout -q --detach FETCH_HEAD
+    set -- "$checkout"
 fi
 
 source_dir="$(cd "$1" && pwd -P)"

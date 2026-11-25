@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Build the Skippy native runtime this checkout needs, from source, and put it
-# beside the host binary, where mesh-llm finds it with no settings.
+# Put the Skippy native runtime this checkout needs beside the host binary,
+# where mesh-llm finds it with no settings.
 #
 #   scripts/build-skippy-runtime.sh [--backend NAME] [--cuda-arch LIST]
-#       [--rocm-arch LIST] [--profile debug|dev|release]
+#       [--rocm-arch LIST] [--profile debug|dev|release] [--from-source]
 #
-# Source: the Skippy commit pinned in Cargo.toml, fetched into .deps/skippy, or
-# the local checkout chosen with scripts/skippy-source.sh.
+# When Cargo.toml pins a Skippy release, the runtime that release published is
+# downloaded (scripts/fetch-skippy-runtime.sh). It is built from source
+# instead when:
+#   - --from-source or MESH_LLM_RUNTIME_FROM_SOURCE=1 asks for it;
+#   - a local checkout or another ref is chosen with scripts/skippy-source.sh;
+#   - the pin is not a release, or the release has no package for this machine
+#     and backend (ROCm, Vulkan, Windows), or --cuda-arch/--rocm-arch is given.
+# A source build uses the pinned commit, fetched into .deps/skippy.
 # Backend: --backend, else MESH_LLM_RUNTIME_BACKEND, else detected the way the
 # in-tree build did: metal on macOS; on Linux cuda, rocm or vulkan when their
 # tools are installed, else cpu; the same on Windows. Names are Skippy's.
-# Output: target/<debug|release>/native-runtimes. A runtime already built from
+# Output: target/<debug|release>/native-runtimes. A runtime already there from
 # the same pinned commit and backend is kept; a local checkout always rebuilds.
 # On Windows run this from Git Bash; it hands the build to Skippy's
 # scripts/build-windows.ps1, which sets up MSVC.
@@ -21,13 +27,16 @@ backend="${MESH_LLM_RUNTIME_BACKEND:-}"
 cuda_arch=""
 rocm_arch=""
 profile=debug
+from_source="${MESH_LLM_RUNTIME_FROM_SOURCE:-}"
+[[ "$from_source" != 0 ]] || from_source=""
 while (($# > 0)); do
     case "$1" in
         --backend) [[ -z "${2:-}" ]] || backend="$2"; shift 2 ;;
         --cuda-arch) cuda_arch="${2:-}"; shift 2 ;;
         --rocm-arch) rocm_arch="${2:-}"; shift 2 ;;
         --profile) profile="${2:-}"; shift 2 ;;
-        *) sed -n '2,16s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+        --from-source) from_source=1; shift ;;
+        *) sed -n '2,23s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
     esac
 done
 # `just build backend=cuda cuda_arch=...` is the established spelling, and just
@@ -86,6 +95,21 @@ if [[ "$source_state" == local\ * ]]; then
     stamp=""
 else
     read -r _ url rev <<<"$source_state"
+    if [[ -z "$from_source$cuda_arch$rocm_arch" ]]; then
+        stamp="release $rev $backend"
+        if [[ "$(cat "$out/.built-from" 2>/dev/null || true)" == "$stamp" ]]; then
+            echo "Skippy runtime: $out ($backend, already downloaded for ${rev:0:9})"
+            exit 0
+        fi
+        status=0
+        "$REPO_ROOT/scripts/fetch-skippy-runtime.sh" "$out" "$backend" || status=$?
+        if ((status == 0)); then
+            echo "$stamp" >"$out/.built-from"
+            exit 0
+        fi
+        ((status == 3)) || { echo "To build the runtime from source instead: MESH_LLM_RUNTIME_FROM_SOURCE=1 just build" >&2; exit "$status"; }
+        echo "Building it from source instead." >&2
+    fi
     checkout="$REPO_ROOT/.deps/skippy"
     stamp="$rev $backend $cuda_arch $rocm_arch"
     if [[ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)" != "$rev" ]]; then

@@ -33,9 +33,11 @@ with-lld *COMMAND:
     exit $LASTEXITCODE
 
 
-# Build everything needed to run a model from source, as before Skippy moved
-# out: the Skippy runtime, from the Skippy commit pinned in Cargo.toml, then
-# the MeshLLM host and console. The host finds the runtime beside it.
+# Build everything needed to run a model: the Skippy runtime, then the MeshLLM
+# host and console. The host finds the runtime beside it. The runtime is the
+# one the pinned Skippy release published; it is built from source when that
+# release has none for this machine and backend, when another Skippy source is
+# selected (scripts/skippy-source.sh), or with MESH_LLM_RUNTIME_FROM_SOURCE=1.
 #   just build                               backend detected for this machine
 #   just build backend=cpu
 #   just build backend=cuda cuda_arch='120;86'
@@ -60,7 +62,7 @@ build backend="" cuda_arch="" rocm_arch="": (runtime "debug" backend cuda_arch r
 build-dev backend="" cuda_arch="" rocm_arch="": (runtime "dev" backend cuda_arch rocm_arch)
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile dev
 
-# Build only the Skippy runtime, into target/<profile>/native-runtimes.
+# Download or build only the Skippy runtime, into target/<profile>/native-runtimes.
 runtime profile="debug" backend="" cuda_arch="" rocm_arch="":
     @bash scripts/build-skippy-runtime.sh --profile "{{ profile }}" --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 

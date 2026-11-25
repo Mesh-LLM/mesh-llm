@@ -40,7 +40,7 @@ The build runs Tailwind, Eleventy and Pagefind. It copies website source assets 
 
 ## Building and packaging
 
-- `just build` (or bare `just`) builds the Skippy runtime for this machine from the Skippy commit pinned in `Cargo.toml`, into `target/debug/native-runtimes`, then the backend-neutral MeshLLM host and console. `just mesh` builds the host and console alone. No backend is compiled into the host: it loads the runtime beside it, and downloads one from the pinned Skippy release when none is installed.
+- `just build` (or bare `just`) downloads the runtime for this machine published by the Skippy release pinned in `Cargo.toml`, into `target/debug/native-runtimes` (building it from source only when that release has no package for the machine and backend, another Skippy source is selected with `scripts/skippy-source.sh`, or `MESH_LLM_RUNTIME_FROM_SOURCE=1` is set), then the backend-neutral MeshLLM host and console. `just mesh` builds the host and console alone. No backend is compiled into the host: it loads the runtime beside it, and downloads one from the pinned Skippy release when none is installed.
 - `just release-build` (the same as `just release-host-build`) builds the release host.
 - `just bundle` creates a portable product tarball. `just release-bundle vX.Y.Z <output>` packages the release host with the runtime found in `MESH_LLM_NATIVE_RUNTIME_DIR` under `native-runtimes/`, and writes `host-imports.json` beside the host. Both commands fail without `MESH_LLM_NATIVE_RUNTIME_DIR` pointing at a packaged Skippy runtime.
 - `just ui-dev` starts Vite; `just ui-clean` clears stale UI installs; `just stop`, `just test`, and `just auto` operate on the local MeshLLM runtime.
