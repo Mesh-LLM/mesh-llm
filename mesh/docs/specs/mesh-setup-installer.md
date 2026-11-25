@@ -89,8 +89,8 @@ usable.
 
 Unless `--skip-plugin-install` is passed, setup installs the missing members of
 the catalog plugin set named `recommended` (`plugins install --set recommended`).
-It does so with and without prompts, once per machine (recorded in the plugin
-store as `offered-sets.json`: a member counts as offered once it is installed,
+It does so with and without prompts, once per plugin store (recorded in that
+store, `MESH_LLM_PLUGIN_DIR` or by default `~/.mesh-llm/plugins`, as `offered-sets.json`: a member counts as offered once it is installed,
 already present, or has no release for this platform; a member that failed, and
 a set that could not be read, are not recorded and are tried again by the next
 setup run), after the runtime and before the service, so a node the service

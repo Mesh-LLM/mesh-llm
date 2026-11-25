@@ -55,7 +55,7 @@ pub struct SetInstallResult {
 
 const OFFERED_FILE: &str = "offered-sets.json";
 
-/// What setup has already done with one set on this machine. A set is offered
+/// What setup has already done with one set in this plugin store. A set is offered
 /// once: a member the operator later removes is never put back by setup, and
 /// members added to the set later are not installed by it either. A member
 /// that failed is not recorded, so the next setup retries it.
@@ -143,7 +143,7 @@ impl SetResolution {
         self
     }
 
-    /// Drop the members setup already offered on this machine.
+    /// Drop the members setup already offered for this plugin store.
     pub fn without_members(mut self, offered: &[String]) -> Self {
         self.members
             .retain(|member| !offered.contains(&member.name));

@@ -27,7 +27,7 @@ const SETUP_INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 pub enum SetupPluginsOutcome {
     #[default]
     NotRequested,
-    /// Setup already offered the set on this machine: it installs a set once,
+    /// Setup already offered the set for this plugin store: it installs a set once,
     /// so nothing is attempted, reinstalled or warned about.
     AlreadyOffered,
     /// The set resolved. Members may have been installed, left as they were
@@ -230,7 +230,7 @@ mod tests {
         );
     }
 
-    /// Setup offers the set once per machine: after it resolved, a later run
+    /// Setup offers the set once per plugin store: after it resolved, a later run
     /// attempts nothing (not even a catalog read), so a plugin the operator
     /// removed stays removed.
     #[tokio::test]

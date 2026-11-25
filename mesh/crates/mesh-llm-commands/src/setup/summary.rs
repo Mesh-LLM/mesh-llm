@@ -85,7 +85,8 @@ fn plugins_line(plan: super::SetupPluginsPlan, outcome: &SetupPluginsOutcome) ->
         (super::SetupPluginsPlan::Skip, _) => "skipped by --skip-plugin-install".to_string(),
         (_, SetupPluginsOutcome::NotRequested) => "not recorded".to_string(),
         (_, SetupPluginsOutcome::AlreadyOffered) => {
-            "recommended set already offered on this machine; plugins left as they are".to_string()
+            "recommended set already offered for this plugin store; plugins left as they are"
+                .to_string()
         }
         (_, SetupPluginsOutcome::Unavailable(_)) => {
             "not installed; see the warning above".to_string()

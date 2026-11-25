@@ -213,7 +213,7 @@ Switches:
 - `--service`: install and enable the background service.
 - `--no-service`: skip installing and enabling the background service.
 - `--skip-runtime`: skip downloading or configuring the native runtime.
-- `--skip-plugin-install`: do not install the catalog's `recommended` plugin set. Without it, setup installs that set once per machine, in attended and unattended runs alike, with no prompt. A plugin you remove is not reinstalled by later setup runs, and members added to the set later are not installed by setup. An install problem prints a warning and the retry command `mesh-llm plugins install --set recommended`, and setup still succeeds; a member that failed is retried by the next setup run.
+- `--skip-plugin-install`: do not install the catalog's `recommended` plugin set. Without it, setup installs that set once per plugin store (`MESH_LLM_PLUGIN_DIR`, by default `~/.mesh-llm/plugins`, so once per user), in attended and unattended runs alike, with no prompt. A plugin you remove is not reinstalled by later setup runs, and members added to the set later are not installed by setup. An install problem prints a warning and the retry command `mesh-llm plugins install --set recommended`, and setup still succeeds; a member that failed is retried by the next setup run.
 - `--verbose`: print detailed service paths, commands, log locations, and setup status.
 
 On Windows, the background service is a per-user scheduled task that starts at
