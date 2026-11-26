@@ -2537,6 +2537,10 @@ JSON with Python. Because it runs before checkout, caller cutover requires a
 protected executable artifact and verified source/digest delivery before
 execution; a command compiled from PR source cannot replace that admission.
 
+Authority and product automation producers, their placement, consumers and
+owned staging directories are listed in the automation producer and consumer
+roster in `.agents/skills/manage-ci/references/current-inventory.md`.
+
 The `audit-pr-authority-verified` composite is prepared for a future protected
 pre-checkout caller cutover. It downloads only the declared same-run artifact ID,
 requires protected producer source SHA and independent binary digest, checks

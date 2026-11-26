@@ -221,7 +221,15 @@ fn no_checkout_workflow_and_local_restore_have_identical_admission_contract() {
         "- name: Verify protected authority automation without executing it\n",
         "          ",
     );
-    assert_eq!(action, sentinel);
+    // Each role owns its stage directory (#2786); the admission contract is otherwise identical.
+    assert!(sentinel.contains("$RUNNER_TEMP/immutable-authority-sentinel"));
+    assert_eq!(
+        action,
+        sentinel.replace(
+            "immutable-authority-sentinel",
+            "immutable-automation-restored"
+        )
+    );
 }
 
 #[test]

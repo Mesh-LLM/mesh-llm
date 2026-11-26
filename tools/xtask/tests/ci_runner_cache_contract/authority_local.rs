@@ -729,7 +729,7 @@ fn authority_quality_hosted_origin_binds_protected_checkout_receipt_and_refuses_
         let admitted = origin == ORIGIN;
         assert_eq!(output.status.success(), admitted);
         assert_eq!(
-            root.path().join("immutable-automation-restored").exists(),
+            root.path().join("immutable-authority-sentinel").exists(),
             admitted
         );
         root.close().unwrap();
