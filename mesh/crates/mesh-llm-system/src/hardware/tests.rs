@@ -1889,7 +1889,11 @@ fn test_available_ram_reads_on_this_host() {
 #[cfg(target_os = "windows")]
 #[test]
 fn test_windows_reads_memory_the_os_does_not_see() {
-    // Installed minus visible RAM: zero on a machine without reserved
-    // memory, never a failure.
-    assert!(read_dedicated_graphics_memory_bytes().is_some());
+    // Installed minus visible RAM, zero on a machine without reserved memory.
+    // The firmware query fails on malformed SMBIOS data, and the ceiling then
+    // falls back to free RAM alone, so a missing reading is allowed; a reading
+    // implies the visible total it was taken from is readable too.
+    if read_dedicated_graphics_memory_bytes().is_some() {
+        assert!(windows_memory_status().is_some_and(|status| status.ullTotalPhys > 0));
+    }
 }

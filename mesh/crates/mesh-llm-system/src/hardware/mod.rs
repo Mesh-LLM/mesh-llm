@@ -601,9 +601,7 @@ fn survey_system_ram() -> u64 {
 /// elsewhere, and when free RAM can't be read, leaves the budget as the device
 /// reported it. An unreadable dedicated size counts as none, which keeps the
 /// pre-dedicated behavior: the budget is the free RAM.
-#[cfg(any(feature = "skippy-devices", test))]
-// Its only caller is the feature-gated `skippy_devices` probe.
-#[cfg_attr(all(test, not(feature = "skippy-devices")), allow(dead_code))]
+#[cfg(feature = "skippy-devices")]
 fn survey_igpu_memory_ceiling() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
@@ -619,7 +617,13 @@ fn survey_igpu_memory_ceiling() -> Option<u64> {
 }
 
 /// Dedicated memory plus free RAM, or `None` when free RAM is unknown.
-#[cfg(any(feature = "skippy-devices", test))]
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "windows"),
+        feature = "skippy-devices"
+    ),
+    test
+))]
 fn igpu_memory_ceiling(available: Option<u64>, dedicated: Option<u64>) -> Option<u64> {
     Some(available?.saturating_add(dedicated.unwrap_or(0)))
 }
