@@ -9,9 +9,10 @@ const RECURRENT_NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 2;
 /// window (#2318). The rollback budget the planner sizes is
 /// `max(draft, verify) + 1` — the anchor plus the larger of the draft and
 /// verify windows — so the draft cap alone does not determine whether a
-/// window stays in place. Two draft tokens were measured to avoid the
-/// full-state copy on a split-serving workload with a small verify window;
-/// deeper windows fall back to the checkpoint/replay path.
+/// window stays in place. Two draft tokens improved throughput on a
+/// split-serving measurement; the actual recovery path (in-place vs
+/// checkpoint/replay) was not observed. Deeper windows may fall back to the
+/// checkpoint/replay path.
 pub(in crate::frontend) fn native_mtp_draft_cap(
     requested: usize,
     state_kind: Option<ModelStateKind>,
@@ -40,7 +41,7 @@ pub(in crate::frontend) fn apply_native_mtp_draft_cap(
             skippy_events::diagnostics::ServingDiagnostic::Warning {
                 message: format!(
                     "native MTP draft tokens capped from {requested} to {capped}: this model has \
-                     recurrent state, and more than two draft tokens copies the whole recurrent \
+                     recurrent state, and more than two draft tokens may copy the whole recurrent \
                      state to host on every window; the planner sizes rollback from \
                      max(draft, verify) + 1, so the in-place budget depends on the verify \
                      window, not just the draft count (#2318)"
