@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{ffi::OsString, fmt, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser};
 
@@ -51,7 +51,7 @@ pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,
         Err(err) => {
-            if let Some(exit) = err.downcast_ref::<CliParseExit>() {
+            if let Some(exit) = err.downcast_ref::<mesh_llm_events::ReportedExit>() {
                 return exit.0;
             }
             let _ = mesh_llm_tui::emit_fatal_error(&err);
@@ -94,7 +94,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
             emit_early_cli_process_event(&normalized_args.normalized, family, outcome).await;
             let exit_code = error.exit_code();
             let _ = error.print();
-            return Err(anyhow::Error::new(CliParseExit(exit_code)));
+            return Err(anyhow::Error::new(mesh_llm_events::ReportedExit(exit_code)));
         }
     };
     if cli.print_build_contract {
@@ -251,17 +251,6 @@ fn install_cli_operational_audit_bridge() {
     );
     mesh_llm_commands::operational_logging::install_cli_operational_audit_bridge(bridge);
 }
-
-#[derive(Debug)]
-struct CliParseExit(i32);
-
-impl fmt::Display for CliParseExit {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("command-line parsing failed")
-    }
-}
-
-impl std::error::Error for CliParseExit {}
 
 fn config_path_from_args(args: &[OsString]) -> Option<PathBuf> {
     for (index, argument) in args.iter().enumerate().skip(1) {

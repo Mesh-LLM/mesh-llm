@@ -146,3 +146,94 @@ fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
         "stderr should explain the no-download local-only contract, got: {stderr:?}"
     );
 }
+
+/// An HTTP request is fully received once the header block is terminated
+/// and the Content-Length body it declares has arrived.
+fn stub_request_complete(request: &[u8]) -> bool {
+    let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = std::str::from_utf8(&request[..header_end]).expect("utf-8 request headers");
+    let content_length = headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    request.len() >= header_end + 4 + content_length
+}
+
+#[test]
+fn load_rejected_by_the_node_exits_one_with_a_single_banner() {
+    // A stub node that rejects the load request: the command must exit
+    // nonzero, print its failure banner exactly once, and keep stdout
+    // machine-clean — the banner is the diagnostic, the exit code is the
+    // fact scripts chain on.
+    let temp = TempDir::new().expect("tempdir should be created");
+    let token_file = temp.path().join("owner-control-token");
+    mesh_llm_config::create_private_file_if_absent(&token_file, b"stub-token")
+        .expect("owner-only token file should be created");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("stub should bind loopback");
+    let port = listener.local_addr().expect("stub addr").port();
+    std::thread::spawn(move || {
+        // Serve a bounded number of requests, then let the listener drop.
+        for _ in 0..8 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            // Consume the complete request (headers plus Content-Length
+            // body) before responding: answering against unread bytes can
+            // reset the connection before the client reads the response.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 512];
+            while !stub_request_complete(&request) {
+                let read = std::io::Read::read(&mut stream, &mut chunk)
+                    .expect("stub should read the request");
+                if read == 0 {
+                    // Client hung up mid-request; nothing to answer.
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            if !stub_request_complete(&request) {
+                continue;
+            }
+            let body = r#"{"error":"stub: model not found"}"#;
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+        }
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+        .args(["load", "stub-model", "--port", &port.to_string()])
+        .env("MESH_LLM_OWNER_CONTROL_TOKEN_FILE", &token_file)
+        .output()
+        .expect("mesh-llm command should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a rejected load must exit 1, got: {:?}",
+        output.status
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout stays machine-clean, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert_eq!(
+        stderr.matches("Failed to load runtime model").count(),
+        1,
+        "the failure banner appears exactly once, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("stub: model not found"),
+        "the node's reason survives, got: {stderr:?}"
+    );
+}
