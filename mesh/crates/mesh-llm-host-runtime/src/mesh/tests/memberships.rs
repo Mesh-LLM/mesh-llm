@@ -361,7 +361,26 @@ async fn a_membership_refuses_a_peer_announcing_another_mesh() -> Result<()> {
 #[tokio::test]
 async fn membership_keeps_startup_dns_fallback_after_config_apply() -> Result<()> {
     use crate::mesh::node::{NodeStartupSpec, ScopedNodeIdentity};
-    use mesh_llm_config::DnsFallbackMode;
+    use mesh_llm_config::{DnsFallbackMode, MESH_LLM_DNS_FALLBACK_ENV};
+
+    if std::env::var_os(MESH_LLM_DNS_FALLBACK_ENV).is_some() {
+        let test = concat!(
+            module_path!(),
+            "::membership_keeps_startup_dns_fallback_after_config_apply"
+        );
+        let test = test.split_once("::").map_or(test, |(_, path)| path);
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([test, "--exact", "--nocapture", "--test-threads", "1"])
+            .env_remove(MESH_LLM_DNS_FALLBACK_ENV)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("test result: ok. 1 passed"),
+            "`{test}` with {MESH_LLM_DNS_FALLBACK_ENV} unset failed in its child process:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
 
     let dir = tempfile::tempdir()?;
     let config_path = dir.path().join("config.toml");
