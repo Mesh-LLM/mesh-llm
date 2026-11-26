@@ -1,7 +1,17 @@
 import { createChatDraftConversationId } from '@/features/chat/api/chat-session-ids'
+import type { ComposerQuote } from '@/features/chat/lib/quote-to-ask'
 
-export type ComposerSubmission = { prompt: string; attachments: File[] }
-export type ConversationComposerDraft = ComposerSubmission
+export type ComposerSubmission = {
+  prompt: string
+  attachments: File[]
+  /** What the composer held before the quote merged into `prompt`; failure
+   *  paths restore the draft from this so a failed send returns the typed
+   *  prompt and the quote chip instead of the merged text. */
+  restore?: { prompt: string; quote: ComposerQuote | null }
+}
+/** The draft carries a pending quote-to-ask selection; it merges into the
+ *  prompt as a quoted prefix at submission time. */
+export type ConversationComposerDraft = ComposerSubmission & { quote?: ComposerQuote | null }
 /** `target` is the node the prompt was submitted to ('' routes as usual), kept so a change
  *  while it waits doesn't reroute it. */
 export type QueuedSubmission = ComposerSubmission & {

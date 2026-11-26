@@ -611,3 +611,33 @@ describe('MessageRow copy button', () => {
     expect(await screen.findByRole('button', { name: 'Copy message failed' })).toBeInTheDocument()
   })
 })
+
+describe('MessageRow quote-to-ask marker', () => {
+  it('marks only assistant bodies as quotable', () => {
+    const assistant = render(<MessageRow messageRole="assistant" body="Answer text" timestamp="12:00" />)
+    expect(assistant.container.querySelector('[data-quote-source="assistant"]')).not.toBeNull()
+
+    const user = render(<MessageRow messageRole="user" body="Question text" timestamp="12:00" />)
+    expect(user.container.querySelector('[data-quote-source]')).toBeNull()
+  })
+})
+
+describe('MessageRow thinking-text exclusion', () => {
+  it('does not mark thinking segments as quotable', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body="<think>reasoning about the nodes</think>The mesh has 3 nodes online."
+        timestamp="12:00"
+      />
+    )
+    // The response segment is marked
+    const markers = document.querySelectorAll('[data-quote-source="assistant"]')
+    expect(markers.length).toBeGreaterThan(0)
+    // The thinking text must not be inside any marker
+    for (const marker of Array.from(markers)) {
+      expect(marker.textContent).not.toContain('reasoning about the nodes')
+      expect(marker.textContent).toContain('The mesh has 3 nodes online.')
+    }
+  })
+})

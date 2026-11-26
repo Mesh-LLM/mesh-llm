@@ -206,7 +206,12 @@ function AssistantMessageContent({
         }
 
         return (
-          <div className="block select-text break-words" key={key} style={{ border: '1px solid transparent' }}>
+          <div
+            className="block select-text break-words"
+            data-quote-source="assistant"
+            key={key}
+            style={{ border: '1px solid transparent' }}
+          >
             <AssistantMarkdown text={segment.text} linksEnabled={linksEnabled} streaming={streaming} />
           </div>
         )
