@@ -17,9 +17,10 @@ const PROVIDER: [&str; 3] = [
     "${{ inputs.use_depot == true }}",
 ];
 const POLICY_INPUTS: [&str; 3] = ["force_hosted", "use_depot", "original_event_name"];
-const SELECTOR_INPUTS: [&str; 4] = [
+const SELECTOR_INPUTS: [&str; 5] = [
     "original_event_name",
     "depot_main_enabled",
+    "depot_pr_enabled",
     "force_hosted",
     "manual_use_depot",
 ];
@@ -93,7 +94,7 @@ fn every_runner_selecting_call_forwards_override_provider_and_event() {
     }
 }
 
-fn evaluate(context: &Value, raw: &[&str]) -> Vec<Value> {
+pub(super) fn evaluate(context: &Value, raw: &[&str]) -> Vec<Value> {
     let fixture = support::Fixture::new();
     let mut command = Command::new("node");
     command
@@ -112,14 +113,16 @@ fn workflow_string(value: Value) -> String {
     }
 }
 
-struct Decision {
-    at: String,
-    depot: bool,
+pub(super) struct Decision {
+    pub(super) at: String,
+    /// `file#job/step` as listed in a `ci/runner-roles.json` row.
+    pub(super) selector: String,
+    pub(super) depot: bool,
     // Binds the forwarded manual opt-in, so it must match the parent decision.
-    mirrors_parent: bool,
+    pub(super) mirrors_parent: bool,
 }
 
-fn decide(at: String, selector: &Node, context: &Value) -> Decision {
+fn decide(at: String, id: String, selector: &Node, context: &Value) -> Decision {
     let with = selector.get("with").unwrap();
     let bound = SELECTOR_INPUTS
         .into_iter()
@@ -142,10 +145,15 @@ fn decide(at: String, selector: &Node, context: &Value) -> Decision {
     for (key, value) in [
         ("INPUT_EVENT_NAME", "workflow_dispatch"),
         ("INPUT_REF", "refs/heads/main"),
-        ("INPUT_DEPOT_PR_ENABLED", "true"),
         ("FIXTURE_DATE", "2026-11-21"),
     ] {
         env.push((key.to_owned(), value.to_owned()));
+    }
+    // Optional event/ref/repository/date overrides for trust-context cases.
+    if let Some(trust) = context.get("trust").and_then(Value::as_object) {
+        for (key, value) in trust {
+            env.push((key.clone(), workflow_string(value.clone())));
+        }
     }
     let fixture = support::Fixture::new();
     let env = env
@@ -155,6 +163,7 @@ fn decide(at: String, selector: &Node, context: &Value) -> Decision {
     let output = fixture.selector(&env);
     assert!(output.status.success(), "{at}: {output:?}");
     Decision {
+        selector: id,
         depot: fixture.outputs()["depot_enabled"] == "true",
         mirrors_parent: text(with, "manual_use_depot").is_some_and(|raw| raw != "false"),
         at,
@@ -179,7 +188,7 @@ fn forwarded(caller: &Node, declared: &Node, context: &Value) -> Value {
     Value::Object(nested)
 }
 
-fn walk(file: &str, context: &Value, decisions: &mut Vec<Decision>) {
+pub(super) fn walk(file: &str, context: &Value, decisions: &mut Vec<Decision>) {
     let doc = document(file);
     for (name, j) in doc.get("jobs").unwrap().entries() {
         if j.get("steps").is_some() {
@@ -187,7 +196,11 @@ fn walk(file: &str, context: &Value, decisions: &mut Vec<Decision>) {
                 .iter()
                 .filter(|s| text(s, "uses") == Some(SELECTOR))
             {
-                decisions.push(decide(format!("{file}/{name}"), selector, context));
+                let id = format!(
+                    "{file}#{name}/{}",
+                    text(selector, "id").unwrap_or("<no id>")
+                );
+                decisions.push(decide(format!("{file}/{name}"), id, selector, context));
             }
         }
         let Some(target) = local(j) else {
@@ -201,6 +214,7 @@ fn walk(file: &str, context: &Value, decisions: &mut Vec<Decision>) {
             "vars": context["vars"],
             "github": context["github"],
             "needs": {},
+            "trust": context["trust"],
         });
         walk(target, &nested, decisions);
     }
@@ -226,7 +240,7 @@ fn assert_precedence(decisions: &[Decision], hosted: bool, parent_depot: bool, r
     }
 }
 
-fn vars(gate: bool) -> Value {
+pub(super) fn vars(gate: bool) -> Value {
     json!({"DEPOT_RUNNERS_ENABLED": gate.to_string(), "DEPOT_PR_RUNNERS_ENABLED": "true"})
 }
 
