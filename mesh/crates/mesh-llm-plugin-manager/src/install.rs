@@ -147,7 +147,9 @@ pub fn install_plugin_archive(
     });
     let store = PluginStore::new(&options.store_root);
     let staged = stage_for_install(&archive_path, archive_ext, name, options)?;
-    let _lock = store.lock_writes()?;
+    // The reporter runs after the lock is released: the lock is not
+    // reentrant, and a reporter may change the store itself.
+    let lock = store.lock_writes()?;
     let current = store.load_optional(name)?;
     let extracted = staged.commit()?;
     let metadata = InstalledPluginMetadata {
@@ -165,6 +167,7 @@ pub fn install_plugin_archive(
         verified_sha256: None,
     };
     store.save(&metadata)?;
+    drop(lock);
     progress.report(PluginProgressEvent::Installed {
         installed: Box::new(metadata.clone()),
     });
@@ -1105,6 +1108,40 @@ mod tests {
         assert_eq!(committed, Committed::Kept(theirs.clone()));
         assert_eq!(store.load("demo").unwrap(), theirs);
         assert!(theirs.install_path.join("operator-marker").is_file());
+    }
+
+    /// The lock is not reentrant, so a reporter that changes the store when
+    /// told a plugin is installed must not run while the install holds it.
+    #[test]
+    fn a_reporter_can_change_the_store_when_told_a_plugin_is_installed() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let (done, finished) = std::sync::mpsc::channel();
+        let install_options = options.clone();
+        std::thread::spawn(move || {
+            let store = PluginStore::new(&install_options.store_root);
+            let result = install_plugin_archive(
+                "demo",
+                "9.9.9",
+                &archive_path,
+                &install_options,
+                &mut |event| {
+                    if let PluginProgressEvent::Installed { installed } = event {
+                        store.set_enabled(&installed.name, false).unwrap();
+                    }
+                },
+            );
+            let _ = done.send(result.map(|outcome| outcome.changed));
+        });
+        let changed = finished
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("the install returns while its reporter changes the store")
+            .unwrap();
+        assert!(changed);
+        let store = PluginStore::new(&options.store_root);
+        assert!(!store.load("demo").unwrap().enabled);
     }
 
     #[test]

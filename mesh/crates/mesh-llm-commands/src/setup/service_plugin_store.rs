@@ -7,7 +7,7 @@
 //! so the node it starts finds them.
 use super::SetupPlatform;
 use super::service_paths::{ServiceInstallContext, ServicePaths};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 const PLUGIN_DIR_VAR: &str = "MESH_LLM_PLUGIN_DIR";
@@ -21,7 +21,8 @@ pub(crate) fn service_plugin_store(context: &ServiceInstallContext) -> Result<Op
     }
     let env_file = ServicePaths::from_context(context).service_env_file;
     let configured = match std::fs::read_to_string(&env_file) {
-        Ok(contents) => plugin_dir_from_env_file(&contents),
+        Ok(contents) => plugin_dir_from_env_file(&contents, context.platform)
+            .with_context(|| format!("read {PLUGIN_DIR_VAR} from {}", env_file.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error).with_context(|| format!("read {}", env_file.display()));
@@ -42,7 +43,14 @@ fn default_plugin_store(home_dir: &Path) -> PathBuf {
 /// the format its template asks for. The last assignment wins; an empty
 /// value counts as unset, as it does for the node. Matching quotes around
 /// the value are removed, as systemd and the launchd runner's shell do.
-fn plugin_dir_from_env_file(contents: &str) -> Option<PathBuf> {
+///
+/// The two readers differ past that: systemd's `EnvironmentFile=` treats
+/// `$` literally, while the macOS runner sources the file with bash, which
+/// expands variables, command substitutions and a leading `~` outside single
+/// quotes. Both process backslash escapes. A value whose meaning depends on
+/// these is an error rather than a guess, so setup never installs into a
+/// store the service does not read.
+fn plugin_dir_from_env_file(contents: &str, platform: SetupPlatform) -> Result<Option<PathBuf>> {
     let mut value = None;
     for line in contents.lines() {
         let line = line.trim();
@@ -54,22 +62,57 @@ fn plugin_dir_from_env_file(contents: &str) -> Option<PathBuf> {
             continue;
         };
         if key == PLUGIN_DIR_VAR {
-            value = Some(unquote(raw).to_string());
+            value = Some(raw);
         }
     }
-    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let (inner, quoting) = unquote(raw);
+    if !value_is_literal(inner, quoting, platform) {
+        bail!(
+            "the service reads `{PLUGIN_DIR_VAR}={raw}` in a way setup does not reproduce; \
+             set it to an absolute path without variables, `~` or backslashes"
+        );
+    }
+    Ok(Some(inner)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from))
 }
 
-fn unquote(value: &str) -> &str {
-    for quote in ['"', '\''] {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quoting {
+    None,
+    Single,
+    Double,
+}
+
+fn unquote(value: &str) -> (&str, Quoting) {
+    for (quote, quoting) in [('"', Quoting::Double), ('\'', Quoting::Single)] {
         if let Some(inner) = value
             .strip_prefix(quote)
             .and_then(|rest| rest.strip_suffix(quote))
         {
-            return inner;
+            return (inner, quoting);
         }
     }
-    value
+    (value, Quoting::None)
+}
+
+/// Whether the service reads `inner` as exactly these characters.
+fn value_is_literal(inner: &str, quoting: Quoting, platform: SetupPlatform) -> bool {
+    if quoting == Quoting::Single {
+        return true;
+    }
+    if inner.contains('\\') {
+        return false;
+    }
+    if platform != SetupPlatform::MacOs {
+        return true;
+    }
+    let expands = inner.contains('$') || inner.contains('`');
+    let tilde = quoting == Quoting::None && inner.starts_with('~');
+    !expands && !tilde
 }
 
 #[cfg(test)]
@@ -131,14 +174,61 @@ mod tests {
 
     #[test]
     fn env_file_values_parse_as_the_service_reads_them() {
+        for platform in [SetupPlatform::Linux, SetupPlatform::MacOs] {
+            let parse = |contents| plugin_dir_from_env_file(contents, platform).unwrap();
+            assert_eq!(
+                parse("export MESH_LLM_PLUGIN_DIR='/a b'\n"),
+                Some(PathBuf::from("/a b"))
+            );
+            assert_eq!(
+                parse("  MESH_LLM_PLUGIN_DIR=/x\nOTHER=/y\n"),
+                Some(PathBuf::from("/x"))
+            );
+            assert_eq!(parse("MESH_LLM_PLUGIN_DIRS=/y\n"), None);
+            // Single quotes keep everything literal for both readers.
+            assert_eq!(
+                parse("MESH_LLM_PLUGIN_DIR='$HOME/p'\n"),
+                Some(PathBuf::from("$HOME/p"))
+            );
+            // Both readers process backslash escapes.
+            assert!(plugin_dir_from_env_file("MESH_LLM_PLUGIN_DIR=/a\\ b\n", platform).is_err());
+        }
+    }
+
+    /// systemd keeps `$` and `~` literally; the macOS runner's bash expands
+    /// them, so setup reports the value instead of installing elsewhere.
+    #[test]
+    fn values_the_macos_runner_expands_are_reported() {
+        for contents in [
+            "MESH_LLM_PLUGIN_DIR=\"$HOME/custom-plugins\"\n",
+            "MESH_LLM_PLUGIN_DIR=${HOME}/p\n",
+            "MESH_LLM_PLUGIN_DIR=`pwd`/p\n",
+            "MESH_LLM_PLUGIN_DIR=~/p\n",
+        ] {
+            let error = plugin_dir_from_env_file(contents, SetupPlatform::MacOs).unwrap_err();
+            assert!(
+                error.to_string().contains("absolute path"),
+                "{contents}: {error}"
+            );
+        }
         assert_eq!(
-            plugin_dir_from_env_file("export MESH_LLM_PLUGIN_DIR='/a b'\n"),
-            Some(PathBuf::from("/a b"))
+            plugin_dir_from_env_file("MESH_LLM_PLUGIN_DIR=\"$HOME/p\"\n", SetupPlatform::Linux)
+                .unwrap(),
+            Some(PathBuf::from("$HOME/p"))
         );
         assert_eq!(
-            plugin_dir_from_env_file("  MESH_LLM_PLUGIN_DIR=/x\nOTHER=/y\n"),
-            Some(PathBuf::from("/x"))
+            plugin_dir_from_env_file("MESH_LLM_PLUGIN_DIR=\"~/p\"\n", SetupPlatform::MacOs)
+                .unwrap(),
+            Some(PathBuf::from("~/p"))
         );
-        assert_eq!(plugin_dir_from_env_file("MESH_LLM_PLUGIN_DIRS=/y\n"), None);
+    }
+
+    #[test]
+    fn an_unreadable_value_fails_the_lookup() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = context(SetupPlatform::MacOs, temp.path());
+        write_env(&context, "MESH_LLM_PLUGIN_DIR=$HOME/p\n");
+        let error = format!("{:#}", service_plugin_store(&context).unwrap_err());
+        assert!(error.contains("service.env"), "{error}");
     }
 }

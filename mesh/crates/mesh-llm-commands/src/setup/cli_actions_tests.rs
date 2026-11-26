@@ -138,3 +138,34 @@ async fn a_failing_plugin_install_never_fails_setup() {
     ));
     assert!(prompter.prompts.is_empty());
 }
+
+/// `plugins install` uses the invoking shell's store, so when setup installed
+/// into the service's store the retry command names that store.
+#[test]
+fn the_retry_hint_names_the_store_setup_installed_into() {
+    use super::command::RetryStore;
+    use std::path::PathBuf;
+
+    assert!(
+        RetryStore::Invoking
+            .hint()
+            .starts_with("Retry with `mesh-llm plugins install --set recommended`")
+    );
+    assert!(
+        RetryStore::Service(PathBuf::from("/srv/mesh/plugins"))
+            .hint()
+            .starts_with(
+                "Retry with `MESH_LLM_PLUGIN_DIR=/srv/mesh/plugins mesh-llm plugins install --set recommended`"
+            )
+    );
+    assert!(
+        RetryStore::Service(PathBuf::from("/Users/a b/it's"))
+            .hint()
+            .contains("`MESH_LLM_PLUGIN_DIR='/Users/a b/it'\\''s' mesh-llm")
+    );
+    assert!(
+        RetryStore::UnknownService
+            .hint()
+            .contains("MESH_LLM_PLUGIN_DIR=<that store>")
+    );
+}

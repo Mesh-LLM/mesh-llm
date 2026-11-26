@@ -22,6 +22,7 @@ use anyhow::{Result, anyhow};
 use mesh_llm_plugin_manager::PluginInstallOptions;
 use std::future::Future;
 use std::io::Write;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 #[derive(Clone, Copy, Debug)]
@@ -208,9 +209,15 @@ impl<'a> CliSetupActions<'a> {
     /// Install the default plugin set. Never fails setup: what went wrong is
     /// printed with the command that retries it, and kept for the summary.
     async fn install_plugins(&mut self, store: SetupPluginStore) -> Result<()> {
-        let options = match self.plugin_options.clone() {
-            Some(options) => Ok(options),
-            None => self.plugin_install_options(store),
+        let (options, retry) = match self.plugin_options.clone() {
+            Some(options) => (Ok(options), RetryStore::Invoking),
+            None => match self.plugin_install_options(store) {
+                Ok((options, retry)) => (Ok(options), retry),
+                Err(error) if store == SetupPluginStore::Service => {
+                    (Err(error), RetryStore::UnknownService)
+                }
+                Err(error) => (Err(error), RetryStore::Invoking),
+            },
         };
         let outcome = match options {
             Ok(options) => {
@@ -221,23 +228,31 @@ impl<'a> CliSetupActions<'a> {
             }
             Err(error) => SetupPluginsOutcome::Unavailable(format!("{error:#}")),
         };
-        print_plugins_warnings(&outcome);
+        print_plugins_warnings(&outcome, &retry);
         self.plugins_outcome = outcome;
         Ok(())
     }
 
     /// Install into the store the node will read: the invoking shell's, or,
-    /// when setup also installs and starts the service, the service's.
-    fn plugin_install_options(&self, store: SetupPluginStore) -> Result<PluginInstallOptions> {
+    /// when setup also installs and starts the service, the service's. Also
+    /// returns where a retry has to install.
+    fn plugin_install_options(
+        &self,
+        store: SetupPluginStore,
+    ) -> Result<(PluginInstallOptions, RetryStore)> {
         let mut options = PluginInstallOptions::from_env()?;
+        let mut retry = RetryStore::Invoking;
         if store == SetupPluginStore::Service {
             let context = match self.service_context.clone() {
                 Some(context) => context,
                 None => ServiceInstallContext::detect(self.environment.platform, true)?,
             };
-            if let Some(root) = service_plugin_store(&context)? {
+            if let Some(root) = service_plugin_store(&context)?
+                && root != options.store_root
+            {
                 options.install_root = root.join("installed");
-                options.store_root = root;
+                options.store_root = root.clone();
+                retry = RetryStore::Service(root);
             }
         }
         if self.verbose {
@@ -247,7 +262,7 @@ impl<'a> CliSetupActions<'a> {
                 options.store_root.display()
             );
         }
-        Ok(options)
+        Ok((options, retry))
     }
 
     fn install_service(&mut self) -> Result<()> {
@@ -270,11 +285,51 @@ impl<'a> CliSetupActions<'a> {
     }
 }
 
-fn print_plugins_warnings(outcome: &SetupPluginsOutcome) {
+/// Where the printed retry command has to install the set: `plugins install`
+/// uses the invoking shell's store, which is not always the one setup chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RetryStore {
+    Invoking,
+    /// The service reads this store, not the invoking shell's.
+    Service(PathBuf),
+    /// The service's store could not be determined.
+    UnknownService,
+}
+
+impl RetryStore {
+    pub(crate) fn hint(&self) -> String {
+        let opt_out = "or pass --skip-plugin-install to setup to opt out.";
+        match self {
+            Self::Invoking => {
+                format!("Retry with `mesh-llm plugins install --set {DEFAULT_SET}`, {opt_out}")
+            }
+            Self::Service(root) => format!(
+                "Retry with `MESH_LLM_PLUGIN_DIR={} mesh-llm plugins install --set {DEFAULT_SET}` to install into the store the service reads, {opt_out}",
+                shell_quote(&root.to_string_lossy())
+            ),
+            Self::UnknownService => format!(
+                "Once the service's plugin store can be read, retry with `MESH_LLM_PLUGIN_DIR=<that store> mesh-llm plugins install --set {DEFAULT_SET}`, {opt_out}"
+            ),
+        }
+    }
+}
+
+/// `value` as one POSIX shell word. The service store is only chosen on Linux
+/// and macOS, where the retry runs in a POSIX shell.
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%".contains(c))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn print_plugins_warnings(outcome: &SetupPluginsOutcome, retry: &RetryStore) {
     let mut err = mesh_llm_events::console_err();
-    let retry = format!(
-        "Retry with `mesh-llm plugins install --set {DEFAULT_SET}`, or pass --skip-plugin-install to setup to opt out."
-    );
+    let retry = retry.hint();
     match outcome {
         SetupPluginsOutcome::Unavailable(reason) => {
             let _ = writeln!(
