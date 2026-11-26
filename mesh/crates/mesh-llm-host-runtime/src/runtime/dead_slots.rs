@@ -73,7 +73,14 @@ pub(crate) fn prune_dead_runtime_slots(
 /// Prunes one entry of the runtime root, and says whether it removed a slot.
 fn prune_slot(root: &Path, dir: &Path, my_pid: u32, now: SystemTime, retention: Duration) -> bool {
     if is_renamed_for_removal(dir) {
-        // A cleanup renamed it, then could not remove all of it.
+        // A cleanup renamed it, then could not remove all of it, or could not
+        // put back a slot written to meanwhile. Either way its files decide:
+        // they go once they are past the retention, like any slot's.
+        let expired = scan_entry_writes(dir)
+            .is_ok_and(|newest| newest.is_none_or(|time| aged_out(now, time, retention)));
+        if !expired {
+            return false;
+        }
         if let Err(error) = fs::remove_dir_all(dir) {
             tracing::debug!(
                 path = %dir.display(),
@@ -96,7 +103,7 @@ fn prune_slot(root: &Path, dir: &Path, my_pid: u32, now: SystemTime, retention: 
     let Some(last_write) = newest_write(dir) else {
         return false;
     };
-    if now.duration_since(last_write).unwrap_or_default() < retention {
+    if !aged_out(now, last_write, retention) {
         return false;
     }
     match remove_unclaimed_slot(root, dir, dir_pid, last_write) {
@@ -214,9 +221,15 @@ fn remove_unclaimed_slot(
         tracing::debug!(path = %dir.display(), %error, "kept a stopped instance's runtime directory: rename failed");
         return Ok(false);
     }
-    if newest_entry_write(&removing).is_some_and(|newest| newest > last_write) {
-        // Back where its instance expects it, unless one has recreated it.
-        let _ = fs::rename(&removing, dir);
+    // A scan that fails is no proof the slot is still old, so it goes back too.
+    if scan_entry_writes(&removing)
+        .map_or(true, |newest| newest.is_some_and(|time| time > last_write))
+    {
+        // Back where its instance expects it, unless one has recreated it, in
+        // which case a later cleanup finds it under its removal name.
+        if let Err(error) = fs::rename(&removing, dir) {
+            tracing::debug!(path = %removing.display(), %error, "could not put back a stopped instance's runtime directory written to meanwhile");
+        }
         return Ok(false);
     }
     fs::remove_dir_all(&removing)?;
@@ -307,32 +320,37 @@ fn owner_may_be_running(dir: &Path, dir_pid: u32) -> bool {
     )
 }
 
+fn aged_out(now: SystemTime, last_write: SystemTime, retention: Duration) -> bool {
+    now.duration_since(last_write).unwrap_or_default() >= retention
+}
+
 /// The latest modification time of the slot directory and the files in it and
-/// in its `logs/` directory, the places a running instance writes.
+/// in its `logs/` directory, the places a running instance writes. `None` when
+/// any of them cannot be read, since a missed recent write would make the slot
+/// look older than it is.
 fn newest_write(dir: &Path) -> Option<SystemTime> {
-    let own = fs::metadata(dir).and_then(|meta| meta.modified()).ok();
-    match (own, newest_entry_write(dir)) {
-        (Some(own), Some(entries)) => Some(own.max(entries)),
-        (own, entries) => own.or(entries),
-    }
+    let own = fs::metadata(dir).and_then(|meta| meta.modified()).ok()?;
+    let entries = scan_entry_writes(dir).ok()?;
+    Some(entries.map_or(own, |entries| own.max(entries)))
 }
 
 /// The newest modification time of the files in `dir` and `dir/logs`, leaving
-/// out `dir` itself, whose time a rename may change.
-fn newest_entry_write(dir: &Path) -> Option<SystemTime> {
-    let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
+/// out `dir` itself, whose time a rename may change: `Ok(None)` when there are
+/// none, an error when any of them cannot be read. A missing `logs/` is fine.
+fn scan_entry_writes(dir: &Path) -> io::Result<Option<SystemTime>> {
     let mut newest: Option<SystemTime> = None;
     for scanned in [dir.to_path_buf(), dir.join("logs")] {
-        let Ok(entries) = fs::read_dir(&scanned) else {
-            continue;
+        let entries = match fs::read_dir(&scanned) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && scanned != dir => continue,
+            Err(error) => return Err(error),
         };
-        for entry in entries.flatten() {
-            if let Some(time) = modified(&entry.path()) {
-                newest = Some(newest.map_or(time, |current| current.max(time)));
-            }
+        for entry in entries {
+            let time = fs::metadata(entry?.path())?.modified()?;
+            newest = Some(newest.map_or(time, |current| current.max(time)));
         }
     }
-    newest
+    Ok(newest)
 }
 
 #[cfg(test)]
@@ -599,9 +617,44 @@ mod tests {
         let file = root.path().join(format!("{REMOVING_PREFIX}notes"));
         fs::write(&file, "kept").unwrap();
 
-        prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION);
         assert!(!renamed.exists());
         assert!(file.exists());
+    }
+
+    /// A slot left under its removal name because putting it back failed may
+    /// hold logs written moments ago: they still get the retention.
+    #[test]
+    fn keeps_a_renamed_slot_written_within_the_retention() {
+        let root = tempdir().unwrap();
+        let renamed = root.path().join(format!("{REMOVING_PREFIX}{DEAD_PID}-1"));
+        fs::create_dir_all(renamed.join("logs")).unwrap();
+        fs::write(renamed.join("logs").join("skippy-native.log"), "recent").unwrap();
+
+        prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
+        assert!(renamed.join("logs").join("skippy-native.log").exists());
+    }
+
+    /// Only the native log is recent: the slot, its owner record and `logs/`
+    /// are past the retention, so the log's own time is what keeps the slot.
+    #[test]
+    fn a_recent_native_log_alone_keeps_the_slot() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("logs").join("skippy-native.log"))
+            .unwrap()
+            .set_modified(later - Duration::from_secs(60))
+            .unwrap();
+
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("logs").join("skippy-native.log").exists());
     }
 
     #[test]
