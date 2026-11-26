@@ -542,7 +542,10 @@ Opt-in mesh advertisement via Nostr relays (NIP-89, kind 31990):
 The completion check detects interrupted queries and the requested 100-event
 limit. It does not yet read NIP-11 relay limits: a relay silently clamping the
 request below 100 may still look complete. Absence inference is therefore not
-proof against a relay returning a smaller window.
+proof against a relay returning a smaller window. If that window omits a live
+listing on both watchdog checks, the watchdog can start an additional publisher
+for a mesh that is still live. Listings with the same mesh ID still appear as
+one mesh in grouped discovery results, but redundant publishing remains possible.
 
 ### Mesh transport ownership
 
