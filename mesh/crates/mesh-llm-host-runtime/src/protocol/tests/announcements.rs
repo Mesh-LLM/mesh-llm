@@ -107,7 +107,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -524,13 +524,13 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
     for missing in [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     ] {
         let features = [
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
         ]
@@ -570,7 +570,7 @@ fn proto_announcement_with_the_previous_generation_bundle_is_not_stage_compatibl
             major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
             features: [
                 skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-                "stage-generation-15",
+                "stage-generation-17",
                 skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
                 skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
             ]
@@ -599,7 +599,7 @@ fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
                 major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
                 features: vec![
                     skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V17
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V18
                         .to_string(),
                 ],
             },

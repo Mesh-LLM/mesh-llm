@@ -572,6 +572,18 @@ fn reject_legacy_serving_package(config: &StageConfig) -> Result<()> {
     Ok(())
 }
 
+/// Check the runtime options a stage config names (KV cache types, expert
+/// placement, checkpoint quantization, batch sizes) without opening a model.
+/// A host replacing a serving stage calls this first, so a config the runtime
+/// would refuse at startup is refused while the old stage still serves.
+pub fn validate_stage_runtime_config(config: &StageConfig) -> Result<()> {
+    reject_legacy_serving_package(config)?;
+    runtime_config_from_stage_config(config, &RuntimeLaunchOverrides::default())?
+        .validate()
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("runtime options for {}", config.stage_id))
+}
+
 pub(crate) fn runtime_config_from_stage_config(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
@@ -724,6 +736,7 @@ mod tests {
         RuntimeLaunchOverrides, RuntimeState, effective_lane_count, lane_count_for_workload,
         load_runtime_with_overrides, max_idle_sessions_from_stage_config,
         reject_legacy_serving_package, runtime_config_from_stage_config, runtime_from_loaded_model,
+        validate_stage_runtime_config,
     };
 
     /// Model-load bypass must not query native metadata through its absent handle.
@@ -1124,6 +1137,35 @@ mod tests {
             max_idle_sessions_from_stage_config(&five),
             "cache_idle_slots=2 and cache_idle_slots=5 must produce different idle-pool bounds"
         );
+    }
+
+    #[test]
+    fn stage_runtime_options_are_checked_without_opening_a_model() {
+        let config = fake_stage_config_with_cache_idle_slots(None);
+        validate_stage_runtime_config(&config).expect("valid runtime options");
+
+        let mut bad_cache = config.clone();
+        bad_cache.cache_type_k = "bogus".to_string();
+        let error = format!(
+            "{:#}",
+            validate_stage_runtime_config(&bad_cache).unwrap_err()
+        );
+        assert!(error.contains("unsupported KV cache type"), "{error}");
+
+        let mut bad_batch = config.clone();
+        bad_batch.n_batch = Some(0);
+        let error = format!(
+            "{:#}",
+            validate_stage_runtime_config(&bad_batch).unwrap_err()
+        );
+        assert!(
+            error.contains("n_batch must be greater than zero"),
+            "{error}"
+        );
+
+        let mut legacy = config;
+        legacy.load_mode = LoadMode::LayerPackage;
+        assert!(validate_stage_runtime_config(&legacy).is_err());
     }
 
     #[test]

@@ -191,6 +191,10 @@ pub(crate) struct StageInventoryRequest {
     pub(crate) manifest_sha256: String,
     pub(crate) expected_source_model_sha256: Option<String>,
     pub(crate) local_source_required: bool,
+    /// Sent by another node: its model and package names may not name a file
+    /// or package directory on this node. Never on the wire; set when a
+    /// request is decoded from it.
+    pub(crate) from_peer: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

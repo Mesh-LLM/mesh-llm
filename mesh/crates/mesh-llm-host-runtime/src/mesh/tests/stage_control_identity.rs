@@ -239,6 +239,7 @@ fn identity_test_inventory_request() -> crate::inference::skippy::StageInventory
         manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
         expected_source_model_sha256: None,
         local_source_required: true,
+        from_peer: false,
     }
 }
 

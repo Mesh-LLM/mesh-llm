@@ -210,6 +210,7 @@ fn stage_control_inventory_request_round_trips_proto() {
             manifest_sha256: "b".repeat(64),
             expected_source_model_sha256: Some(digest.clone()),
             local_source_required: true,
+            from_peer: false,
         },
     );
 
@@ -231,6 +232,8 @@ fn stage_control_inventory_request_round_trips_proto() {
         Some(digest.as_str())
     );
     assert!(inventory.local_source_required);
+    // Every request that crossed the wire came from a peer.
+    assert!(inventory.from_peer);
 }
 
 #[test]
@@ -248,7 +251,7 @@ fn strict_stage_status_never_exposes_worker_source_path() {
 }
 
 #[test]
-fn content_addressed_status_redacts_projector_at_wire_boundary() {
+fn status_carries_no_local_paths_across_the_wire() {
     let digest = "9".repeat(64);
     let mut load = test_stage_load_request();
     load.package_ref = format!("local-gguf://sha256/{digest}");
@@ -256,14 +259,21 @@ fn content_addressed_status_redacts_projector_at_wire_boundary() {
     load.local_source_required = true;
     let mut status =
         stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Ready);
-    // Simulate a stale internal/older-peer status that still contains a local
-    // projector path. Current wire conversion must fail closed.
+    status.bind_addr = "127.0.0.1:41000".to_string();
+    status.source_model_path = Some("/worker/private/model.gguf".to_string());
+    status.materialized_path = Some("/worker/private/stage".to_string());
     status.projector_path = Some("/worker/private/mmproj.gguf".to_string());
 
-    let proto = stage_status_to_proto(status);
-    assert!(proto.projector_path.is_none());
-    let decoded = stage_status_from_proto(proto).expect("strict status should decode");
-    assert!(decoded.projector_path.is_none());
+    let bytes = stage_status_to_proto(status).encode_to_vec();
+    let decoded = stage_status_from_proto(
+        skippy_protocol::proto::stage::StageStatus::decode(bytes.as_slice()).unwrap(),
+    )
+    .expect("strict status should decode");
+    // The loopback address stays: the coordinator checks its port.
+    assert_eq!(decoded.bind_addr, "127.0.0.1:41000");
+    assert_eq!(decoded.source_model_path, None);
+    assert_eq!(decoded.materialized_path, None);
+    assert_eq!(decoded.projector_path, None);
 }
 
 #[test]
@@ -345,6 +355,73 @@ fn strict_local_load_uses_distinct_fail_closed_proto_command() {
         decoded.admission,
         crate::inference::skippy::test_stage_admission(12, 24)
     );
+}
+
+#[test]
+fn a_load_carries_no_local_paths_or_peer_addresses_across_the_wire() {
+    let requester = make_test_endpoint_id(0x8d);
+    let upstream_node = make_test_endpoint_id(0x60);
+    let draft_source = skippy_serving::split_dflash::SplitDFlashDraftSource {
+        repo: "owner/draft".to_string(),
+        revision: "12".repeat(20),
+        file: "draft.gguf".to_string(),
+        sha256: "ab".repeat(32),
+        bytes: 11,
+    };
+    for local in [false, true] {
+        let mut load = test_stage_load_request();
+        load.coordinator_id = Some(requester);
+        load.bind_addr = "0.0.0.0:7000".to_string();
+        load.model_path = Some("/home/victim/private/model.gguf".to_string());
+        load.projector_path = Some("/home/victim/private/mmproj.gguf".to_string());
+        load.upstream = Some(crate::inference::skippy::StagePeerDescriptor {
+            persistent_lane_marker: false,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            endpoint: "10.0.0.5:9000".to_string(),
+            node_id: Some(upstream_node),
+        });
+        load.dflash = Some(skippy_serving::split_dflash::SplitDFlashStage {
+            target_layers: vec![1, 2],
+            draft_model_path: Some("/home/victim/private/draft.gguf".into()),
+            draft_source: Some(draft_source.clone()),
+            ..Default::default()
+        });
+        let request = if local {
+            let digest = "c".repeat(64);
+            load.package_ref = format!("local-gguf://sha256/{digest}");
+            load.source_model_sha256 = Some(digest);
+            load.local_source_required = true;
+            crate::inference::skippy::StageControlRequest::LoadLocal(load)
+        } else {
+            crate::inference::skippy::StageControlRequest::Load(load)
+        };
+
+        let bytes = stage_control_request_to_proto(requester, request)
+            .unwrap()
+            .encode_to_vec();
+        let frame =
+            skippy_protocol::proto::stage::StageControlRequest::decode(bytes.as_slice()).unwrap();
+        let decoded = match stage_control_request_from_proto(frame).unwrap() {
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => load,
+            _ => panic!("expected a stage load request"),
+        };
+
+        assert_eq!(decoded.bind_addr, "127.0.0.1:0", "local={local}");
+        assert!(
+            decoded.topology_stages.iter().all(|stage| stage.bind_addr.is_empty()),
+            "local={local}"
+        );
+        assert_eq!(decoded.model_path, None, "local={local}");
+        assert_eq!(decoded.projector_path, None, "local={local}");
+        let upstream = decoded.upstream.expect("the upstream stage survives");
+        assert_eq!(upstream.endpoint, "", "local={local}");
+        assert_eq!(upstream.node_id, Some(upstream_node), "local={local}");
+        let dflash = decoded.dflash.expect("the DFlash plan survives");
+        assert_eq!(dflash.draft_model_path, None, "local={local}");
+        assert_eq!(dflash.draft_source, Some(draft_source.clone()), "local={local}");
+    }
 }
 
 #[test]
@@ -470,7 +547,7 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
         inventory.source_model_kind,
         crate::inference::skippy::SourceModelKind::PlainGguf
     );
-    assert_eq!(inventory.source_model_path.as_deref(), Some("/model.gguf"));
+    assert_eq!(inventory.source_model_path, None);
     assert_eq!(inventory.available_ranges[0].layer_start, 0);
     assert_eq!(inventory.available_ranges[0].layer_end, 32);
 }
@@ -1011,6 +1088,7 @@ async fn peer_load_without_downloads_is_refused_before_execution() -> Result<()>
         .resolve_stage_control_request(
             Some(&tx),
             &mut request,
+            crate::mesh::stage_source::StageLoadOrigin::Peer,
             crate::inference::skippy::StageSourceFetch::LocalOnly,
         )
         .await
@@ -1044,5 +1122,72 @@ async fn a_stage_loaded_for_a_peer_is_capped_at_the_peers_tier() -> Result<()> {
         unreachable!("the request stays a local load");
     };
     assert_eq!(load.max_request_tier.as_deref(), Some("local"));
+    Ok(())
+}
+
+/// Resolve a peer Load naming a package directory whose manifest is `{}`,
+/// with the Load naming `manifest_sha256` (or the manifest's own hash when
+/// `None`). Returns the resolution result and whether the load executed.
+async fn resolve_peer_package_directory_load(
+    manifest_sha256: Option<&str>,
+) -> Result<(anyhow::Result<()>, bool)> {
+    use sha2::{Digest, Sha256};
+
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let executed_by_loop = Arc::clone(&executed);
+    tokio::spawn(async move {
+        while let Some(command) = rx.recv().await {
+            match command {
+                crate::inference::skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                }
+                crate::inference::skippy::StageControlCommand::Execute { .. } => {
+                    executed_by_loop.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+    });
+    let package = tempfile::tempdir()?;
+    std::fs::write(package.path().join("model-package.json"), b"{}")?;
+    let mut load = test_stage_load_request();
+    load.package_ref = package.path().to_string_lossy().into_owned();
+    load.manifest_sha256 = manifest_sha256
+        .map(str::to_string)
+        .unwrap_or_else(|| hex::encode(Sha256::digest(b"{}")));
+    let mut request = crate::inference::skippy::StageControlRequest::Load(load);
+
+    let result = node
+        .resolve_stage_control_request(
+            Some(&tx),
+            &mut request,
+            crate::mesh::stage_source::StageLoadOrigin::Peer,
+            crate::inference::skippy::StageSourceFetch::LocalOnly,
+        )
+        .await;
+    Ok((result, executed.load(std::sync::atomic::Ordering::SeqCst)))
+}
+
+#[tokio::test]
+async fn peer_load_naming_an_unverified_package_directory_is_refused_before_execution()
+-> Result<()> {
+    for manifest_sha256 in ["direct-gguf:1:model.gguf".to_string(), "0".repeat(64)] {
+        let (result, executed) =
+            resolve_peer_package_directory_load(Some(&manifest_sha256)).await?;
+        let error = result.expect_err("an unverified package directory must be refused");
+        assert!(
+            format!("{error:#}").contains("names a package directory on this node"),
+            "{error:#}"
+        );
+        assert!(!executed);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn peer_load_naming_a_package_directory_by_its_manifest_is_accepted() -> Result<()> {
+    let (result, _) = resolve_peer_package_directory_load(None).await?;
+    result.expect("a peer load naming a package directory by its manifest resolves");
     Ok(())
 }
