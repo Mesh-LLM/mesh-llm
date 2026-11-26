@@ -594,6 +594,115 @@ async fn recovered_connection_gossip_failure_does_not_publish_unadmitted_connect
     Ok(())
 }
 
+/// #3095 follow-up: a redial can fail while the peer reconnects on its own.
+/// The connection the peer opened keeps it in routing; any other removal
+/// reason still removes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_redial_keeps_a_peer_that_reconnected_meanwhile() -> Result<()> {
+    let requester = make_test_node(super::super::NodeRole::Worker).await?;
+    let remote = make_test_node(super::super::NodeRole::Worker).await?;
+    remote.start_accepting();
+    {
+        let mut peer = make_test_peer(remote.id(), Some(20), 8);
+        peer.addr = remote.endpoint_addr_for_advertisement();
+        requester.state.lock().await.peers.insert(remote.id(), peer);
+    }
+    let live = connect_mesh(
+        &requester.endpoint,
+        remote.endpoint_addr_for_advertisement(),
+    )
+    .await?;
+    requester
+        .state
+        .lock()
+        .await
+        .connections
+        .insert(remote.id(), live.clone());
+
+    for reason in [
+        super::super::MeshPeerRemovalReason::ReconnectFailed,
+        super::super::MeshPeerRemovalReason::RecoveredGossipFailed,
+    ] {
+        requester.remove_peer(remote.id(), reason).await;
+        assert!(
+            requester.state.lock().await.peers.contains_key(&remote.id()),
+            "{reason:?} must keep a peer with a live connection"
+        );
+    }
+
+    requester
+        .remove_peer(
+            remote.id(),
+            super::super::MeshPeerRemovalReason::HeartbeatUnreachable,
+        )
+        .await;
+    assert!(
+        !requester.state.lock().await.peers.contains_key(&remote.id()),
+        "other removal reasons are unchanged"
+    );
+    live.close(0u32.into(), b"test-done");
+    Ok(())
+}
+
+/// #3095 follow-up: both peers recover at once. Each dials the other, and
+/// each dial reaches the other side before its own recovered gossip
+/// completes. Neither side may close a connection the other keeps, so the
+/// pair still has a live connection on both sides.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn simultaneous_recoveries_keep_a_live_connection_on_both_sides() -> Result<()> {
+    let a = make_test_node(super::super::NodeRole::Worker).await?;
+    let b = make_test_node(super::super::NodeRole::Worker).await?;
+    let trusted_signer = test_release_signer_key_id(9);
+    let policy = requirement_policy(&trusted_signer);
+    configure_requirement_node(&a, &policy, Some(&trusted_signer)).await?;
+    configure_requirement_node(&b, &policy, Some(&trusted_signer)).await?;
+    a.start_accepting();
+    b.start_accepting();
+    for (node, other) in [(&a, &b), (&b, &a)] {
+        let mut peer = make_test_peer(other.id(), Some(20), 8);
+        peer.addr = other.endpoint_addr_for_advertisement();
+        node.state.lock().await.peers.insert(other.id(), peer);
+    }
+
+    // Each side's dial, accepted and cached by the other before either
+    // recovered gossip runs.
+    let x = connect_mesh(&a.endpoint, b.endpoint_addr_for_advertisement()).await?;
+    let y = connect_mesh(&b.endpoint, a.endpoint_addr_for_advertisement()).await?;
+    for (node, other) in [(&a, &b), (&b, &a)] {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !node.state.lock().await.connections.contains_key(&other.id()) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+    }
+
+    tokio::join!(
+        a.complete_recovered_connection(b.id(), x.clone()),
+        b.complete_recovered_connection(a.id(), y.clone()),
+    );
+
+    let held_by_a = a.state.lock().await.connections.get(&b.id()).cloned();
+    let held_by_b = b.state.lock().await.connections.get(&a.id()).cloned();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    for (dial, conn) in [("a's dial", &x), ("b's dial", &y)] {
+        assert!(
+            conn.close_reason().is_none(),
+            "{dial} was closed: {:?}",
+            conn.close_reason()
+        );
+    }
+    for (who, held) in [("a", held_by_a), ("b", held_by_b)] {
+        let held = held.unwrap_or_else(|| panic!("{who} holds no connection"));
+        assert!(
+            held.close_reason().is_none(),
+            "{who} holds a connection that was closed: {:?}",
+            held.close_reason()
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connection_failure_cleanup_removes_only_matching_connection() -> Result<()> {
     let requester = make_test_node(super::super::NodeRole::Worker).await?;

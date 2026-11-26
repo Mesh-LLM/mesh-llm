@@ -38,6 +38,13 @@ pub(crate) enum MeshPeerRemovalReason {
 }
 
 impl MeshPeerRemovalReason {
+    /// A removal that comes from our own dial or handshake to the peer
+    /// failing. A live connection the peer opened meanwhile supersedes it, so
+    /// such a removal keeps the peer.
+    pub(crate) const fn yields_to_live_connection(self) -> bool {
+        matches!(self, Self::ReconnectFailed | Self::RecoveredGossipFailed)
+    }
+
     pub(crate) const fn reason_code(self) -> &'static str {
         match self {
             Self::StaleDirectAndTransitive => "stale_direct_and_transitive",
