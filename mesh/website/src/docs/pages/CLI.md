@@ -352,21 +352,19 @@ speculative decoding plan. CLI values have highest precedence; fields you omit
 continue to come from the selected model, defaults, or model package.
 
 ```bash
-mesh-llm serve meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M --split --no-draft \
+mesh-llm serve --model meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M --split --no-draft \
   --speculative-strategy mtp \
   --speculative-ngram-min 2 \
   --speculative-ngram-max 4 \
   --speculative-ngram-max-proposal-tokens 32 \
-  --speculative-extension-initial-tokens 4 \
   --speculative-extension-max-tokens 32 \
   --speculative-verify-window-pipeline-depth 8
 ```
 
-- `--speculative-strategy <STRATEGY>`: select `auto`, `disabled`, `mtp`, or a strategy declared by the model package. N-gram is a request-local extension of native MTP, not a standalone strategy.
+- `--speculative-strategy <STRATEGY>`: select `auto`, `disabled`, `mtp`, `ngram-cache`, `ngram-suffix`, `dflash`, or a strategy declared by the model package.
 - `--speculative-ngram-min <N>` / `--speculative-ngram-max <N>`: set the request-local cache history match bounds used to extend native MTP.
 - `--speculative-ngram-max-proposal-tokens <N>`: cap the N-gram continuation proposed at once.
-- `--speculative-extension-initial-tokens <N>` / `--speculative-extension-max-tokens <N>`: set the adaptive N-gram tail bounds when extending native MTP.
-- `--speculative-extension-tail-backoff-proposals <N>`: pause extension attempts after a rejected N-gram tail.
+- `--speculative-extension-max-tokens <N>`: set the adaptive N-gram tail bound when extending native MTP.
 - `--speculative-native-mtp-reject-cooldown-tokens <N>`: set the generated-token cooldown after native MTP rejection.
 - `--speculative-native-mtp-suppress-cooldown-drafts`: suppress native drafts during cooldown; `--speculative-native-mtp-allow-cooldown-drafts` explicitly disables a configured suppression policy.
 - `--speculative-native-mtp-suppress-cooldown-draft-limit <N>`: cap the native drafts suppressed by one cooldown.
