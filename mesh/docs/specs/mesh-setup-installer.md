@@ -96,7 +96,8 @@ a set that could not be read, are not recorded and are tried again by the next
 setup run), after the runtime and before the service, so a node the service
 starts finds the plugins. When setup also installs the service on Linux or macOS,
 the store is the one that service reads: `MESH_LLM_PLUGIN_DIR` from its
-`service.env`, otherwise the default store, not the invoking shell's. systemd
+`service.env` (a relative value under the home directory, where the service
+starts), otherwise the default store, not the invoking shell's. systemd
 reads `$` literally while the macOS runner's bash expands it, so a value with
 variables, a leading `~`, backslashes, mixed quoting or other shell syntax is reported as a plugin warning rather
 than guessed, and the retry command names the service's store with

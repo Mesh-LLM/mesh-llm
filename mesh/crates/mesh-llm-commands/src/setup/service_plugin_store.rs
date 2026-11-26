@@ -28,9 +28,13 @@ pub(crate) fn service_plugin_store(context: &ServiceInstallContext) -> Result<Op
             return Err(error).with_context(|| format!("read {}", env_file.display()));
         }
     };
-    Ok(Some(configured.unwrap_or_else(|| {
-        default_plugin_store(&context.home_dir)
-    })))
+    // systemd (`WorkingDirectory=%h`) and launchd (`WorkingDirectory`) start
+    // the node in the home directory, so a relative value names a store there,
+    // wherever setup itself runs.
+    Ok(Some(match configured {
+        Some(path) => context.home_dir.join(path),
+        None => default_plugin_store(&context.home_dir),
+    }))
 }
 
 /// What the node uses when nothing sets `MESH_LLM_PLUGIN_DIR`, as
@@ -170,6 +174,22 @@ mod tests {
         // An empty value, as from a line that clears it, is unset.
         write_env(&context, "MESH_LLM_PLUGIN_DIR=/old\nMESH_LLM_PLUGIN_DIR=\n");
         assert_eq!(service_plugin_store(&context).unwrap(), default);
+    }
+
+    /// The service runs in the home directory, so a relative value is a
+    /// store there, not under the directory setup was started from.
+    #[test]
+    fn a_relative_value_names_a_store_in_the_service_home() {
+        let temp = tempfile::tempdir().unwrap();
+        for platform in [SetupPlatform::Linux, SetupPlatform::MacOs] {
+            let context = context(platform, temp.path());
+            write_env(&context, "MESH_LLM_PLUGIN_DIR=plugins\n");
+            assert_eq!(
+                service_plugin_store(&context).unwrap(),
+                Some(temp.path().join("home/plugins")),
+                "{platform:?}"
+            );
+        }
     }
 
     #[test]
