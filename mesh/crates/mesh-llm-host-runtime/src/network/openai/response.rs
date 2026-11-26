@@ -30,6 +30,7 @@ pub(crate) use send::{
     append_safe_header, is_valid_header_name, send_400, send_400_observed, send_409_observed,
     send_503, send_503_observed, send_error, send_error_observed,
     send_json_with_status_and_headers_observed, send_model_not_ready_observed,
+    send_route_not_found_observed,
 };
 pub(crate) use served_model_headers::ServedModelHeaders;
 

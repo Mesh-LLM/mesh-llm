@@ -29,6 +29,7 @@ pub(crate) use super::response::{
     PeerCapsuleIdSink, ServedByNodeIdSink, append_safe_header, is_valid_header_name,
     send_400_observed, send_409_observed, send_503_observed, send_error_observed,
     send_json_with_status_and_headers_observed, send_model_not_ready_observed,
+    send_route_not_found_observed,
 };
 pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
 
@@ -391,6 +392,24 @@ async fn handle_mesh_control_request(
             super::model_discovery::respond(tcp_stream, node, request, lifecycle.route_observer())
                 .await;
         lifecycle.terminal(outcome.terminal_outcome());
+        return None;
+    }
+
+    if !super::workload_routing::is_openai_ingress_backend_path(
+        &request.method,
+        &request.client_path,
+    ) {
+        let outcome = response_outcome(
+            404,
+            send_route_not_found_observed(
+                tcp_stream,
+                "route not found on OpenAI ingress",
+                lifecycle.route_observer(),
+            )
+            .await,
+        );
+        lifecycle.terminal(outcome.terminal_outcome());
+        release_request_objects(node, &request.request_object_request_ids).await;
         return None;
     }
 
