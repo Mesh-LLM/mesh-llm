@@ -450,7 +450,7 @@ impl InferenceBackend for HookedInferenceBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationResponse> {
         request.request_class = context.request_class();
-        let exchange_id = uuid::Uuid::new_v4().to_string();
+        let exchange_id = crate::http_exchange::dispatch_exchange_id();
         // Armed immediately after minting the exchange id — before
         // `before_chat_completion` and `on_effective_chat_completion` run —
         // so a future dropped during either of those pre-backend awaits
@@ -528,6 +528,11 @@ impl InferenceBackend for HookedInferenceBackend {
                 );
             }
         }
+        // The response names its exchange (`X-Exchange-Id`, the request log),
+        // as a streamed one does through `publish_exchange_id`.
+        if let Ok(response) = &mut result {
+            response.exchange_id = Some(exchange_id.clone());
+        }
         let error_message;
         let terminal = match &result {
             Ok(response) => ChatCompletionOutcome::Success { response },
@@ -549,7 +554,7 @@ impl InferenceBackend for HookedInferenceBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationEventStream> {
         request.request_class = context.request_class();
-        let exchange_id = uuid::Uuid::new_v4().to_string();
+        let exchange_id = crate::http_exchange::dispatch_exchange_id();
         context.publish_exchange_id(exchange_id.clone());
         // Same admission-time arming as `chat_completion_with_context` above
         // — see its comment. A future dropped while `before_chat_completion`

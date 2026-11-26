@@ -16,11 +16,11 @@ use tokio::net::{TcpListener, TcpStream};
 const MODEL: &str = "qwen";
 
 /// Wait for a recorded message the plugin receives asynchronously.
-async fn wait_for(
+async fn wait_for<T: Clone>(
     what: &str,
-    log: &std::sync::Mutex<Vec<Value>>,
-    ready: impl Fn(&[Value]) -> bool,
-) -> Vec<Value> {
+    log: &std::sync::Mutex<Vec<T>>,
+    ready: impl Fn(&[T]) -> bool,
+) -> Vec<T> {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             {
@@ -224,6 +224,20 @@ async fn peer_failover_joins_lifecycle_callbacks_and_channel_events_on_one_id() 
 /// router. With `hang`, a streamed completion sends one delta and then never
 /// finishes, so a test can drop the client mid-stream.
 async fn typed_server(probe: &AttemptProbe, hang: bool) -> (String, tokio::task::JoinHandle<()>) {
+    let (base, server, _) = typed_server_logged(probe, hang).await;
+    (base, server)
+}
+
+/// The exchange ids the frontend's request log recorded: what a persisted
+/// request summary is keyed by.
+type LoggedExchangeIds = Arc<std::sync::Mutex<Vec<String>>>;
+
+/// [`typed_server`] with request logging on: the returned list collects every
+/// exchange id the frontend's lifecycle events carry.
+async fn typed_server_logged(
+    probe: &AttemptProbe,
+    hang: bool,
+) -> (String, tokio::task::JoinHandle<()>, LoggedExchangeIds) {
     use skippy_inference_api::{
         HookedInferenceBackend, InferenceBackend, InferenceRequestContext, InferenceResult,
         ModelObject, Usage, generation::GenerationEvent, generation::GenerationEventStream,
@@ -275,14 +289,32 @@ async fn typed_server(probe: &AttemptProbe, hang: bool) -> (String, tokio::task:
         Arc::new(TypedBackend { hang }),
         hooks,
     ));
+    struct Log(LoggedExchangeIds);
+    impl skippy_inference_api::InferenceLifecycleObserver for Log {
+        fn observe(&self, event: &skippy_inference_api::InferenceLifecycleEvent) {
+            use skippy_inference_api::InferenceLifecycleEvent as Event;
+            let id = match event {
+                Event::ExchangeIdentified { exchange_id, .. } => Some(exchange_id.clone()),
+                Event::NonStreamTerminal { exchange_id, .. } => exchange_id.clone(),
+                _ => None,
+            };
+            self.0.lock().unwrap().extend(id);
+        }
+    }
+    let logged = LoggedExchangeIds::default();
+    let config = skippy_inference_api::InferenceFrontendConfig::default()
+        .with_lifecycle_observer(Arc::new(Log(logged.clone())));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
-        axum::serve(listener, skippy_inference_api::router(backend))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            skippy_inference_api::router_with_config(backend, config),
+        )
+        .await
+        .unwrap();
     });
-    (base, server)
+    (base, server, logged)
 }
 
 /// Every lifecycle callback and both channel events of one typed exchange
@@ -310,8 +342,17 @@ fn assert_one_typed_exchange(lifecycle: &[Value], channel: &[Value], context: &s
             "{context} request_id: {event}"
         );
     }
+    // Only a completed exchange names a served dispatch.
     let finished = phase(lifecycle, "exchange_finished")[0];
-    assert_eq!(finished["served_exchange_id"], id.as_str(), "{context}");
+    let served = if finished["execution_outcome"] == "completed" {
+        Value::from(id.as_str())
+    } else {
+        Value::Null
+    };
+    assert_eq!(
+        finished["served_exchange_id"], served,
+        "{context}: {finished}"
+    );
     assert_eq!(
         channel.len(),
         2,
@@ -334,22 +375,37 @@ fn assert_one_typed_exchange(lifecycle: &[Value], channel: &[Value], context: &s
 #[tokio::test]
 async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
     let (probe, _) = attempt_policy_probe(None, false).await;
-    let (base, server) = typed_server(&probe, false).await;
+    let (base, server, logged) = typed_server_logged(&probe, false).await;
     let mut ids = Vec::new();
-    for stream in [true, false] {
+    for (path, stream) in [
+        ("/v1/chat/completions", true),
+        ("/v1/chat/completions", false),
+        ("/v1/responses", true),
+        ("/v1/responses", false),
+    ] {
         probe.lifecycle.lock().unwrap().clear();
         probe.channel.lock().unwrap().clear();
-        let response = reqwest::Client::new()
-            .post(format!("{base}/v1/chat/completions"))
-            .json(&serde_json::json!({
+        logged.lock().unwrap().clear();
+        let body = if path == "/v1/responses" {
+            serde_json::json!({"model": MODEL, "input": "hi", "stream": stream})
+        } else {
+            serde_json::json!({
                 "model": MODEL,
                 "messages": [{"role": "user", "content": "hi"}],
                 "stream": stream,
-            }))
+            })
+        };
+        let response = reqwest::Client::new()
+            .post(format!("{base}{path}"))
+            .json(&body)
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.status(), reqwest::StatusCode::OK, "{path}");
+        let header = response
+            .headers()
+            .get("x-exchange-id")
+            .map(|value| value.to_str().unwrap().to_owned());
         let _ = response.bytes().await.unwrap();
 
         let lifecycle = wait_for("the terminal callback", &probe.lifecycle, |events| {
@@ -360,13 +416,21 @@ async fn typed_chat_joins_lifecycle_callbacks_and_channel_events_on_one_id() {
             events.iter().any(|e| e["phase"] == "terminal")
         })
         .await;
-        ids.push(assert_one_typed_exchange(
-            &lifecycle,
-            &channel,
-            &format!("stream={stream}"),
-        ));
+        let context = format!("{path} stream={stream}");
+        let id = assert_one_typed_exchange(&lifecycle, &channel, &context);
+        // The response header and the request log name the exchange as the
+        // channel does, so a receipt keyed by the channel id finds both.
+        assert_eq!(header.as_deref(), Some(id.as_str()), "{context} header");
+        let logged = wait_for("the logged exchange id", &logged, |ids| !ids.is_empty()).await;
+        assert!(
+            logged.iter().all(|logged| *logged == id),
+            "{context} request log: {logged:?}"
+        );
+        ids.push(id);
     }
-    assert_ne!(ids[0], ids[1]);
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 4, "each request is its own exchange");
     server.abort();
 }
 

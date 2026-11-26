@@ -140,20 +140,6 @@ fn project_event(mut event: Value, grant: &OpenAiExchangeGrant, name: &str) -> V
 }
 
 impl PluginManager {
-    /// The exchange id of the session `observation_id` names: what the
-    /// plugin's lifecycle callbacks carry as `exchange_id`.
-    pub(crate) fn session_exchange_id(&self, observation_id: &str) -> Option<String> {
-        let state = self
-            .inner
-            .exchange_observations
-            .0
-            .lock()
-            .unwrap()
-            .get(observation_id)
-            .and_then(Weak::upgrade)?;
-        let state = state.lock().unwrap();
-        Some(state.exchange_id.clone())
-    }
     pub(crate) fn record_typed_execution_outcome(&self, backend_exchange_id: &str, outcome: &str) {
         let state = self
             .inner
@@ -320,8 +306,9 @@ impl PluginManager {
             state.incomplete = true;
             state.evidence_unavailable = true;
         }
-        // A denied attempt served nothing, so it never names the served dispatch.
-        if !result.denied {
+        // Only an admitted attempt can be the one that served: a denied one or
+        // one a required hook failed (a 503 before dispatch) never ran.
+        if result.error_status().is_none() {
             state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
         }
         state.selected = Some(event);
@@ -685,8 +672,9 @@ struct EmissionState {
     /// The request id the session's lifecycle callbacks carry; every event of
     /// the exchange, `backend_selected` included, reports this one.
     request_id: String,
-    /// Exchange id of the dispatch that served: the latest admitted (not
-    /// denied) `backend_selected` event's. Unlike `attempt_history`, never capped.
+    /// Exchange id of the latest admitted `backend_selected` dispatch: the one
+    /// that served when the exchange completed (the terminal reports it only
+    /// then). Unlike `attempt_history`, never capped.
     served_exchange_id: Option<String>,
     endpoint: String,
     headers: Vec<(String, String)>,
@@ -930,7 +918,16 @@ impl ExchangeSession {
         // `exchange_id` stays the session's (response streams are keyed by it);
         // this names the dispatch that served, which `attempt_history` may
         // have dropped past its cap.
-        event["served_exchange_id"] = json!(emission.served_exchange_id);
+        // An admitted dispatch served only if the exchange completed: routing
+        // can still exhaust its candidates after admission. Every selection,
+        // failed ones included, stays on `attempt_history`.
+        let execution_outcome = exchange_terminal_outcome::resolve(&emission, outcome);
+        event["served_exchange_id"] = json!(
+            emission
+                .served_exchange_id
+                .as_deref()
+                .filter(|_| execution_outcome == "completed")
+        );
         event["any_response_bytes_emitted"] = json!(
             emission
                 .commitment

@@ -118,10 +118,15 @@ Rust authors can call `OpenAiExchangeEvent::parse(&event)` inside the existing
 raw JSON callback. The typed view preserves `request_id` (the request's own id,
 kept apart from the node-internal `exchange_id`), `served_exchange_id` (on
 `exchange_finished`, the exchange id of the dispatch that served, which differs
-from `exchange_id` after a model re-pick), `observation_id` and the optional
+from `exchange_id` after a model re-pick; absent when the exchange did not
+complete, since then no dispatch served it), `observation_id` and the optional
 boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
 field means unknown, rather than false. The old `evidence_completeness` string
 field is retained for SDK source compatibility but is not emitted by v1 hosts.
+
+On the typed frontend the `X-Exchange-Id` response header and the request log
+carry the same `exchange_id` as these events, so a receipt keyed by the
+channel's id finds the matching request.
 The raw payload remains available for additive fields outside the typed view.
 
 Final client cancellation, timeout, or transport failure takes precedence over

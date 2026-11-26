@@ -36,7 +36,8 @@ impl StageOpenAiBackend {
         let hooks = self.hook_policy.clone().filter(|hooks| {
             chat_skippy_hooks_enabled(&request) || hooks.requires_exchange_lifecycle()
         });
-        let exchange_id = observation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let exchange_id = observation_id
+            .unwrap_or_else(skippy_inference_api::http_exchange::dispatch_exchange_id);
         let mut guard = hooks
             .as_ref()
             .map(|hooks| TerminalGuard::new(hooks.clone(), request.clone(), exchange_id.clone()));
@@ -166,7 +167,7 @@ impl StageOpenAiBackend {
         let hooks = self.hook_policy.clone().filter(|hooks| {
             chat_skippy_hooks_enabled(&request) || hooks.requires_exchange_lifecycle()
         });
-        let exchange_id = uuid::Uuid::new_v4().to_string();
+        let exchange_id = skippy_inference_api::http_exchange::dispatch_exchange_id();
         let mut guard = hooks
             .as_ref()
             .map(|hooks| TerminalGuard::new(hooks.clone(), request.clone(), exchange_id.clone()));

@@ -573,6 +573,106 @@ async fn terminal_keeps_the_sessions_exchange_id_after_a_repick() {
     assert_eq!(terminal["served_exchange_id"], "dispatch-1");
 }
 
+/// A required hook that fails at `backend_selected` (a 503 before dispatch,
+/// not a deny) leaves no served dispatch either.
+#[tokio::test]
+async fn failed_required_hook_does_not_become_the_served_dispatch() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, true).await;
+    let (session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    let mut selected = request_event(
+        "dispatch-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    selected["target"] = json!("peer-1");
+    let result = manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    assert!(!result.denied);
+    assert!(result.error_status().is_some(), "the required hook failed");
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    assert!(state.lock().unwrap().served_exchange_id.is_none());
+}
+
+/// An admitted dispatch that did not complete (routing exhausted its
+/// candidates after admission) is not the served one: the terminal names no
+/// served dispatch, and the selection stays on `attempt_history`.
+#[tokio::test]
+async fn terminal_names_no_served_dispatch_when_the_exchange_failed() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (mut session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    let mut selected = request_event(
+        "dispatch-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    selected["target"] = json!("peer-1");
+    manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    session.observer().finish(commit_wire_bytes(b"error"));
+    session.finish("backend_error").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["execution_outcome"], "backend_error");
+    assert!(terminal["served_exchange_id"].is_null(), "{terminal}");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-1");
+}
+
 /// A late winning dispatch past the `attempt_history` cap still names itself on
 /// the terminal, and every `backend_selected` reports the session's request id
 /// rather than the dispatch's.

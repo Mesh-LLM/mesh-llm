@@ -24,11 +24,26 @@ pub struct HttpExchangeAdmission {
     pub observer: Option<Arc<dyn WireBytesObserver>>,
     pub denial: Option<InferenceError>,
     pub observation_id: Option<String>,
+    /// The exchange id the host named for this HTTP exchange. A typed dispatch
+    /// inside it takes this id ([`dispatch_exchange_id`]), so the
+    /// `X-Exchange-Id` response header, the request log and the host's own
+    /// exchange events all name the exchange the same way.
+    pub exchange_id: Option<String>,
     /// Bounded host-validated metadata supplied before response headers commit.
     pub response_headers: Vec<(String, String)>,
 }
 
 tokio::task_local! { static HTTP_EXCHANGE_OBSERVATION: String; }
+tokio::task_local! { static HTTP_EXCHANGE_ID: String; }
+
+/// The id for a typed dispatch's exchange: the one the host named at HTTP
+/// admission ([`HttpExchangeAdmission::exchange_id`]) when there is one, a
+/// fresh UUID otherwise.
+pub fn dispatch_exchange_id() -> String {
+    HTTP_EXCHANGE_ID
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+}
 
 /// Exact host-owned observation correlated with this typed backend dispatch.
 pub fn current_http_exchange_observation_id() -> Option<String> {
@@ -103,6 +118,12 @@ pub(crate) async fn http_exchange_middleware(
         Some(error) => error.into_response(),
         None => {
             let call = next.run(Request::from_parts(parts, Body::from(body)));
+            let call = async move {
+                match admission.exchange_id {
+                    Some(id) => HTTP_EXCHANGE_ID.scope(id, call).await,
+                    None => call.await,
+                }
+            };
             match admission.observation_id {
                 Some(id) => HTTP_EXCHANGE_OBSERVATION.scope(id, call).await,
                 None => call.await,

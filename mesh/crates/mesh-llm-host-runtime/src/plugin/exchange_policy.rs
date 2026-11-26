@@ -13,37 +13,16 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub(crate) struct NodeExchangePolicy {
     node: crate::mesh::Node,
-    /// Typed dispatches inside a session: backend-minted id to the session's
-    /// id, resolved at admission and dropped by the dispatch's terminal. The
-    /// session can already be gone when a cancelled stream's terminal runs, so
-    /// the terminal must not look the session up.
-    session_ids: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 impl NodeExchangePolicy {
     pub(crate) fn new(node: crate::mesh::Node) -> Arc<Self> {
-        Arc::new(Self {
-            node,
-            session_ids: Arc::default(),
-        })
+        Arc::new(Self { node })
     }
     async fn legacy_bridge(&self) -> Option<super::openai_exchange::OpenAiExchangeHookBridge> {
         self.node
             .plugin_manager()
             .await
             .map(|manager| super::openai_exchange::OpenAiExchangeHookBridge::new(Arc::new(manager)))
-    }
-    /// The id a typed dispatch's `openai.exchange.v1` events carry: the one its
-    /// plugin lifecycle callbacks carry (the session's), so a plugin joins the
-    /// two. A backend-minted id names the dispatch only outside a session.
-    /// `last` is the dispatch's terminal: the mapping ends with it.
-    fn channel_exchange_id(&self, backend_exchange_id: &str, last: bool) -> String {
-        let mut ids = self.session_ids.lock().unwrap();
-        let session_id = if last {
-            ids.remove(backend_exchange_id)
-        } else {
-            ids.get(backend_exchange_id).cloned()
-        };
-        session_id.unwrap_or_else(|| backend_exchange_id.to_owned())
     }
     async fn admit_typed_request(
         &self,
@@ -89,14 +68,6 @@ impl NodeExchangePolicy {
                 // the session fills in once the typed one is dropped.
                 Some(id) => {
                     event.as_object_mut().unwrap().remove("exchange_id");
-                    // Before the plugin is asked: a request cancelled while it
-                    // answers still runs the dispatch's terminal.
-                    if let Some(session_id) = manager.session_exchange_id(&id) {
-                        self.session_ids
-                            .lock()
-                            .unwrap()
-                            .insert(exchange_id.to_owned(), session_id);
-                    }
                     manager.selected_exchange_phase(&id, event).await
                 }
                 None => manager.exchange_phase(event).await,
@@ -165,11 +136,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         route: &ChatExchangeRoute,
     ) {
         if let Some(bridge) = self.legacy_bridge().await {
-            let route = ChatExchangeRoute {
-                exchange_id: self.channel_exchange_id(&route.exchange_id, false),
-                ..route.clone()
-            };
-            bridge.on_effective_chat_completion(request, &route).await;
+            bridge.on_effective_chat_completion(request, route).await;
         }
     }
     async fn on_chat_completion_terminal(
@@ -178,9 +145,6 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
-        // Looked up first and dropped last: a terminal cancelled part-way is
-        // run again by its guard, and that run must find the same id.
-        let exchange_id = self.channel_exchange_id(id, false);
         if let Some(manager) = self.node.plugin_manager().await {
             if let ChatCompletionOutcome::Success { response } = outcome {
                 manager.record_typed_usage(id, json!(response.usage));
@@ -200,13 +164,11 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         }
         if let Some(bridge) = self.legacy_bridge().await {
             bridge
-                .on_chat_completion_terminal(request, &exchange_id, outcome)
+                .on_chat_completion_terminal(request, id, outcome)
                 .await;
         }
-        self.channel_exchange_id(id, true);
     }
     async fn on_completion_terminal(&self, exchange_id: &str, outcome: &str) {
-        self.channel_exchange_id(exchange_id, true);
         if let Some(manager) = self.node.plugin_manager().await {
             manager.record_typed_execution_outcome(exchange_id, outcome);
         }
@@ -265,9 +227,13 @@ impl HttpExchangePolicy for NodeExchangePolicy {
             })
             .collect();
         // The exchange id is node-made, like the other paths'; the client's
-        // request id stays its own field.
+        // request id stays its own field. The typed dispatch inside this
+        // exchange takes the same id (`HttpExchangeAdmission::exchange_id`), so
+        // its `X-Exchange-Id` header, the request log and the channel events
+        // all name it alike.
+        let exchange_id = crate::network::openai::request_parse::new_node_exchange_id();
         let mut event = super::request_event(
-            crate::network::openai::request_parse::new_node_exchange_id(),
+            exchange_id.clone(),
             endpoint,
             method,
             path,
@@ -300,6 +266,7 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         });
         HttpExchangeAdmission {
             observation_id: Some(session.observation_id().to_owned()),
+            exchange_id: Some(exchange_id),
             observer: Some(TypedEmission::new(session)),
             denial,
             response_headers: result.headers,
