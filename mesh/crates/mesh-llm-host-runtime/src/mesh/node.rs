@@ -277,6 +277,8 @@ pub(crate) struct PeerDownReport {
     pub(crate) peer_addr: Option<EndpointAddr>,
     pub(crate) recently_seen: bool,
     pub(crate) reporter_cooled: bool,
+    /// The target is in the peer table or has a connection.
+    pub(crate) known_target: bool,
 }
 
 pub(crate) fn peer_down_endpoint_id(frame: &crate::proto::node::PeerDown) -> Option<EndpointId> {

@@ -196,25 +196,47 @@ fn peer_down_ignored_when_recently_seen_direct() {
 #[test]
 fn peer_down_reporter_cooldown_suppresses_probe_before_recently_seen_check() {
     assert_eq!(
-        peer_down_report_disposition(true, false),
+        peer_down_report_disposition(true, false, true),
         PeerDownReportDisposition::SuppressReporterCooldown,
         "cooldown must suppress repeated false reports even for stale/not-recently-seen peers"
     );
     assert_eq!(
-        peer_down_report_disposition(true, true),
+        peer_down_report_disposition(true, true, true),
         PeerDownReportDisposition::SuppressReporterCooldown,
         "cooldown remains the cheapest rejection path when direct proof-of-life also exists"
     );
     assert_eq!(
-        peer_down_report_disposition(false, true),
+        peer_down_report_disposition(false, true, true),
         PeerDownReportDisposition::RejectRecentlySeen,
         "recent direct gossip should reject first-time false reports without probing"
     );
     assert_eq!(
-        peer_down_report_disposition(false, false),
+        peer_down_report_disposition(false, false, true),
         PeerDownReportDisposition::ProbeReachability,
         "only uncooldowned stale reports should trigger open_bi/connect_mesh probing"
     );
+    assert_eq!(
+        peer_down_report_disposition(false, false, false),
+        PeerDownReportDisposition::IgnoreUnknownTarget,
+        "a report about a peer this node never knew must not reach the probe"
+    );
+}
+
+/// The probe confirms any target with no connection and no address, so a
+/// report about an endpoint this node never knew used to mark it dead and
+/// departed, hiding it from relayed discovery for the dead-peer TTL.
+#[tokio::test]
+async fn peer_down_about_an_unknown_peer_marks_nothing() {
+    let node = make_test_node(super::NodeRole::Worker).await.unwrap();
+    let reporter = EndpointId::from(SecretKey::from_bytes(&[0xC0; 32]).public());
+    let unknown = EndpointId::from(SecretKey::from_bytes(&[0xC1; 32]).public());
+
+    let report = node.peer_down_report(reporter, unknown).await;
+    node.apply_peer_down_report(reporter, unknown, report).await;
+
+    let state = node.state.lock().await;
+    assert!(!state.dead_peers.contains_key(&unknown));
+    assert!(!state.departed_peers.contains_key(&unknown));
 }
 
 /// PeerDown for a peer whose last_seen is stale and has no connection
