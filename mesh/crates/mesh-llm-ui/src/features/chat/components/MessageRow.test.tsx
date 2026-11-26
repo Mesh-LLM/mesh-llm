@@ -611,3 +611,25 @@ describe('MessageRow copy button', () => {
     expect(await screen.findByRole('button', { name: 'Copy message failed' })).toBeInTheDocument()
   })
 })
+
+describe('MessageRow copy placement', () => {
+  it('renders the copy affordance below the answer body and above the stats bar', () => {
+    render(
+      <MessageRow messageRole="assistant" body="The mesh has 3 nodes online." tokens="120 tok" timestamp="12:11" />
+    )
+    const copyRow = screen.getByTestId('message-copy-row')
+    expect(screen.getByText('The mesh has 3 nodes online.').compareDocumentPosition(copyRow)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+    const stats = screen.getByText('120')
+    expect(copyRow.compareDocumentPosition(stats)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('renders the copy affordance below a user message body', () => {
+    render(<MessageRow messageRole="user" body="Summarize this mesh status" timestamp="12:10" />)
+    const copyRow = screen.getByTestId('message-copy-row')
+    expect(screen.getByText('Summarize this mesh status').compareDocumentPosition(copyRow)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+  })
+})

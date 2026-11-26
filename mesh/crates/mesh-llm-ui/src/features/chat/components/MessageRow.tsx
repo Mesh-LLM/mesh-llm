@@ -91,7 +91,7 @@ function CopyMessageButton({ text }: { text: string }) {
       type="button"
       aria-label={label}
       title={label}
-      className="ml-auto inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] p-0.5 text-fg-faint opacity-0 outline-none transition-[opacity,color] hover:text-fg-dim focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] p-0.5 text-fg-faint opacity-0 outline-none transition-[opacity,color] hover:text-fg-dim focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       onClick={(event) => {
         event.stopPropagation()
         void copyText(text)
@@ -342,7 +342,6 @@ export function MessageRow({
             <span>Inspect</span>
           </button>
         ) : null}
-        {copyableText ? <CopyMessageButton text={copyableText} /> : null}
       </div>
       <div
         className="block select-text text-[length:var(--density-type-body-lg)] leading-[1.55]"
@@ -384,6 +383,11 @@ export function MessageRow({
           </span>
         ) : null}
       </div>
+      {copyableText ? (
+        <div className="flex justify-end" data-testid="message-copy-row">
+          <CopyMessageButton text={copyableText} />
+        </div>
+      ) : null}
       {isResponse && !isError ? (
         <ResponseStatsBar
           tokens={tokens}
