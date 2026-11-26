@@ -49,9 +49,18 @@ async fn read_catalog(
     options: &PluginInstallOptions,
     timeout: Duration,
 ) -> Result<(PluginCatalog, Option<String>)> {
-    let client = Client::builder().timeout(timeout).build()?;
+    let client = catalog_client(timeout)?;
     let sets_url = sets_url_for(&options.catalog_url);
     PluginCatalog::fetch_with_sets(&client, &options.catalog_url, sets_url.as_deref()).await
+}
+
+fn catalog_client(timeout: Duration) -> Result<Client> {
+    let builder = Client::builder().timeout(timeout);
+    // Tests serve the catalog on loopback; a proxy the build environment
+    // sets must not take those requests. Real catalog reads keep the proxy.
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    Ok(builder.build()?)
 }
 
 /// Why a catalog without the requested set has none: the reason the sets file
@@ -176,18 +185,13 @@ mod tests {
         }
     }
 
-    /// Answer each request from `routes`, or never answer when `stall`.
-    fn serve(routes: &'static [(&'static str, &'static str)], stall: bool) -> String {
+    /// Answer each request from `routes`.
+    fn serve(routes: &'static [(&'static str, &'static str)]) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         thread::spawn(move || {
-            let mut held = Vec::new();
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
-                if stall {
-                    held.push(stream);
-                    continue;
-                }
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -212,21 +216,42 @@ mod tests {
 
     const PLUGINS: &str = r#"{"name":"alpha","description":"A","github_url":"https://github.com/acme/alpha","author_email":"d@example.com","author_name":"Acme"}"#;
 
+    /// The catalog read's own deadline, not setup's outer one, ends a read
+    /// from a host that accepts the connection and never answers.
     #[tokio::test]
     async fn a_stalled_catalog_host_ends_setup_s_plugin_step_with_an_outcome() {
         let temp = TempDir::new().unwrap();
-        let base = serve(&[], true);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (accepted, connections) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+                let _ = accepted.send(());
+            }
+        });
+        let started = std::time::Instant::now();
         let outcome = install_set_for_setup(
             "recommended",
             &options(format!("{base}/plugins.jsonl"), temp.path()),
             &mut |_| {},
             Duration::from_millis(200),
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await;
+        let SetupPluginsOutcome::Unavailable(reason) = &outcome else {
+            panic!("a stalled catalog is unavailable: {outcome:?}");
+        };
+        assert!(connections.try_recv().is_ok(), "the host accepted the read");
         assert!(
-            matches!(outcome, SetupPluginsOutcome::Unavailable(_)),
-            "{outcome:?}"
+            !reason.starts_with("timed out after"),
+            "the catalog deadline, not setup's, ended it: {reason}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "{:?}",
+            started.elapsed()
         );
     }
 
@@ -236,16 +261,13 @@ mod tests {
     #[tokio::test]
     async fn a_set_is_offered_once_per_machine() {
         let temp = TempDir::new().unwrap();
-        let base = serve(
-            &[
-                ("/plugins.jsonl", PLUGINS),
-                (
-                    "/plugin-sets.jsonl",
-                    r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
-                ),
-            ],
-            false,
-        );
+        let base = serve(&[
+            ("/plugins.jsonl", PLUGINS),
+            (
+                "/plugin-sets.jsonl",
+                r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+            ),
+        ]);
         let options = options(format!("{base}/plugins.jsonl"), temp.path());
         let first = install_set_for_setup(
             "recommended",
@@ -296,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn a_catalog_without_the_set_is_an_outcome_not_a_failure() {
         let temp = TempDir::new().unwrap();
-        let base = serve(&[("/plugins.jsonl", PLUGINS)], false);
+        let base = serve(&[("/plugins.jsonl", PLUGINS)]);
         let outcome = install_set_for_setup(
             "recommended",
             &options(format!("{base}/plugins.jsonl"), temp.path()),
@@ -329,16 +351,13 @@ mod tests {
                 .join(format!("offered-sets.json.{}.tmp", std::process::id())),
         )
         .unwrap();
-        let base = serve(
-            &[
-                ("/plugins.jsonl", PLUGINS),
-                (
-                    "/plugin-sets.jsonl",
-                    r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
-                ),
-            ],
-            false,
-        );
+        let base = serve(&[
+            ("/plugins.jsonl", PLUGINS),
+            (
+                "/plugin-sets.jsonl",
+                r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+            ),
+        ]);
         let outcome = install_set_for_setup(
             "recommended",
             &options(format!("{base}/plugins.jsonl"), temp.path()),
@@ -366,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn a_custom_catalog_url_says_sets_are_unavailable_for_it() {
         let temp = TempDir::new().unwrap();
-        let base = serve(&[("/custom.json", PLUGINS)], false);
+        let base = serve(&[("/custom.json", PLUGINS)]);
         let error = install_set_command(
             "recommended",
             &options(format!("{base}/custom.json"), temp.path()),
@@ -386,16 +405,13 @@ mod tests {
     #[tokio::test]
     async fn a_set_whose_members_have_no_release_here_installs_nothing() {
         let temp = TempDir::new().unwrap();
-        let base = serve(
-            &[
-                ("/plugins.jsonl", PLUGINS),
-                (
-                    "/plugin-sets.jsonl",
-                    r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
-                ),
-            ],
-            false,
-        );
+        let base = serve(&[
+            ("/plugins.jsonl", PLUGINS),
+            (
+                "/plugin-sets.jsonl",
+                r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+            ),
+        ]);
         let outcome = install_set_for_setup(
             "recommended",
             &options(format!("{base}/plugins.jsonl"), temp.path()),

@@ -785,7 +785,8 @@ mod tests {
         let plugins_url = format!("{base}/plugins.jsonl");
         let sets_url = crate::catalog::sets_url_for(&plugins_url);
         let (catalog, problem) = PluginCatalog::fetch_with_sets(
-            &reqwest::Client::new(),
+            // Loopback fixture: an inherited HTTP_PROXY must not take it.
+            &reqwest::Client::builder().no_proxy().build().unwrap(),
             &plugins_url,
             sets_url.as_deref(),
         )
@@ -803,7 +804,8 @@ mod tests {
         let plugins_url = format!("{base}/plugins.jsonl");
         let sets_url = crate::catalog::sets_url_for(&plugins_url);
         let (catalog, problem) = PluginCatalog::fetch_with_sets(
-            &reqwest::Client::new(),
+            // Loopback fixture: an inherited HTTP_PROXY must not take it.
+            &reqwest::Client::builder().no_proxy().build().unwrap(),
             &plugins_url,
             sets_url.as_deref(),
         )

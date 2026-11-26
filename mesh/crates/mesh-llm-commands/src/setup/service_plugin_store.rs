@@ -47,9 +47,9 @@ fn default_plugin_store(home_dir: &Path) -> PathBuf {
 /// The two readers differ past that: systemd's `EnvironmentFile=` treats
 /// `$` literally, while the macOS runner sources the file with bash, which
 /// expands variables, command substitutions and a leading `~` outside single
-/// quotes. Both process backslash escapes. A value whose meaning depends on
-/// these is an error rather than a guess, so setup never installs into a
-/// store the service does not read.
+/// quotes. Both process backslash escapes and join adjacent quoted parts. A
+/// value whose meaning depends on any of this is an error rather than a
+/// guess, so setup never installs into a store the service does not read.
 fn plugin_dir_from_env_file(contents: &str, platform: SetupPlatform) -> Result<Option<PathBuf>> {
     let mut value = None;
     for line in contents.lines() {
@@ -72,7 +72,7 @@ fn plugin_dir_from_env_file(contents: &str, platform: SetupPlatform) -> Result<O
     if !value_is_literal(inner, quoting, platform) {
         bail!(
             "the service reads `{PLUGIN_DIR_VAR}={raw}` in a way setup does not reproduce; \
-             set it to an absolute path without variables, `~` or backslashes"
+             set it to an absolute path, plain or in single quotes, without variables, `~`, backslashes or other shell syntax"
         );
     }
     Ok(Some(inner)
@@ -99,20 +99,27 @@ fn unquote(value: &str) -> (&str, Quoting) {
     (value, Quoting::None)
 }
 
-/// Whether the service reads `inner` as exactly these characters.
+/// Whether the service reads `inner` as exactly these characters. Anything
+/// that is not plainly literal for that reader is refused, not interpreted:
+/// a quote inside the value (mixed quoting such as `'/a/'"$USER"`), an
+/// unquoted value with characters a shell or systemd treats specially, and,
+/// outside single quotes, backslashes and (for the macOS runner's bash) `$`
+/// and backticks.
 fn value_is_literal(inner: &str, quoting: Quoting, platform: SetupPlatform) -> bool {
-    if quoting == Quoting::Single {
-        return true;
-    }
-    if inner.contains('\\') {
+    if inner.contains('\'') || inner.contains('"') {
         return false;
     }
-    if platform != SetupPlatform::MacOs {
-        return true;
+    match quoting {
+        Quoting::Single => true,
+        Quoting::Double => {
+            !inner.contains('\\')
+                && (platform != SetupPlatform::MacOs
+                    || !(inner.contains('$') || inner.contains('`')))
+        }
+        Quoting::None => inner
+            .chars()
+            .all(|c| c.is_alphanumeric() || "/._-+:@%,=".contains(c)),
     }
-    let expands = inner.contains('$') || inner.contains('`');
-    let tilde = quoting == Quoting::None && inner.starts_with('~');
-    !expands && !tilde
 }
 
 #[cfg(test)]
@@ -210,6 +217,22 @@ mod tests {
                 error.to_string().contains("absolute path"),
                 "{contents}: {error}"
             );
+        }
+        // Mixed quoting: bash reads `/tmp/<user>/plugins`, so neither the
+        // outer quotes nor the text between them is the value.
+        for platform in [SetupPlatform::Linux, SetupPlatform::MacOs] {
+            for contents in [
+                "MESH_LLM_PLUGIN_DIR='/tmp/'\"$USER\"'/plugins'\n",
+                "MESH_LLM_PLUGIN_DIR=\"/tmp/\"'x'\"/p\"\n",
+                "MESH_LLM_PLUGIN_DIR=/tmp/'x'/p\n",
+                "MESH_LLM_PLUGIN_DIR=/a b\n",
+                "MESH_LLM_PLUGIN_DIR=/a;b\n",
+            ] {
+                assert!(
+                    plugin_dir_from_env_file(contents, platform).is_err(),
+                    "{platform:?}: {contents}"
+                );
+            }
         }
         assert_eq!(
             plugin_dir_from_env_file("MESH_LLM_PLUGIN_DIR=\"$HOME/p\"\n", SetupPlatform::Linux)
