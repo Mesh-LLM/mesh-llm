@@ -30,14 +30,17 @@ pub(super) struct EndpointHealthState {
 
 impl PluginManager {
     pub(super) async fn refresh_plugin_endpoints(&self, plugin_name: &str) -> Result<()> {
-        let summary = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
-            plugin.summary().await
-        } else if let Some(summary) = self.inner.inactive.get(plugin_name) {
-            summary.clone()
-        } else {
-            self.clear_plugin_endpoint_health(plugin_name).await;
-            return Ok(());
-        };
+        let (summary, observed_generation) =
+            if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+                let generation = plugin.current_generation().await;
+                (plugin.summary().await, generation)
+            } else if let Some(summary) = self.inner.inactive.get(plugin_name) {
+                (summary.clone(), None)
+            } else {
+                self.clear_plugin_endpoint_health(plugin_name).await;
+                self.inner.observed_models.clear_plugin(plugin_name);
+                return Ok(());
+            };
         self.publish_plugin_summary(&summary);
 
         let manifest = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
@@ -46,6 +49,19 @@ impl PluginManager {
             self.manifest(plugin_name).await.ok().flatten()
         };
         let Some(manifest) = manifest else {
+            if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+                if !plugin
+                    .sync_observed_models_if_generation(
+                        observed_generation,
+                        std::collections::BTreeSet::new(),
+                    )
+                    .await
+                {
+                    return Ok(());
+                }
+            } else {
+                self.inner.observed_models.clear_plugin(plugin_name);
+            }
             self.clear_plugin_endpoint_health(plugin_name).await;
             self.publish_plugin_summary(&summary);
             self.publish_plugin_providers(plugin_name, Vec::new());
@@ -125,6 +141,28 @@ impl PluginManager {
             endpoint_states.insert(endpoint_key(plugin_name, &key), health);
         }
 
+        let local_inference_override = self
+            .inner
+            .plugins
+            .get(plugin_name)
+            .and_then(|plugin| plugin.local_inference_endpoints());
+        let ready_models =
+            super::inference_observation::plugin_endpoint::ready_models_for_endpoints(
+                &endpoint_summaries,
+                local_inference_override,
+            );
+        if self
+            .inner
+            .shutting_down
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        if let Some(plugin) = self.inner.plugins.get(plugin_name)
+            && plugin.current_generation().await != observed_generation
+        {
+            return Ok(());
+        }
         self.clear_plugin_endpoint_health(plugin_name).await;
         self.publish_plugin_summary(&summary);
         self.publish_plugin_manifest(plugin_name, Some(plugin_manifest_overview(&manifest)));
@@ -136,6 +174,16 @@ impl PluginManager {
 
         let mut registry = self.inner.endpoint_health.lock().await;
         registry.extend(endpoint_states);
+        drop(registry);
+        if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+            plugin
+                .sync_observed_models_if_generation(observed_generation, ready_models)
+                .await;
+        } else {
+            self.inner
+                .observed_models
+                .sync_plugin_models(plugin_name, ready_models);
+        }
         Ok(())
     }
 
@@ -169,12 +217,26 @@ impl PluginManager {
             let Some(address) = endpoint.address.clone() else {
                 continue;
             };
+            let local_override = self
+                .inner
+                .plugins
+                .get(&endpoint.plugin_name)
+                .and_then(|plugin| plugin.local_inference_endpoints());
+            let observe_local_inference =
+                super::inference_observation::plugin_endpoint::is_observable_inference_protocol(
+                    endpoint.protocol.as_deref(),
+                ) && super::inference_observation::plugin_endpoint::is_local_inference_endpoint(
+                    &address,
+                    endpoint.managed_by_plugin,
+                    local_override,
+                );
             endpoints.push(InferenceEndpointRoute {
                 plugin_name: endpoint.plugin_name,
                 endpoint_id: endpoint.endpoint_id,
                 protocol: endpoint.protocol,
                 address,
                 models: endpoint.models,
+                observe_local_inference,
             });
         }
         Ok(endpoints)
@@ -400,7 +462,18 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
         }
     };
 
-    let client = match reqwest::Client::builder()
+    #[cfg(test)]
+    let client_builder = if super::inference_observation::plugin_endpoint::is_loopback_http_address(
+        models_url.as_str(),
+    ) {
+        mesh_llm_system::local_http::local_http_client_builder()
+    } else {
+        reqwest::Client::builder()
+    };
+    #[cfg(not(test))]
+    let client_builder = reqwest::Client::builder();
+
+    let client = match client_builder
         .timeout(std::time::Duration::from_secs(3))
         .build()
     {

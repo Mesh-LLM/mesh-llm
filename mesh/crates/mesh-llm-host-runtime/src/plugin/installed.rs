@@ -144,6 +144,7 @@ pub(crate) fn configured_external_plugin_spec(
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,
         endpoint_models: entry.models.clone(),
+        local_inference_endpoints: entry.local_inference_endpoints,
         installed_metadata,
     }))
 }
@@ -318,6 +319,7 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: Some(metadata.clone()),
     }
 }

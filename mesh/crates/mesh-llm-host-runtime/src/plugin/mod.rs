@@ -148,6 +148,8 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) plugins: BTreeMap<String, ExternalPlugin>,
     pub(in crate::plugin) inactive: BTreeMap<String, PluginSummary>,
     pub(in crate::plugin) endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
+    pub(in crate::plugin) observed_models:
+        Arc<inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
     pub(in crate::plugin) runtime_data: RuntimeDataCollector,
     pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     pub(in crate::plugin) shutting_down: AtomicBool,
@@ -248,6 +250,11 @@ impl PluginManager {
                 plugins,
                 inactive: Self::inactive_plugins(specs, failed_plugins),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                observed_models: Arc::new(
+                    inference_observation::plugin_endpoint::PluginModelReadinessTracker::new(
+                        inference_observation::hub(),
+                    ),
+                ),
                 runtime_data,
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
@@ -269,6 +276,9 @@ impl PluginManager {
             manager.publish_plugin_summary(&summary);
             manager.publish_plugin_manifest(&summary.name, None);
             manager.publish_plugin_providers(&summary.name, Vec::new());
+        }
+        for plugin in manager.inner.plugins.values() {
+            plugin.attach_observed_models(manager.inner.observed_models.clone());
         }
         let plugin_names = manager.inner.plugins.keys().cloned().collect::<Vec<_>>();
         for plugin_name in plugin_names {
@@ -478,6 +488,11 @@ impl PluginManager {
                 plugins: BTreeMap::new(),
                 inactive: BTreeMap::new(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                observed_models: Arc::new(
+                    inference_observation::plugin_endpoint::PluginModelReadinessTracker::new(
+                        inference_observation::hub(),
+                    ),
+                ),
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
@@ -511,6 +526,11 @@ impl PluginManager {
                     .map(|summary| (summary.name.clone(), summary))
                     .collect(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                observed_models: Arc::new(
+                    inference_observation::plugin_endpoint::PluginModelReadinessTracker::new(
+                        inference_observation::hub(),
+                    ),
+                ),
                 runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
@@ -735,6 +755,7 @@ impl PluginManager {
             plugin.shutdown().await;
         }
         self.inner.endpoint_health.lock().await.clear();
+        self.inner.observed_models.close();
     }
 
     pub async fn endpoints(&self) -> Result<Vec<PluginEndpointSummary>> {
@@ -1841,6 +1862,10 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
 mod endpoint_models_e2e_tests;
 #[cfg(test)]
 mod inference_observation_e2e_tests;
+#[cfg(test)]
+mod inference_observation_edge_tests;
+#[cfg(test)]
+mod inference_observation_plugin_endpoint_tests;
 #[cfg(test)]
 mod status_contribution_tests;
 #[cfg(test)]

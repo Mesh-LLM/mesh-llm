@@ -319,9 +319,43 @@ fn is_disconnect_kind(kind: std::io::ErrorKind) -> bool {
     )
 }
 
+/// Tags I/O errors during response relay with their socket direction so an
+/// upstream backend reset (`ConnectionReset`, `BrokenPipe`, `UnexpectedEof`)
+/// is never misclassified as a downstream client disconnect.
+#[derive(Debug)]
+pub(in crate::network::openai::response) enum RelayIoError {
+    UpstreamRead(std::io::Error),
+    DownstreamWrite(std::io::Error),
+}
+
+impl std::fmt::Display for RelayIoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UpstreamRead(err) => write!(f, "upstream read error: {err}"),
+            Self::DownstreamWrite(err) => write!(f, "downstream write error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RelayIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UpstreamRead(err) | Self::DownstreamWrite(err) => Some(err),
+        }
+    }
+}
+
 pub(in crate::network::openai::response) fn is_client_disconnect_error(
     err: &anyhow::Error,
 ) -> bool {
+    for cause in err.chain() {
+        if let Some(relay_err) = cause.downcast_ref::<RelayIoError>() {
+            return match relay_err {
+                RelayIoError::UpstreamRead(_) => false,
+                RelayIoError::DownstreamWrite(io_err) => is_disconnect_kind(io_err.kind()),
+            };
+        }
+    }
     err.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()

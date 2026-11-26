@@ -540,6 +540,7 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
         "web_ui_primary_tab",
         "allow_peer_blocks",
         "allow_inference_observation",
+        "local_inference_endpoints",
         "openai_exchange_grant",
         "operation_bindings",
         "command",
@@ -931,6 +932,7 @@ name = "other-endpoint"
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
             allow_inference_observation: None,
+            local_inference_endpoints: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -963,6 +965,37 @@ name = "other-endpoint"
         assert_eq!(
             disabled.web_ui_preference(false),
             PluginWebUiPreference::None
+        );
+    }
+
+    #[test]
+    fn plugin_local_inference_endpoints_round_trips_through_toml_and_editor() {
+        let mut editor = crate::ConfigEditor::new(crate::MeshConfig::default());
+        editor
+            .upsert_plugin("local-proxy")
+            .unwrap()
+            .command("mesh-llm-plugin-openai")
+            .local_inference_endpoints(Some(true));
+        editor
+            .upsert_plugin("remote-proxy")
+            .unwrap()
+            .command("mesh-llm-plugin-openai")
+            .local_inference_endpoints(Some(false));
+        let config = editor.into_config();
+
+        let rendered = crate::config_to_toml(&config).unwrap();
+        let reparsed = crate::parse_config_toml(&rendered).unwrap();
+        assert_eq!(reparsed.plugins[0].local_inference_endpoints, Some(true));
+        assert_eq!(reparsed.plugins[1].local_inference_endpoints, Some(false));
+
+        let diagnostics = crate::validate_config_diagnostics_with_plugin_schemas(
+            &reparsed,
+            Some(&rendered),
+            |_| PluginSchemaAvailability::NotInstalled,
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "expected no diagnostics for local_inference_endpoints, got {diagnostics:?}"
         );
     }
 

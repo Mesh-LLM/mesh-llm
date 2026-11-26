@@ -343,6 +343,7 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
             | "web_ui_primary_tab"
             | "allow_peer_blocks"
             | "allow_inference_observation"
+            | "local_inference_endpoints"
             | "command"
             | "args"
             | "url"

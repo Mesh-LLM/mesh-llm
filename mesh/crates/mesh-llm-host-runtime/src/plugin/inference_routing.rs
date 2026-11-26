@@ -117,6 +117,7 @@ mod tests {
             endpoint_id: "inference".into(),
             protocol: protocol.map(str::to_string),
             address: "http://127.0.0.1:1".into(),
+            observe_local_inference: false,
             models: models.into_iter().map(str::to_string).collect(),
         })
         .collect();
@@ -142,6 +143,7 @@ mod tests {
                     protocol: Some("openai_compatible".into()),
                     address: "http://127.0.0.1:1".into(),
                     models: vec!["same-model".into()],
+                    observe_local_inference: false,
                 },
                 InferenceEndpointRoute {
                     plugin_name: "ocr".into(),
@@ -149,6 +151,7 @@ mod tests {
                     protocol: Some("document_ocr_v1".into()),
                     address: "http://127.0.0.1:2".into(),
                     models: vec!["same-model".into()],
+                    observe_local_inference: false,
                 },
             ])
             .await;

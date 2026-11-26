@@ -232,6 +232,7 @@ async fn test_api_proxy_forwards_ocr_accept_to_document_ocr_endpoint() {
                 endpoint_id: "ocr".into(),
                 protocol: Some("document_ocr_v1".into()),
                 address: format!("http://127.0.0.1:{upstream_port}"),
+                observe_local_inference: false,
                 models: vec!["ocr-model".into()],
             }])
             .await;
@@ -296,6 +297,7 @@ async fn test_api_proxy_chat_model_list_excludes_ocr_providers() {
                 protocol: Some("openai_compatible".into()),
                 address: "http://127.0.0.1:1".into(),
                 models: vec!["chat-model".into()],
+                observe_local_inference: false,
             },
             plugin::InferenceEndpointRoute {
                 plugin_name: "ocr".into(),
@@ -303,6 +305,7 @@ async fn test_api_proxy_chat_model_list_excludes_ocr_providers() {
                 protocol: Some("document_ocr_v1".into()),
                 address: "http://127.0.0.1:2".into(),
                 models: vec!["ocr-model".into()],
+                observe_local_inference: false,
             },
         ])
         .await;

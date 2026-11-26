@@ -63,6 +63,7 @@ mod tests {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             endpoint_models: None,
+            local_inference_endpoints: None,
             installed_metadata: Some(metadata),
             openai_exchange_grant: Some(Box::new(mesh_llm_config::OpenAiExchangeGrant {
                 read_identity_bundle: true,

@@ -18,6 +18,7 @@ fn observer() -> ExternalPlugin {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: None,
         // Model the original ungranted spec with permissions applied later.
         openai_exchange_grant: None,

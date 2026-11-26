@@ -1863,6 +1863,13 @@ pub struct PluginConfigEntry {
     /// unless the operator turns it on. Read when the plugin subscribes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_inference_observation: Option<bool>,
+    /// Explicit override for whether this plugin's inference endpoints run
+    /// locally on this node for `local_inference_observation`. Unset trusts
+    /// only plugin-managed loopback endpoints; set `true` for local proxies
+    /// or unmanaged local servers, or `false` for proxies that forward work
+    /// to another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_inference_endpoints: Option<bool>,
     /// Explicit operator lifecycle permissions. An absent grant gives no access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_exchange_grant: Option<crate::OpenAiExchangeGrant>,

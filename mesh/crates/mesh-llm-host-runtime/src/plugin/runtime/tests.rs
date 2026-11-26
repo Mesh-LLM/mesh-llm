@@ -101,6 +101,7 @@ pub(super) fn plugin_spec(
         web_ui_enabled,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: Some(installed_metadata_with_web_ui(
             temp_dir.path().to_path_buf(),
             validation_status,
@@ -166,6 +167,7 @@ pub(crate) fn in_process_plugin(
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: None,
     });
     plugin.in_process = Some(runner);
@@ -234,6 +236,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
         next_request_id: AtomicU64::new(1),
         next_generation: AtomicU64::new(1),
         in_process: None,
+        observed_models: Arc::new(std::sync::OnceLock::new()),
     };
     (plugin, runtime_data)
 }
@@ -482,6 +485,7 @@ fn configured_plugin_url_is_normalized_before_child_env_export() {
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
             allow_inference_observation: None,
+            local_inference_endpoints: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: Vec::new(),

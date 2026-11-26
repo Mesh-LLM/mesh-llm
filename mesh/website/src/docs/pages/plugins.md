@@ -125,6 +125,7 @@ For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-
 | `web_ui_primary_tab` | Place a declared plugin web UI in the primary tab when the operator enables it. Defaults to `false` when omitted. |
 | `allow_peer_blocks` | Let the plugin ask this node to stop (or resume) routing to a peer. Defaults to `false` when omitted, and requests are refused. |
 | `allow_inference_observation` | Let the plugin follow what this node executes (requests, timing and token counts, never prompts or answers). Defaults to `false` when omitted, and its subscription is refused. Read when the plugin subscribes. |
+| `local_inference_endpoints` | Override whether this plugin's inference endpoints count as running locally on this node for `local_inference_observation.v1`. When omitted, only plugin-managed loopback endpoints are treated as local. Set `true` for unmanaged local servers or local proxies running on this machine, or `false` for proxies forwarding to another machine. |
 | `command` | Explicit executable path or command. Useful for locally built plugins. |
 | `args` | Arguments passed to the plugin process. |
 | `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |

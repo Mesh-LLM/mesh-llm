@@ -146,6 +146,7 @@ schema row or stale manifest row from passing review:
 `plugin.<name>.enabled`, `plugin.<name>.web_ui_enabled`,
 `plugin.<name>.web_ui_primary_tab`, `plugin.<name>.allow_peer_blocks`,
 `plugin.<name>.operation_bindings`, `plugin.<name>.allow_inference_observation`,
+`plugin.<name>.local_inference_endpoints`,
 `plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`, `plugin.<name>.models`,
 `plugin.<name>.startup.connect_timeout_secs`,
 `plugin.<name>.startup.init_timeout_secs`, `plugin.<name>.startup.optional`,

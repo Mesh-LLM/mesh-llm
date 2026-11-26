@@ -193,8 +193,14 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
-    tcp_stream.write_all(&translated_body).await?;
+    tcp_stream
+        .write_all(header.as_bytes())
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
+    tcp_stream
+        .write_all(&translated_body)
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     route_observer.capture_response_body(&translated_body, Some("application/json"));
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
@@ -267,8 +273,14 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
-    tcp_stream.write_all(&normalized_body).await?;
+    tcp_stream
+        .write_all(header.as_bytes())
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
+    tcp_stream
+        .write_all(&normalized_body)
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     route_observer.capture_response_body(&normalized_body, Some("application/json"));
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {

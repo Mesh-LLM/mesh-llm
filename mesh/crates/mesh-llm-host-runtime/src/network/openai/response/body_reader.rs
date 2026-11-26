@@ -1,4 +1,5 @@
 //! Decode HTTP body framing before interpreting protocol JSON or SSE.
+use super::common::RelayIoError;
 use anyhow::{Result, anyhow, bail};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader, Chain};
 
@@ -30,7 +31,10 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
         if self.chunked && self.chunk_remaining == 0 {
             if self.chunk_tail {
                 let mut tail = [0; 2];
-                self.reader.read_exact(&mut tail).await?;
+                self.reader
+                    .read_exact(&mut tail)
+                    .await
+                    .map_err(RelayIoError::UpstreamRead)?;
                 if tail != *b"\r\n" {
                     bail!("invalid HTTP chunk terminator");
                 }
@@ -39,7 +43,8 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
             (&mut self.reader)
                 .take(8193)
                 .read_until(b'\n', &mut line)
-                .await?;
+                .await
+                .map_err(RelayIoError::UpstreamRead)?;
             if line.len() > 8192 || !line.ends_with(b"\r\n") {
                 bail!("invalid HTTP chunk size line");
             }
@@ -66,7 +71,11 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
             return Ok(None);
         }
         let mut bytes = vec![0; limit];
-        let count = self.reader.read(&mut bytes).await?;
+        let count = self
+            .reader
+            .read(&mut bytes)
+            .await
+            .map_err(RelayIoError::UpstreamRead)?;
         if count == 0 {
             if self.chunked || self.remaining.is_some_and(|remaining| remaining != 0) {
                 bail!("truncated HTTP body");

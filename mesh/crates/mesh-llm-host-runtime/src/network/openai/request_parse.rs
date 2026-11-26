@@ -204,6 +204,18 @@ pub struct BufferedHttpRequest {
 }
 
 impl BufferedHttpRequest {
+    /// Whether this request asks for a streamed response (via JSON `"stream": true`
+    /// or a streaming response adapter).
+    pub(crate) fn is_streaming_request(&self) -> bool {
+        self.stream.unwrap_or(false)
+            || matches!(
+                self.response_adapter,
+                ResponseAdapter::OpenAiChatCompletionsStream
+                    | ResponseAdapter::AnthropicMessagesStream
+                    | ResponseAdapter::OpenAiResponsesStream
+            )
+    }
+
     /// Whether this is the product tokenizer capability route.
     ///
     /// This deliberately requires the exact method and path. Tokenization is

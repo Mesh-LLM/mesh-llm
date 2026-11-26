@@ -279,6 +279,9 @@ pub struct InferenceEndpointRoute {
     pub protocol: Option<String>,
     pub address: String,
     pub models: Vec<String>,
+    /// Whether this endpoint satisfies the local-inference-observation locality
+    /// and protocol rule (shared with readiness tracking).
+    pub observe_local_inference: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

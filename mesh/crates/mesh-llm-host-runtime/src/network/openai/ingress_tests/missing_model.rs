@@ -175,6 +175,7 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
                 endpoint_id: "ep1".to_string(),
                 protocol: Some("openai_compatible".to_string()),
                 address: format!("http://127.0.0.1:{plugin_port}"),
+                observe_local_inference: false,
                 models: vec![model.to_string()],
             }])
             .await;

@@ -9,6 +9,7 @@ use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::forwarded_request::is_ingress_credential_header;
 use crate::network::openai::request_normalize::ResponseAdapter;
+use crate::plugin::inference_observation::plugin_endpoint::PendingPluginExecutionObservation;
 use anyhow::{Context, Result};
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::AsyncWriteExt;
@@ -26,6 +27,7 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     prefetched: &[u8],
     request_path: &str,
     logging: RouteAttemptLoggingContext<'_>,
+    pending_observation: Option<PendingPluginExecutionObservation>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
         request_id,
@@ -46,16 +48,31 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     if let Err(result) = forward_external_endpoint_request(&mut upstream, base_url, &target).await {
         return result;
     }
-    route_http_endpoint_attempt_after_forward(
+    let active_observation = pending_observation.map(PendingPluginExecutionObservation::start);
+    let attempt_observer =
+        route_observer.with_optional_inference_observation(active_observation.as_ref());
+    let require_sse_done = request_path.split('?').next() == Some("/v1/completions");
+    let result = route_http_endpoint_attempt_after_forward(
         tcp_stream,
         &mut upstream,
         base_url,
         request_id,
         retry_policy,
         response_adapter,
-        route_observer,
+        attempt_observer,
+        require_sse_done,
     )
-    .await
+    .await;
+    if let Some(observation) = active_observation {
+        match &result {
+            RouteAttemptResult::Delivered {
+                status_code, usage, ..
+            } if (200..300).contains(status_code) => observation.complete(usage.as_ref()),
+            RouteAttemptResult::ClientDisconnected => observation.dropped(),
+            _ => observation.fail(),
+        }
+    }
+    result
 }
 
 // `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
@@ -104,6 +121,7 @@ async fn forward_external_endpoint_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn route_http_endpoint_attempt_after_forward(
     tcp_stream: &mut ClientStream,
     upstream: &mut ClientStream,
@@ -112,6 +130,7 @@ async fn route_http_endpoint_attempt_after_forward(
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     route_observer: OpenAiRouteObserver<'_>,
+    require_sse_done: bool,
 ) -> RouteAttemptResult {
     match probe_http_response(upstream).await {
         Ok(mut probe) => {
@@ -129,6 +148,7 @@ async fn route_http_endpoint_attempt_after_forward(
                     commit_message: "API proxy (external endpoint) ended after commit",
                     served_by: None,
                     route_observer,
+                    require_sse_done,
                 },
                 retry_policy,
                 response_adapter,
@@ -346,6 +366,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
                 OpenAiRouteObserver::default(),
+                false,
             )
             .await
         });
@@ -518,6 +539,7 @@ mod tests {
                     served_by: None,
                     peer_capsule_id: None,
                 },
+                None,
             )
         );
         assert!(

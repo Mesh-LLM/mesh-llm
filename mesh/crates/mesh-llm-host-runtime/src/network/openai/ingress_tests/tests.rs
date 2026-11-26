@@ -1990,6 +1990,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
             endpoint_id: "ep1".to_string(),
             protocol: None,
             address: format!("http://{refusing_addr}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -2074,6 +2075,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
             protocol: None,
             address: "http://127.0.0.1:1".to_string(),
             models: vec![model.to_string()],
+            observe_local_inference: false,
         }])
         .await;
 
@@ -2799,6 +2801,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
                 protocol: Some("openai_compatible".to_string()),
                 address: "http://127.0.0.1:1".to_string(),
                 models: vec![model.to_string()],
+                observe_local_inference: false,
             },
             crate::plugin::InferenceEndpointRoute {
                 plugin_name: "ocr-plugin".to_string(),
@@ -2806,6 +2809,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
                 protocol: Some("document_ocr_v1".to_string()),
                 address: "http://127.0.0.1:2".to_string(),
                 models: vec![model.to_string()],
+                observe_local_inference: false,
             },
         ])
         .await;
@@ -2864,6 +2868,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
             protocol: Some("document_ocr_v1".to_string()),
             address: "http://127.0.0.1:2".to_string(),
             models: vec![model.to_string()],
+            observe_local_inference: false,
         }])
         .await;
     node.set_plugin_manager(plugin_manager.clone()).await;
@@ -3010,6 +3015,7 @@ async fn local_plugin_serves_a_shared_model_name_no_mesh_candidate_admits() {
             endpoint_id: "chat".to_string(),
             protocol: Some("openai_compatible".to_string()),
             address: format!("http://127.0.0.1:{plugin_port}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -3084,6 +3090,7 @@ async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
             endpoint_id: "chat".to_string(),
             protocol: Some("openai_compatible".to_string()),
             address: format!("http://127.0.0.1:{plugin_port}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -3164,6 +3171,7 @@ async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
             endpoint_id: "chat".to_string(),
             protocol: Some("openai_compatible".to_string()),
             address: format!("http://127.0.0.1:{plugin_port}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -3273,6 +3281,7 @@ async fn peer_ingress_ignores_a_remote_candidate_it_cannot_forward() {
             endpoint_id: "chat".to_string(),
             protocol: Some("openai_compatible".to_string()),
             address: format!("http://127.0.0.1:{plugin_port}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -3361,6 +3370,7 @@ async fn excluded_peer_does_not_suppress_the_local_plugin() {
             endpoint_id: "chat".to_string(),
             protocol: Some("openai_compatible".to_string()),
             address: format!("http://127.0.0.1:{plugin_port}"),
+            observe_local_inference: false,
             models: vec![model.to_string()],
         }])
         .await;
@@ -3445,6 +3455,7 @@ async fn native_cold_plugin_fallback_works_for_local_peer_and_failed_loads() {
                 endpoint_id: "chat".to_string(),
                 protocol: Some("openai_compatible".to_string()),
                 address: format!("http://127.0.0.1:{plugin_port}"),
+                observe_local_inference: false,
                 models: vec![model.to_string()],
             }])
             .await;

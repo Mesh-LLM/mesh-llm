@@ -341,6 +341,7 @@ enum MeshRouteResult {
 pub(crate) struct RouteSelectionMetadata<'a> {
     pub(crate) provider: Option<&'a str>,
     pub(crate) engine: Option<&'a str>,
+    pub(crate) observe_local_inference: bool,
 }
 
 fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
@@ -1864,6 +1865,12 @@ pub async fn route_http_endpoint_request(
         route_metadata.provider,
         route_metadata.engine,
     );
+    let pending_observation =
+        crate::plugin::inference_observation::plugin_endpoint::PendingPluginExecutionObservation::prepare_for_request(
+            model,
+            request,
+            route_metadata.observe_local_inference,
+        );
     let lifecycle_attempt = route_observer.start_proxy_attempt();
     let result = route_http_endpoint_attempt(
         tcp_stream,
@@ -1878,6 +1885,7 @@ pub async fn route_http_endpoint_request(
             served_by: None,
             peer_capsule_id: None,
         },
+        pending_observation,
     )
     .await;
     finish_route_attempt(

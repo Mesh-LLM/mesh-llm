@@ -50,6 +50,7 @@ fn config_sync_full_config_roundtrip() {
             web_ui_primary_tab: Some(true),
             allow_peer_blocks: Some(true),
             allow_inference_observation: None,
+            local_inference_endpoints: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],

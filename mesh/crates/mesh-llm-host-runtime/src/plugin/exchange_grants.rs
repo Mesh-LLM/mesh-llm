@@ -216,6 +216,7 @@ mod tests {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             endpoint_models: None,
+            local_inference_endpoints: None,
             installed_metadata: None,
             openai_exchange_grant: grant.map(Box::new),
         };
@@ -257,6 +258,7 @@ mod tests {
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
                 allow_inference_observation: None,
+                local_inference_endpoints: None,
                 openai_exchange_grant: grant,
                 command: None,
                 args: Vec::new(),
@@ -427,6 +429,7 @@ mod tests {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             endpoint_models: None,
+            local_inference_endpoints: None,
             installed_metadata: None,
             openai_exchange_grant: Some(Box::new(original.clone())),
         };

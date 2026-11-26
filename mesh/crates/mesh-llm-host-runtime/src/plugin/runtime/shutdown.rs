@@ -22,7 +22,14 @@ impl ExternalPlugin {
             summary.error = None;
         }
 
-        let runtime = self.runtime.lock().await.take();
+        let runtime = {
+            let mut guard = self.runtime.lock().await;
+            let taken = guard.take();
+            if let Some(tracker) = self.observed_models.get() {
+                tracker.clear_plugin(&self.spec.name);
+            }
+            taken
+        };
         if let Some(runtime) = runtime {
             stop_runtime(runtime, "plugin shutting down").await;
         }

@@ -799,6 +799,7 @@ async fn route_to_plugin_endpoint(
         proxy::RouteSelectionMetadata {
             provider: Some(&endpoint.plugin_name),
             engine: Some(&endpoint.endpoint_id),
+            observe_local_inference: endpoint.observe_local_inference,
         },
         tcp_stream,
         &endpoint.address,

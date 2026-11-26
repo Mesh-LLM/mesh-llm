@@ -183,11 +183,13 @@ pub(super) async fn write_captured_sse_event(
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     event: Option<&str>,
     data: &str,
-) -> std::io::Result<()> {
+) -> Result<()> {
     if let Some(capture) = capture {
         capture.push(&response_adapter::sse_frame(event, data));
     }
-    response_adapter::write_chunked_sse_event(tcp_stream, event, data).await
+    response_adapter::write_chunked_sse_event(tcp_stream, event, data)
+        .await
+        .map_err(|err| anyhow::Error::new(super::common::RelayIoError::DownstreamWrite(err)))
 }
 
 struct ResponsesStreamRelayState {
@@ -370,7 +372,10 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
+    tcp_stream
+        .write_all(header.as_bytes())
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 
@@ -414,7 +419,10 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         }
 
         let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
+        let n = reader
+            .read(&mut chunk)
+            .await
+            .map_err(super::common::RelayIoError::UpstreamRead)?;
         if n == 0 {
             break;
         }
@@ -1115,6 +1123,7 @@ mod tests {
                     commit_message: "test stream relay failed",
                     served_by: None,
                     route_observer: OpenAiRouteObserver::default(),
+                    require_sse_done: false,
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream,

@@ -16,6 +16,7 @@ async fn catalog_node() -> mesh::Node {
                 protocol: Some("openai_compatible".into()),
                 address: "http://127.0.0.1:1".into(),
                 models: vec!["chat-model".into(), "shared".into()],
+                observe_local_inference: false,
             },
             crate::plugin::InferenceEndpointRoute {
                 plugin_name: "ocr".into(),
@@ -23,6 +24,7 @@ async fn catalog_node() -> mesh::Node {
                 protocol: Some("document_ocr_v1".into()),
                 address: "http://127.0.0.1:2".into(),
                 models: vec!["ocr-model".into(), "shared".into()],
+                observe_local_inference: false,
             },
         ])
         .await;

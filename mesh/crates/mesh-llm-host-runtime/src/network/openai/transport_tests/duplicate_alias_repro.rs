@@ -312,6 +312,7 @@ async fn peer_ingress_executes_registered_plugin_without_mesh_forwarding() {
             endpoint_id: "execution".into(),
             protocol: None,
             address: format!("http://127.0.0.1:{port}"),
+            observe_local_inference: false,
             models: vec![PUBLIC.into()],
         }])
         .await;
@@ -360,6 +361,7 @@ async fn peer_ingress_forwards_document_upload_to_ocr_plugin() {
             endpoint_id: "indra".into(),
             protocol: Some("document_ocr_v1".into()),
             address: format!("http://127.0.0.1:{port}"),
+            observe_local_inference: false,
             models: vec!["datalab/indra-ocr".into()],
         }])
         .await;

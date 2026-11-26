@@ -63,6 +63,12 @@ pub(crate) enum LocalListener {
     Pipe(String, tokio::net::windows::named_pipe::NamedPipeServer),
 }
 
+type ObservedModelsSlot = Arc<
+    std::sync::OnceLock<
+        Arc<super::inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
+    >,
+>;
+
 type ConnectionLoopFn = fn(
     LocalStream,
     mpsc::Receiver<super::proto::Envelope>,
@@ -75,6 +81,7 @@ type ConnectionLoopFn = fn(
     mpsc::Sender<super::proto::Envelope>,
     u64,
     Arc<AtomicBool>,
+    ObservedModelsSlot,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
@@ -88,7 +95,8 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      runtime,
      outbound_tx,
      generation,
-     peer_state| {
+     peer_state,
+     observed_models| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         let binding_capacity = Arc::new(tokio::sync::Semaphore::new(8));
         Box::pin(async move {
@@ -259,6 +267,9 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
                     peer_state.store(false, Ordering::Release);
                     *runtime = None;
+                    if let Some(tracker) = observed_models.get() {
+                        tracker.clear_plugin(&plugin_name);
+                    }
                     true
                 } else {
                     false

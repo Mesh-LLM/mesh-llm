@@ -76,6 +76,11 @@ pub(crate) struct ExternalPlugin {
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
     in_process: Option<super::InProcessPluginRunner>,
+    observed_models: Arc<
+        std::sync::OnceLock<
+            Arc<super::inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
+        >,
+    >,
 }
 
 pub(crate) struct PluginRuntime {
@@ -123,6 +128,12 @@ impl ExternalPlugin {
     /// expose, or `None` to expose every model they list.
     pub(crate) fn endpoint_models(&self) -> Option<&[String]> {
         self.spec.endpoint_models.as_deref()
+    }
+
+    /// Explicit operator override for whether this plugin's inference
+    /// endpoints execute locally on this node.
+    pub(crate) fn local_inference_endpoints(&self) -> Option<bool> {
+        self.spec.local_inference_endpoints
     }
 
     pub(crate) fn installed_metadata(
@@ -178,6 +189,7 @@ impl ExternalPlugin {
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
+            observed_models: Arc::new(std::sync::OnceLock::new()),
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
@@ -344,6 +356,7 @@ impl ExternalPlugin {
             outbound_tx_for_runtime,
             generation,
             self.authenticated_peer.clone(),
+            self.observed_models.clone(),
         ));
         *self.runtime.lock().await = Some(PluginRuntime {
             managed_models,
@@ -537,7 +550,7 @@ impl ExternalPlugin {
         }
     }
 
-    async fn ensure_running(&self) -> Result<()> {
+    pub(in crate::plugin) async fn ensure_running(&self) -> Result<()> {
         self.reject_shutdown()?;
         if let Some(reason) = self.disabled_reason().await {
             bail!("Plugin '{}' is disabled: {}", self.spec.name, reason);
@@ -905,7 +918,43 @@ impl ExternalPlugin {
         ))
     }
 
-    async fn handle_runtime_failure(&self, generation: Option<u64>, reason: String) {
+    pub(crate) fn attach_observed_models(
+        &self,
+        tracker: Arc<super::inference_observation::plugin_endpoint::PluginModelReadinessTracker>,
+    ) {
+        let _ = self.observed_models.set(tracker);
+    }
+
+    pub(crate) async fn current_generation(&self) -> Option<u64> {
+        self.runtime.lock().await.as_ref().map(|r| r.generation)
+    }
+
+    pub(crate) async fn sync_observed_models_if_generation(
+        &self,
+        expected_generation: Option<u64>,
+        models: std::collections::BTreeSet<String>,
+    ) -> bool {
+        let runtime = self.runtime.lock().await;
+        let current_generation = runtime.as_ref().map(|r| r.generation);
+        if current_generation != expected_generation {
+            return false;
+        }
+        let effective_models = if current_generation.is_some() {
+            models
+        } else {
+            std::collections::BTreeSet::new()
+        };
+        if let Some(tracker) = self.observed_models.get() {
+            tracker.sync_plugin_models(&self.spec.name, effective_models);
+        }
+        true
+    }
+
+    pub(in crate::plugin) async fn handle_runtime_failure(
+        &self,
+        generation: Option<u64>,
+        reason: String,
+    ) {
         let reason = crate::logging::policy::redact_urls_in_text(&reason);
         let failed_runtime = {
             let mut runtime = self.runtime.lock().await;
@@ -931,6 +980,9 @@ impl ExternalPlugin {
             drop(summary);
             self.runtime_data_producer
                 .clear_plugin_reports(&self.spec.name);
+            if let Some(tracker) = self.observed_models.get() {
+                tracker.clear_plugin(&self.spec.name);
+            }
             failed_runtime
         };
         if let Some(runtime) = failed_runtime {
@@ -993,6 +1045,9 @@ impl ExternalPlugin {
         .flatten();
         if disabled_runtime.is_some() {
             self.authenticated_peer.store(false, Ordering::Release);
+            if let Some(tracker) = self.observed_models.get() {
+                tracker.clear_plugin(&self.spec.name);
+            }
         }
         drop(runtime);
         if let Some(runtime) = disabled_runtime {
