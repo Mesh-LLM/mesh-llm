@@ -278,6 +278,7 @@ async fn build_inference_endpoint_plugin_manager(models: &[&str]) -> plugin::Plu
             protocol: None,
             address: "http://127.0.0.1:8000/v1".into(),
             models: models.iter().map(|model| (*model).to_string()).collect(),
+            observe_local_inference: false,
         }])
         .await;
     plugin_manager

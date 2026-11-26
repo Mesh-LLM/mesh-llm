@@ -32,19 +32,109 @@ fn summary_with(
 
 #[test]
 fn ready_models_for_endpoints_filters_by_availability_and_protocol() {
-    let models = ready_models_for_endpoints(&[
-        summary_with(
-            "inference",
-            true,
-            Some("openai_compatible"),
-            &["chat-a", ""],
-        ),
-        summary_with("inference", true, Some("transcription_v1"), &["whisper"]),
-        summary_with("inference", true, Some("document_ocr_v1"), &["ocr"]),
-        summary_with("inference", false, Some("openai_compatible"), &["down"]),
-        summary_with("mcp", true, None, &["mcp-not-model"]),
-    ]);
+    let models = ready_models_for_endpoints(
+        &[
+            summary_with(
+                "inference",
+                true,
+                Some("openai_compatible"),
+                &["chat-a", ""],
+            ),
+            summary_with("inference", true, Some("transcription_v1"), &["whisper"]),
+            summary_with("inference", true, Some("document_ocr_v1"), &["ocr"]),
+            summary_with("inference", false, Some("openai_compatible"), &["down"]),
+            summary_with("mcp", true, None, &["mcp-not-model"]),
+        ],
+        None,
+    );
     assert_eq!(models, model_set(&["chat-a", "whisper"]));
+}
+
+#[test]
+fn locality_rule_trusts_only_managed_loopback_unless_overridden_by_operator() {
+    assert!(is_local_inference_endpoint(
+        "http://127.0.0.1:8080/v1",
+        true,
+        None
+    ));
+    assert!(is_local_inference_endpoint(
+        "http://[::1]:8080/v1",
+        true,
+        None
+    ));
+    assert!(is_local_inference_endpoint(
+        "http://localhost:8080/v1",
+        true,
+        None
+    ));
+    assert!(is_local_inference_endpoint(
+        "https://localhost.:8443/v1",
+        true,
+        None
+    ));
+    // Remote host is never local by default, even when managed_by_plugin is true.
+    assert!(!is_local_inference_endpoint(
+        "http://192.0.2.10:8080/v1",
+        true,
+        None
+    ));
+    assert!(!is_local_inference_endpoint(
+        "http://gpu-box.lan:8080/v1",
+        true,
+        None
+    ));
+    // Unmanaged loopback proxy is ambiguous and stays non-local by default.
+    assert!(!is_local_inference_endpoint(
+        "http://127.0.0.1:8080/v1",
+        false,
+        None
+    ));
+    assert!(!is_local_inference_endpoint(
+        "http://192.0.2.10:8080/v1",
+        false,
+        None
+    ));
+    // Explicit operator setting overrides ambiguous proxies in either direction.
+    assert!(is_local_inference_endpoint(
+        "http://127.0.0.1:8080/v1",
+        false,
+        Some(true)
+    ));
+    assert!(is_local_inference_endpoint(
+        "http://192.0.2.10:8080/v1",
+        false,
+        Some(true)
+    ));
+    assert!(!is_local_inference_endpoint(
+        "http://127.0.0.1:8080/v1",
+        true,
+        Some(false)
+    ));
+
+    let mut remote = summary_with("inference", true, Some("openai_compatible"), &["remote-m"]);
+    remote.address = Some("http://192.0.2.10:8080/v1".into());
+    remote.managed_by_plugin = false;
+    let mut proxy_loopback =
+        summary_with("inference", true, Some("openai_compatible"), &["proxy-m"]);
+    proxy_loopback.managed_by_plugin = false;
+    let managed_loopback = summary_with("inference", true, Some("openai_compatible"), &["local-m"]);
+
+    assert_eq!(
+        ready_models_for_endpoints(
+            &[
+                remote.clone(),
+                proxy_loopback.clone(),
+                managed_loopback.clone()
+            ],
+            None
+        ),
+        model_set(&["local-m"])
+    );
+    assert_eq!(
+        ready_models_for_endpoints(&[remote.clone(), proxy_loopback.clone()], Some(true)),
+        model_set(&["remote-m", "proxy-m"])
+    );
+    assert!(ready_models_for_endpoints(&[managed_loopback], Some(false)).is_empty());
 }
 
 #[test]

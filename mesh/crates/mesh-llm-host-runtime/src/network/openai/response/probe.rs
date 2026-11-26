@@ -310,7 +310,10 @@ pub(in crate::network::openai::response) async fn read_response_chunk<R: AsyncRe
     buf: &mut Vec<u8>,
 ) -> Result<usize> {
     let mut chunk = [0u8; 8192];
-    let read_result = reader.read(&mut chunk).await?;
+    let read_result = reader
+        .read(&mut chunk)
+        .await
+        .map_err(super::common::RelayIoError::UpstreamRead)?;
     if read_result == 0 {
         bail!("unexpected EOF while reading HTTP response");
     }
@@ -372,7 +375,8 @@ pub(in crate::network::openai::response) async fn read_transformed_response_body
         let mut chunk = [0u8; 8192];
         let read_result = tokio::time::timeout(limits.idle_timeout, reader.read(&mut chunk))
             .await
-            .context("upstream success response body idle timeout")??;
+            .context("upstream success response body idle timeout")?
+            .map_err(super::common::RelayIoError::UpstreamRead)?;
         if read_result == 0 {
             return expected_end.map_or_else(
                 || Ok(buffered.len()),

@@ -135,7 +135,10 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
+    tcp_stream
+        .write_all(header.as_bytes())
+        .await
+        .map_err(crate::network::openai::response::common::RelayIoError::DownstreamWrite)?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 
@@ -187,7 +190,10 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         }
 
         let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
+        let n = reader
+            .read(&mut chunk)
+            .await
+            .map_err(crate::network::openai::response::common::RelayIoError::UpstreamRead)?;
         if n == 0 {
             break;
         }

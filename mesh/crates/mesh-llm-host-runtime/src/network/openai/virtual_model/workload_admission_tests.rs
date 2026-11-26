@@ -177,6 +177,7 @@ async fn chat_candidates_keep_a_local_plugin_when_an_ocr_peer_shares_the_id() {
             protocol: Some("openai_compatible".into()),
             address: "http://127.0.0.1:1".into(),
             models: vec![model.into()],
+            observe_local_inference: false,
         }])
         .await;
     node.set_plugin_manager(plugin_manager).await;

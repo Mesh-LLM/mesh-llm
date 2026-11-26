@@ -28,6 +28,7 @@ async fn select_policy(host: &mut LiveHost, deny_model: &str, virtual_echo: bool
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         env: BTreeMap::from([
             (
                 "MESH_LLM_EXEMPLAR_DENY_SELECTED_MODEL".into(),

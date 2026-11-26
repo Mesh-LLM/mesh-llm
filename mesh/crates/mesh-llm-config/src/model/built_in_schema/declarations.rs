@@ -347,6 +347,12 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.allow_inference_observation"),
             ConfigValueSchema::Boolean,
         ),
+        // Resolved into the plugin launch spec, so a change applies when the
+        // node restarts.
+        plugin_setting(
+            &format!("{plugin_prefix}.local_inference_endpoints"),
+            ConfigValueSchema::Boolean,
+        ),
         plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,

@@ -1863,6 +1863,8 @@ mod endpoint_models_e2e_tests;
 #[cfg(test)]
 mod inference_observation_e2e_tests;
 #[cfg(test)]
+mod inference_observation_edge_tests;
+#[cfg(test)]
 mod inference_observation_plugin_endpoint_tests;
 #[cfg(test)]
 mod status_contribution_tests;

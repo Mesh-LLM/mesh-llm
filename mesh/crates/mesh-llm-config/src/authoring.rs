@@ -498,6 +498,7 @@ impl ConfigEditor {
                     web_ui_primary_tab: None,
                     allow_peer_blocks: None,
                     allow_inference_observation: None,
+                    local_inference_endpoints: None,
                     openai_exchange_grant: None,
                     command: None,
                     args: Vec::new(),
@@ -732,6 +733,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn allow_inference_observation(&mut self, allowed: Option<bool>) -> &mut Self {
         self.plugin.allow_inference_observation = allowed;
+        self
+    }
+
+    pub fn local_inference_endpoints(&mut self, local: Option<bool>) -> &mut Self {
+        self.plugin.local_inference_endpoints = local;
         self
     }
 

@@ -345,6 +345,7 @@ mod plugin_descriptor_tests {
             protocol: protocol.map(str::to_string),
             address: "http://127.0.0.1:1".into(),
             models: models.iter().map(|model| (*model).to_string()).collect(),
+            observe_local_inference: false,
         }
     }
 

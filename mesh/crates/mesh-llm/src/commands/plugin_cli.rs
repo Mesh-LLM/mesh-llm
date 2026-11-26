@@ -176,6 +176,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: Some(metadata),
     }))
 }

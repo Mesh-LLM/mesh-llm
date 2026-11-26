@@ -320,6 +320,9 @@ pub struct ExternalPluginSpec {
     /// Inference endpoint models the operator allows this plugin to expose;
     /// `None` exposes every model the endpoint lists.
     pub endpoint_models: Option<Vec<String>>,
+    /// Explicit override for whether this plugin's inference endpoints count
+    /// as local to this node for `local_inference_observation.v1`.
+    pub local_inference_endpoints: Option<bool>,
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
@@ -448,6 +451,7 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
         || !entry.args.is_empty()
         || entry.url.is_some()
         || entry.models.is_some()
+        || entry.local_inference_endpoints.is_some()
         || !entry.startup.is_default()
     {
         bail!(
@@ -477,6 +481,7 @@ pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: None,
     }
 }
@@ -514,6 +519,7 @@ pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<Externa
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: None,
     })
 }

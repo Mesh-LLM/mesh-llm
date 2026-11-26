@@ -228,7 +228,10 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
+    tcp_stream
+        .write_all(header.as_bytes())
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 

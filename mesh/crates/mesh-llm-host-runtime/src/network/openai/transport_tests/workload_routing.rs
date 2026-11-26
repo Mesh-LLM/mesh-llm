@@ -53,6 +53,7 @@ async fn ocr_plugin_does_not_authorize_a_native_port_with_same_model_name() {
             protocol: Some("document_ocr_v1".into()),
             address: "http://127.0.0.1:1".into(),
             models: vec![MODEL.into()],
+            observe_local_inference: false,
         }])
         .await;
     node.set_plugin_manager(manager).await;

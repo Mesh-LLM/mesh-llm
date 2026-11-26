@@ -952,6 +952,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.local_inference_endpoints" => Some(
+            sp(
+                "Local inference endpoints",
+                "Override whether this plugin's inference endpoints count as running locally on this node for local inference observation. Unset trusts only plugin-managed loopback endpoints.",
+                PLUGIN_HOST_CATEGORY,
+                19,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",

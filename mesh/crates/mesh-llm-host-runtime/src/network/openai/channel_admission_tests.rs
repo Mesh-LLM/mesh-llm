@@ -218,6 +218,7 @@ async fn a_channel_gated_remote_does_not_hide_local_native_or_plugin_execution()
             protocol: Some("openai_compatible".into()),
             address: "http://127.0.0.1:1".into(),
             models: vec!["shared".into()],
+            observe_local_inference: false,
         }])
         .await;
     node.set_plugin_manager(plugins).await;

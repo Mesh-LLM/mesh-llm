@@ -174,7 +174,10 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     };
     append_served_by_to_error_response(&mut outgoing, served_by);
     append_request_id_to_error_response(&mut outgoing, request_id);
-    tcp_stream.write_all(&outgoing).await?;
+    tcp_stream
+        .write_all(&outgoing)
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     let media_kind = try_parse_response_headers(&outgoing)
         .ok()
         .flatten()
@@ -207,7 +210,39 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
-    if let Some(content_length) = parsed.content_length {
+    relay_success_response_with_sse_done(
+        tcp_stream,
+        reader,
+        probe,
+        parsed,
+        retry_policy,
+        served_by,
+        route_observer,
+        request_id,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::network::openai::response) async fn relay_success_response_with_sse_done<
+    R: AsyncRead + Unpin,
+>(
+    tcp_stream: &mut ClientStream,
+    reader: &mut R,
+    probe: ResponseProbe,
+    parsed: ParsedResponseHeaders,
+    retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
+    require_sse_done: bool,
+) -> Result<RouteAttemptResult> {
+    let is_event_stream =
+        super::dispatch::is_event_stream_content_type(parsed.content_type.as_deref());
+    if !parsed.chunked
+        && let Some(content_length) = parsed.content_length
+    {
         const MAX_SUCCESS_METRICS_BODY_BYTES: usize = 1024 * 1024;
         if content_length <= MAX_SUCCESS_METRICS_BODY_BYTES {
             let mut buffered = probe.buffered;
@@ -222,7 +257,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             if let Some(result) = retryable_quality_result(body, retry_policy) {
                 return Ok(result);
             }
-            let usage = parse_token_usage_from_json_body(body);
+            let mut usage = parse_token_usage_from_json_body(body);
             let cache_cost = parse_cache_cost_from_json_body(body);
             // The whole bounded body is in hand here too — the generic
             // direct-proxy success path a host-served backend can also take.
@@ -254,16 +289,39 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             outgoing_end = outgoing_end.saturating_add_signed(delta);
             // Reads may include bytes beyond the declared HTTP body. Only the
             // declared response is client-visible and capturable.
-            tcp_stream.write_all(&buffered[..outgoing_end]).await?;
-            if body_len > 0
-                && super::dispatch::is_event_stream_content_type(parsed.content_type.as_deref())
-            {
-                route_observer.inference_observation_first_output();
+            tcp_stream
+                .write_all(&buffered[..outgoing_end])
+                .await
+                .map_err(super::common::RelayIoError::DownstreamWrite)?;
+            let relayed_body = &buffered[outgoing_end - body_len..outgoing_end];
+            route_observer.capture_response_body(relayed_body, parsed.content_type.as_deref());
+            if is_event_stream {
+                let mut inspector = super::raw_stream_inspector::RawSseInspector::default();
+                inspector.feed(relayed_body, || {
+                    route_observer.inference_observation_first_output();
+                });
+                let sse_outcome = inspector.finish();
+                usage = sse_outcome.usage.or(usage);
+                if sse_outcome.saw_error {
+                    tcp_stream.record_exchange_outcome("backend_error");
+                    let _ = tcp_stream.shutdown().await;
+                    return Ok(RouteAttemptResult::CommittedStreamFailure {
+                        status_code: probe.status_code,
+                        cause: super::common::CommittedStreamFailureCause::BackendError,
+                    });
+                }
+                if require_sse_done && !sse_outcome.saw_done {
+                    tcp_stream.record_exchange_outcome("transport_error");
+                    tcp_stream.finish_wire_bytes(
+                        skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+                    );
+                    let _ = tcp_stream.shutdown().await;
+                    return Ok(RouteAttemptResult::CommittedStreamFailure {
+                        status_code: probe.status_code,
+                        cause: super::common::CommittedStreamFailureCause::Truncated,
+                    });
+                }
             }
-            route_observer.capture_response_body(
-                &buffered[outgoing_end - body_len..outgoing_end],
-                parsed.content_type.as_deref(),
-            );
             let _ = tcp_stream.shutdown().await;
             return Ok(RouteAttemptResult::Delivered {
                 status_code: probe.status_code,
@@ -289,12 +347,16 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     );
     header_end = header_end.saturating_add_signed(delta);
     let initial_body = &buffered[header_end..];
-    tcp_stream.write_all(&buffered).await?;
+    tcp_stream
+        .write_all(&buffered)
+        .await
+        .map_err(super::common::RelayIoError::DownstreamWrite)?;
     route_observer.capture_response_unavailable(ArtifactUnavailableReason::ResponseBodyNotBounded);
     let copy_outcome = match super::dispatch::copy_unbounded_response_body(
         reader,
         tcp_stream,
         parsed.content_type.as_deref(),
+        parsed.chunked,
         initial_body,
         route_observer,
     )
@@ -308,9 +370,25 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
         }
     };
     let total_body_bytes = (initial_body.len() as u64).saturating_add(copy_outcome.copied_bytes);
-    if let Some(declared_len) = parsed.content_length
-        && total_body_bytes < declared_len as u64
-    {
+    let short_declared_length = !parsed.chunked
+        && parsed
+            .content_length
+            .is_some_and(|declared_len| total_body_bytes < declared_len as u64);
+    let incomplete_framing = short_declared_length || !copy_outcome.chunked_framing_complete;
+    if copy_outcome.saw_error {
+        tcp_stream.record_exchange_outcome("backend_error");
+        if incomplete_framing {
+            tcp_stream.finish_wire_bytes(
+                skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+            );
+        }
+        let _ = tcp_stream.shutdown().await;
+        return Ok(RouteAttemptResult::CommittedStreamFailure {
+            status_code: probe.status_code,
+            cause: super::common::CommittedStreamFailureCause::BackendError,
+        });
+    }
+    if incomplete_framing || (require_sse_done && is_event_stream && !copy_outcome.saw_done) {
         tcp_stream.record_exchange_outcome("transport_error");
         tcp_stream.finish_wire_bytes(
             skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
@@ -334,17 +412,15 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
 fn handle_unbounded_body_copy_error(
     tcp_stream: &mut ClientStream,
     status_code: u16,
-    err: super::dispatch::BodyCopyError,
+    err: super::common::RelayIoError,
 ) -> RouteAttemptResult {
     tcp_stream.record_exchange_outcome("transport_error");
     tcp_stream
         .finish_wire_bytes(skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError);
     tracing::debug!("response relay ended after headers were committed: {err}");
-    if let super::dispatch::BodyCopyError::Downstream(io_err) = err {
-        let anyhow_err = anyhow::Error::new(io_err);
-        if super::common::is_client_disconnect_error(&anyhow_err) {
-            return RouteAttemptResult::ClientDisconnected;
-        }
+    let anyhow_err = anyhow::Error::new(err);
+    if super::common::is_client_disconnect_error(&anyhow_err) {
+        return RouteAttemptResult::ClientDisconnected;
     }
     RouteAttemptResult::CommittedStreamFailure {
         status_code,
@@ -354,6 +430,8 @@ fn handle_unbounded_body_copy_error(
 
 #[cfg(test)]
 mod header_replacement_tests;
+#[cfg(test)]
+mod unbounded_copy_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1031,254 +1109,6 @@ mod tests {
         assert!(
             response_text.contains(&format!("x-request-id: {}", request_id.as_uuid())),
             "the OpenAI response must echo the canonical request id: {response_text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn unbounded_sse_copy_returns_committed_stream_failure_on_upstream_error() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-
-        struct FailingReader;
-        impl tokio::io::AsyncRead for FailingReader {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-                _buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "upstream reset",
-                )))
-            }
-        }
-
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
-        let parsed = ParsedResponseHeaders {
-            header_end: header.len(),
-            status_code: 200,
-            content_length: None,
-            content_type: Some("text/event-stream".to_owned()),
-            chunked: false,
-            client_nonce: None,
-            nonce_origin: None,
-            served_model: Default::default(),
-        };
-        let probe = ResponseProbe {
-            buffered: header.as_bytes().to_vec(),
-            header_end: header.len(),
-            status_code: 200,
-            retryable_context_overflow: false,
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            let (client, _) = listener.accept().await.unwrap();
-            let mut client: ClientStream = client.into();
-            let mut reader = FailingReader;
-            relay_success_response(
-                &mut client,
-                &mut reader,
-                probe,
-                parsed,
-                ResponseRetryPolicy::next_target_available(false),
-                None,
-                OpenAiRouteObserver::default(),
-                RequestId::new(),
-            )
-            .await
-            .unwrap()
-        });
-        let mut socket = ClientStream::connect(address).await.unwrap();
-        let mut response = Vec::new();
-        let _ = socket.read_to_end(&mut response).await;
-        let result = task.await.unwrap();
-        assert_eq!(
-            result,
-            RouteAttemptResult::CommittedStreamFailure {
-                status_code: 200,
-                cause: super::super::common::CommittedStreamFailureCause::Truncated,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn unbounded_sse_copy_returns_client_disconnected_on_downstream_drop() {
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
-        let parsed = ParsedResponseHeaders {
-            header_end: header.len(),
-            status_code: 200,
-            content_length: None,
-            content_type: Some("text/event-stream".to_owned()),
-            chunked: false,
-            client_nonce: None,
-            nonce_origin: None,
-            served_model: Default::default(),
-        };
-        let probe = ResponseProbe {
-            buffered: header.as_bytes().to_vec(),
-            header_end: header.len(),
-            status_code: 200,
-            retryable_context_overflow: false,
-        };
-        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            let (client, _) = listener.accept().await.unwrap();
-            let mut client: ClientStream = client.into();
-            relay_success_response(
-                &mut client,
-                &mut upstream_reader,
-                probe,
-                parsed,
-                ResponseRetryPolicy::next_target_available(false),
-                None,
-                OpenAiRouteObserver::default(),
-                RequestId::new(),
-            )
-            .await
-            .unwrap()
-        });
-        let mut socket = ClientStream::connect(address).await.unwrap();
-        let mut head_buf = [0u8; 256];
-        let _ = socket.read(&mut head_buf).await.unwrap();
-        drop(socket);
-
-        let chunk = vec![b'a'; 16 * 1024];
-        for _ in 0..32 {
-            if upstream_writer.write_all(&chunk).await.is_err() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        drop(upstream_writer);
-        let result = task.await.unwrap();
-        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
-    }
-
-    #[tokio::test]
-    async fn unbounded_sse_stream_returns_usage_from_final_frame() {
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
-        let initial_chunk = "data: {\"choices\":[{\"text\":\"hello\"}]}\n\n";
-        let mut buffered = header.as_bytes().to_vec();
-        buffered.extend_from_slice(initial_chunk.as_bytes());
-        let parsed = ParsedResponseHeaders {
-            header_end: header.len(),
-            status_code: 200,
-            content_length: None,
-            content_type: Some("text/event-stream".to_owned()),
-            chunked: false,
-            client_nonce: None,
-            nonce_origin: None,
-            served_model: Default::default(),
-        };
-        let probe = ResponseProbe {
-            buffered,
-            header_end: header.len(),
-            status_code: 200,
-            retryable_context_overflow: false,
-        };
-        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            let (client, _) = listener.accept().await.unwrap();
-            let mut client: ClientStream = client.into();
-            relay_success_response(
-                &mut client,
-                &mut upstream_reader,
-                probe,
-                parsed,
-                ResponseRetryPolicy::next_target_available(false),
-                None,
-                OpenAiRouteObserver::default(),
-                RequestId::new(),
-            )
-            .await
-            .unwrap()
-        });
-        upstream_writer
-            .write_all(
-                b"data: {\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":4,\"total_tokens\":11}}\n\ndata: [DONE]\n\n",
-            )
-            .await
-            .unwrap();
-        drop(upstream_writer);
-        let mut socket = ClientStream::connect(address).await.unwrap();
-        let mut response = Vec::new();
-        socket.read_to_end(&mut response).await.unwrap();
-        let result = task.await.unwrap();
-        match result {
-            RouteAttemptResult::Delivered {
-                status_code, usage, ..
-            } => {
-                assert_eq!(status_code, 200);
-                let usage = usage.expect("SSE usage frame should be parsed");
-                assert_eq!(usage.prompt_tokens, Some(7));
-                assert_eq!(usage.completion_tokens, Some(4));
-                assert_eq!(usage.total_tokens, Some(11));
-            }
-            other => panic!("expected Delivered with usage, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn large_declared_content_length_short_eof_returns_committed_stream_failure() {
-        let declared_len = 2 * 1024 * 1024;
-        let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {declared_len}\r\n\r\n"
-        );
-        let parsed = ParsedResponseHeaders {
-            header_end: header.len(),
-            status_code: 200,
-            content_length: Some(declared_len),
-            content_type: Some("application/json".to_owned()),
-            chunked: false,
-            client_nonce: None,
-            nonce_origin: None,
-            served_model: Default::default(),
-        };
-        let probe = ResponseProbe {
-            buffered: header.as_bytes().to_vec(),
-            header_end: header.len(),
-            status_code: 200,
-            retryable_context_overflow: false,
-        };
-        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            let (client, _) = listener.accept().await.unwrap();
-            let mut client: ClientStream = client.into();
-            relay_success_response(
-                &mut client,
-                &mut upstream_reader,
-                probe,
-                parsed,
-                ResponseRetryPolicy::next_target_available(false),
-                None,
-                OpenAiRouteObserver::default(),
-                RequestId::new(),
-            )
-            .await
-            .unwrap()
-        });
-        upstream_writer
-            .write_all(b"{\"partial\":true")
-            .await
-            .unwrap();
-        drop(upstream_writer);
-        let mut socket = ClientStream::connect(address).await.unwrap();
-        let mut response = Vec::new();
-        socket.read_to_end(&mut response).await.unwrap();
-        let result = task.await.unwrap();
-        assert_eq!(
-            result,
-            RouteAttemptResult::CommittedStreamFailure {
-                status_code: 200,
-                cause: super::super::common::CommittedStreamFailureCause::Truncated,
-            }
         );
     }
 }

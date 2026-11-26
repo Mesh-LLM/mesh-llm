@@ -15,6 +15,7 @@ use mesh_llm_events::logging::events::TokenUsage;
 use skippy_inference_api::{RequestId, generate_request_id};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use url::{Host, Url};
 
 /// Whether a plugin inference endpoint protocol maps to `InferenceOperation`
 /// events in `local_inference_observation.v1`.
@@ -23,13 +24,62 @@ pub(crate) fn is_observable_inference_protocol(protocol: Option<&str>) -> bool {
         || protocol.is_some_and(|p| p.eq_ignore_ascii_case("openai_compatible"))
 }
 
-/// Collect the ready observable inference model set from one plugin's endpoint summaries.
-pub(crate) fn ready_models_for_endpoints(endpoints: &[PluginEndpointSummary]) -> BTreeSet<String> {
+/// Whether `address` parses as an HTTP(S) URL targeting loopback on this host.
+pub(crate) fn is_loopback_http_address(address: &str) -> bool {
+    let Ok(url) = Url::parse(address) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    match url.host() {
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Some(Host::Domain(domain)) => domain
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
+/// Shared locality rule used for both readiness (`model_ready` / `model_unloaded`)
+/// and execution observation (`local_inference_observation.v1`).
+///
+/// An explicit operator setting (`plugin.<name>.local_inference_endpoints`)
+/// wins for ambiguous proxies or unmanaged local servers. When unset, only
+/// plugin-managed loopback endpoints are trusted as executing on this node so
+/// remote relay endpoints never skew node-local measurements (such as energy
+/// per token).
+pub(crate) fn is_local_inference_endpoint(
+    address: &str,
+    managed_by_plugin: bool,
+    operator_local_override: Option<bool>,
+) -> bool {
+    if let Some(local) = operator_local_override {
+        return local;
+    }
+    managed_by_plugin && is_loopback_http_address(address)
+}
+
+/// Collect the ready observable local inference model set from one plugin's
+/// endpoint summaries.
+pub(crate) fn ready_models_for_endpoints(
+    endpoints: &[PluginEndpointSummary],
+    operator_local_override: Option<bool>,
+) -> BTreeSet<String> {
     let mut ready_models = BTreeSet::new();
     for endpoint in endpoints {
         if endpoint.kind == "inference"
             && endpoint.available
-            && endpoint.address.is_some()
+            && endpoint.address.as_deref().is_some_and(|address| {
+                is_local_inference_endpoint(
+                    address,
+                    endpoint.managed_by_plugin,
+                    operator_local_override,
+                )
+            })
             && is_observable_inference_protocol(endpoint.protocol.as_deref())
         {
             for model in &endpoint.models {
@@ -159,12 +209,53 @@ fn proto_usage_from_token_usage(usage: &TokenUsage) -> Option<proto::InferenceOu
     })
 }
 
+/// Deferred handle prepared before connecting to a plugin HTTP endpoint so
+/// `Started` is emitted only once forwarding the request succeeds.
+pub(crate) struct PendingPluginExecutionObservation {
+    hub: Arc<ObservationHub>,
+    model: String,
+    operation: proto::InferenceOperation,
+    streaming: bool,
+}
+
+impl PendingPluginExecutionObservation {
+    pub(crate) fn prepare_for_request(
+        model: Option<&str>,
+        request: &BufferedHttpRequest,
+        observe_local_inference: bool,
+    ) -> Option<Self> {
+        if !observe_local_inference || !request.method.eq_ignore_ascii_case("POST") {
+            return None;
+        }
+        let model = model.filter(|m| !m.trim().is_empty())?;
+        let (operation, streaming) =
+            executed_operation_for_path(&request.client_path, request.is_streaming_request())?;
+        Some(Self {
+            hub: super::hub(),
+            model: model.to_owned(),
+            operation,
+            streaming,
+        })
+    }
+
+    pub(crate) fn start(self) -> PluginExecutionObservation {
+        let observation_id = generate_request_id();
+        self.hub
+            .started(observation_id, &self.model, self.operation, self.streaming);
+        PluginExecutionObservation {
+            hub: self.hub,
+            observation_id,
+            finished: false,
+        }
+    }
+}
+
 /// RAII guard for one plugin-hosted HTTP inference execution.
 ///
 /// Uses a freshly minted internal `RequestId` for `ObservationHub` keying so
 /// concurrent requests sharing a client-supplied `x-request-id` can never
 /// collide or terminate each other's execution. Emits `started` on
-/// construction, `first_output` on the first streamed chunk, and
+/// construction, `first_output` on the first streamed output frame, and
 /// `usage` / `compute_finished` / `ended` on completion. If dropped before
 /// finishing, `Drop` ends the execution as `Cancelled`.
 pub(crate) struct PluginExecutionObservation {
@@ -174,21 +265,7 @@ pub(crate) struct PluginExecutionObservation {
 }
 
 impl PluginExecutionObservation {
-    pub(crate) fn start_for_request(
-        model: Option<&str>,
-        request: &BufferedHttpRequest,
-    ) -> Option<Self> {
-        if !request.method.eq_ignore_ascii_case("POST") {
-            return None;
-        }
-        Self::start(
-            super::hub(),
-            model,
-            &request.client_path,
-            request.is_streaming_request(),
-        )
-    }
-
+    #[cfg(test)]
     pub(crate) fn start(
         hub: Arc<ObservationHub>,
         model: Option<&str>,

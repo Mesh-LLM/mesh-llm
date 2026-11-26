@@ -67,6 +67,7 @@ fn settings_spec(settings: &[(&str, serde_json::Value)]) -> ExternalPluginSpec {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         endpoint_models: None,
+        local_inference_endpoints: None,
         installed_metadata: None,
     }
 }

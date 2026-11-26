@@ -142,13 +142,17 @@ async fn spawn_plugin_openai_server(
     (address, handle)
 }
 
-fn inference_plugin(name: &'static str, address: String) -> InProcessPluginRunner {
+fn inference_plugin_with_managed(
+    name: &'static str,
+    address: String,
+    managed_by_plugin: bool,
+) -> InProcessPluginRunner {
     Arc::new(move |stream| {
         let manifest = mesh_llm_plugin::plugin_manifest()
-            .item(mesh_llm_plugin::openai_http_inference_endpoint(
-                "openai",
-                address.clone(),
-            ))
+            .item(
+                mesh_llm_plugin::openai_http_inference_endpoint("openai", address.clone())
+                    .managed_by_plugin(managed_by_plugin),
+            )
             .build();
         let plugin = SimplePlugin::new(
             PluginMetadata::new(
@@ -166,6 +170,10 @@ fn inference_plugin(name: &'static str, address: String) -> InProcessPluginRunne
         );
         Box::pin(PluginRuntime::run_with_stream(plugin, stream))
     })
+}
+
+fn inference_plugin(name: &'static str, address: String) -> InProcessPluginRunner {
+    inference_plugin_with_managed(name, address, true)
 }
 
 async fn run_plugin_http_request(
@@ -193,6 +201,7 @@ async fn run_plugin_http_request(
         RouteSelectionMetadata {
             provider: Some("obs-plugin"),
             engine: Some("openai"),
+            observe_local_inference: true,
         },
         &mut client_stream,
         base_url,
@@ -674,6 +683,7 @@ async fn sdk_watcher_receives_plugin_observations_over_wire_including_disconnect
         RouteSelectionMetadata {
             provider: Some("obs-provider"),
             engine: Some("openai"),
+            observe_local_inference: true,
         },
         &mut client_stream,
         &address,
