@@ -76,6 +76,9 @@ pub struct AdmittedStageOptions {
     pub upstream: Option<PeerConfig>,
     pub downstream: Option<PeerConfig>,
     pub admission: skippy_protocol::StageAdmissionDescriptor,
+    /// Highest request tier this stage serves; see
+    /// [`StageConfig::max_request_tier`]. `None` serves the stamped tier.
+    pub max_request_tier: Option<String>,
 }
 
 impl AdmittedStageOptions {
@@ -201,6 +204,7 @@ pub fn admitted_stage_config(
         bind_addr: load.bind_addr.clone(),
         upstream: load.upstream.clone(),
         downstream: load.downstream.clone(),
+        max_request_tier: load.max_request_tier.clone(),
     };
     let family_policy = crate::family_policy::family_policy_for_stage_config(&config);
     config.kv_cache = package.map_or_else(

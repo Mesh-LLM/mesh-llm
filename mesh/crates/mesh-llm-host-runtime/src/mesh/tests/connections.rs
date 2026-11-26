@@ -332,6 +332,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         upstream: None,
         downstream: None,
+        max_request_tier: None,
     }
 }
 
@@ -391,6 +392,7 @@ async fn make_configured_test_node(
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
         gossip_reply_limiter: Arc::default(),
+        peer_discovery: Arc::default(),
         native_inference: Default::default(),
         adopted_membership_file: None,
         identity_state_dir: None,
@@ -470,6 +472,7 @@ async fn make_configured_test_node(
         trust_store: Arc::new(Mutex::new(TrustStore::default())),
         trust_policy: TrustPolicy::Off,
         private_nodes: Default::default(),
+        request_tier_owners: Default::default(),
         enumerate_host: false,
         gpu_name: None,
         hostname: None,
@@ -501,6 +504,7 @@ async fn make_configured_test_node(
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        test_apply_config_deadline: Arc::default(),
         native_model_lifecycle: Arc::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),

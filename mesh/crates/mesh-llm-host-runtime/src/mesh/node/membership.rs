@@ -329,6 +329,7 @@ impl Node {
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
             gossip_reply_limiter: Arc::default(),
+            peer_discovery: Arc::default(),
             plugin_message_history: Default::default(),
             direct_rescue_endpoints: super::super::direct_rescue::DirectRescueEndpoints::default(),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -376,6 +377,8 @@ impl Node {
             unmatched_model_requirements: Default::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            #[cfg(test)]
+            test_apply_config_deadline: Arc::default(),
             native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
@@ -389,6 +392,7 @@ impl Node {
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,
             private_nodes: self.private_nodes.clone(),
+            request_tier_owners: self.request_tier_owners.clone(),
             enumerate_host: config.enumerate_host,
             public_mesh: false,
             // The serving state it shares with this node.

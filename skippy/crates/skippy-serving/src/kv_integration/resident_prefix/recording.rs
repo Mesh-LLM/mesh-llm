@@ -56,11 +56,13 @@ impl KvStageIntegration {
                 },
             ));
         }
+        let retention = identity.retention_priority();
         if !make_record_room(
             self.resident_config,
             &mut radix,
             &mut sequences,
             checkpoint_bytes,
+            retention,
             &mut evicted,
             |victim| self.release_native_prefix(runtime, session_id, victim),
         )? {
@@ -87,10 +89,21 @@ impl KvStageIntegration {
         let seq_id = match sequences.allocate() {
             Ok(sequence) => sequence,
             Err(error) => {
-                let removed = evict_one_resident(&mut radix, &mut sequences, |victim| {
-                    self.release_native_prefix(runtime, session_id, victim)
-                })?;
+                let removed =
+                    evict_one_resident(&mut radix, &mut sequences, retention, |victim| {
+                        self.release_native_prefix(runtime, session_id, victim)
+                    })?;
                 let Some(removed) = removed else {
+                    // The evictable sequences hold higher tiers' prefixes: keep them.
+                    if radix
+                        .resident_eviction_candidates()
+                        .iter()
+                        .any(|candidate| candidate.value.retention_priority > retention)
+                    {
+                        return Ok(ResidentRecordOutcome::Skipped(ResidentRecordSkip::NoRoom {
+                            bytes: checkpoint_bytes,
+                        }));
+                    }
                     return Err(error);
                 };
                 evicted.0 += 1;
@@ -112,6 +125,7 @@ impl KvStageIntegration {
             seq_id,
             token_count: token_count as u64,
             recompute_cost: (token_count as u64).saturating_mul(u64::from(layers)),
+            retention_priority: identity.retention_priority(),
         };
         let candidate = skippy_cache::RadixEvictionCandidate {
             namespace: identity.namespace.clone(),
@@ -138,6 +152,7 @@ impl KvStageIntegration {
                 &mut radix,
                 &mut sequences,
                 bytes,
+                retention,
                 &mut evicted,
                 |victim| self.release_native_prefix(runtime, session_id, victim),
             )
@@ -257,11 +272,14 @@ fn make_record_room(
     radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::super::RadixExactEntry>,
     sequences: &mut ResidentSequencePool,
     bytes: u64,
+    incoming_retention: u64,
     evicted: &mut (usize, u64),
     mut drop_native: impl FnMut(&skippy_cache::RadixEvictionCandidate<RadixResidentEntry>) -> Result<()>,
 ) -> Result<bool> {
     while resident_index_over_capacity(config, radix.stats(), bytes) {
-        let Some(removed) = evict_one_resident(radix, sequences, &mut drop_native)? else {
+        let Some(removed) =
+            evict_one_resident(radix, sequences, incoming_retention, &mut drop_native)?
+        else {
             return Ok(false);
         };
         evicted.0 = evicted.0.saturating_add(1);
@@ -348,6 +366,7 @@ mod resident_record_cap_tests {
                     seq_id,
                     token_count: 100,
                     recompute_cost: 100,
+                    retention_priority: 0,
                 },
             )
             .unwrap();
@@ -362,6 +381,97 @@ mod resident_record_cap_tests {
 #[cfg(test)]
 mod checkpoint_budget_tests {
     use super::*;
+
+    /// A cache holding one resident entry per `(tokens, retention)` pair.
+    fn tiered_cache(
+        entries: &[(&[i32], u64)],
+    ) -> (
+        skippy_cache::UnifiedRadixCache<RadixResidentEntry, crate::kv_integration::RadixExactEntry>,
+        ResidentSequencePool,
+    ) {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        for (tokens, retention) in entries {
+            let seq = sequences.allocate().unwrap();
+            radix
+                .insert_resident(
+                    "model",
+                    tokens,
+                    10,
+                    RadixResidentEntry {
+                        page_id: seq.to_string(),
+                        seq_id: seq,
+                        token_count: tokens.len() as u64,
+                        recompute_cost: 1,
+                        retention_priority: *retention,
+                    },
+                )
+                .unwrap();
+        }
+        (radix, sequences)
+    }
+
+    #[test]
+    fn a_record_evicts_only_entries_at_or_below_its_tier() {
+        let config = skippy_cache::ResidentCacheConfig {
+            max_entries: 2,
+            max_bytes: 0,
+            min_tokens: 1,
+            reserved_seq_count: 4,
+            max_resident_tokens: 0,
+        };
+        let (mut radix, mut sequences) = tiered_cache(&[(&[1], 2), (&[2], 2)]);
+        assert!(
+            !make_record_room(
+                config,
+                &mut radix,
+                &mut sequences,
+                0,
+                0,
+                &mut (0, 0),
+                |_| { panic!("a lower tier's record must not evict a higher tier's prefix") }
+            )
+            .unwrap()
+        );
+        assert_eq!(radix.stats().resident_entries, 2);
+
+        let mut dropped = Vec::new();
+        assert!(
+            make_record_room(
+                config,
+                &mut radix,
+                &mut sequences,
+                0,
+                2,
+                &mut (0, 0),
+                |victim| {
+                    dropped.push(victim.value.retention_priority);
+                    Ok(())
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(dropped, [2]);
+
+        let (mut radix, mut sequences) = tiered_cache(&[(&[1], 2), (&[2], 0)]);
+        let mut dropped = Vec::new();
+        assert!(
+            make_record_room(
+                config,
+                &mut radix,
+                &mut sequences,
+                0,
+                0,
+                &mut (0, 0),
+                |victim| {
+                    dropped.push(victim.tokens.clone());
+                    Ok(())
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(dropped, [vec![2]]);
+    }
 
     #[test]
     fn native_host_bytes_evict_unpinned_owner_without_summing_shared_kv() {
@@ -380,6 +490,7 @@ mod checkpoint_budget_tests {
                         seq_id: seq,
                         token_count: tokens.len() as u64,
                         recompute_cost: 1,
+                        retention_priority: 0,
                     },
                 )
                 .unwrap();
@@ -400,6 +511,7 @@ mod checkpoint_budget_tests {
                 &mut radix,
                 &mut sequences,
                 30,
+                0,
                 &mut evicted,
                 |seq| {
                     dropped.push(seq.value.seq_id);
@@ -429,6 +541,7 @@ mod checkpoint_budget_tests {
                     seq_id: seq,
                     token_count: 2,
                     recompute_cost: 1,
+                    retention_priority: 0,
                 },
             )
             .unwrap();
@@ -448,6 +561,7 @@ mod checkpoint_budget_tests {
                 &mut radix,
                 &mut sequences,
                 30,
+                0,
                 &mut (0, 0),
                 |_| panic!("pinned checkpoint must not be dropped")
             )

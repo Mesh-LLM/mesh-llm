@@ -74,9 +74,9 @@ async fn run_nostr_discover(
     }
 
     if meshes.is_empty() && !health.any_query_completed() {
-        // Relays spoke but none finished, so what they left out says nothing.
+        // Interrupted or limit-truncated results cannot prove absence.
         anyhow::bail!(
-            "Nostr search incomplete: no relay finished its query ({} of {} answered); try again",
+            "Nostr search incomplete: no relay completed an untruncated query ({} of {} answered); try again",
             health.relays_answered,
             health.relays_queried
         );

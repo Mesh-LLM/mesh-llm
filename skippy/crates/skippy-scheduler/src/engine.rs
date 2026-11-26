@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     CacheAwareCandidate, IterationPhase, IterationPlan, IterationPrediction, IterationTelemetry,
-    IterationWork, SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus,
+    IterationWork, PriorityPassovers, SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus,
     order_cache_aware_candidates,
 };
 
@@ -32,6 +32,7 @@ pub struct Scheduler {
     metrics: SchedulerMetrics,
     consecutive_prefill_iterations: usize,
     waiting_turn: u64,
+    passovers: PriorityPassovers,
     next_waiting_order: u64,
     waiting_order_dirty: bool,
     decode_us_ewma_by_rows: BTreeMap<usize, f64>,
@@ -55,6 +56,7 @@ impl Scheduler {
             metrics: SchedulerMetrics::default(),
             consecutive_prefill_iterations: 0,
             waiting_turn: 0,
+            passovers: PriorityPassovers::default(),
             next_waiting_order: 0,
             waiting_order_dirty: false,
             decode_us_ewma_by_rows: BTreeMap::new(),
@@ -84,6 +86,7 @@ impl Scheduler {
             self.metrics.prefix_misses = self.metrics.prefix_misses.saturating_add(1);
         }
         sequence.enqueued_turn = self.waiting_turn;
+        sequence.passover_mark = self.passovers.mark(sequence.priority);
         sequence.enqueue_order = self.next_waiting_order;
         self.next_waiting_order = self.next_waiting_order.saturating_add(1);
         self.waiting.push_back(sequence);
@@ -482,6 +485,8 @@ impl Scheduler {
             };
             self.release_memory(&sequence);
             sequence.reset_for_recompute();
+            // Admissions made while it ran did not pass it over.
+            sequence.passover_mark = self.passovers.mark(sequence.priority);
             sequence.enqueue_order = self.next_waiting_order;
             self.next_waiting_order = self.next_waiting_order.saturating_add(1);
             self.waiting.push_front(sequence);
@@ -534,6 +539,7 @@ impl Scheduler {
 
     fn admit_waiting(&mut self) -> usize {
         let mut admitted = 0;
+        let mut highest_admitted = None;
         let mut deferred = VecDeque::new();
         if self.waiting_order_dirty {
             let order = order_cache_aware_candidates(
@@ -547,6 +553,9 @@ impl Scheduler {
                         prompt_tokens: &sequence.prompt_tokens,
                         enqueued_turn: sequence.enqueued_turn,
                         order: sequence.enqueue_order,
+                        passed_over: self
+                            .passovers
+                            .passed_over(sequence.priority, sequence.passover_mark),
                     }),
                 self.waiting_turn,
                 self.config.cache_aging_cost_per_iteration,
@@ -569,12 +578,23 @@ impl Scheduler {
                 continue;
             }
             self.reserve_memory(&sequence);
+            self.passovers.record_selection(sequence.priority);
+            highest_admitted = highest_admitted.max(Some(sequence.priority));
             sequence.status = SequenceStatus::Running;
             sequence.admitted_at = Some(Instant::now());
             self.active.insert(sequence.id.clone(), sequence);
             admitted += 1;
         }
         self.waiting = deferred;
+        // Passing lower priorities over can age them past another level.
+        if let Some(highest) = highest_admitted
+            && self
+                .waiting
+                .iter()
+                .any(|waiting| waiting.priority < highest)
+        {
+            self.waiting_order_dirty = true;
+        }
         self.refresh_counts();
         admitted
     }
@@ -1284,5 +1304,37 @@ mod tests {
             assert_eq!(scheduler.snapshot().active_ids, ["cold"]);
             assert_eq!(scheduler.sequence("cold").unwrap().enqueued_turn, 0);
         }
+    }
+
+    #[test]
+    fn a_preempted_sequence_is_not_aged_by_admissions_made_while_it_ran() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 1,
+            memory_components: vec![MemoryComponent {
+                name: "kv".into(),
+                capacity_bytes: 2,
+                resident_bytes: 0,
+                bytes_per_token: 1,
+                bytes_per_sequence: 0,
+            }],
+            ..SchedulerConfig::default()
+        });
+        scheduler
+            .submit(sequence("mesh", 2, 4).with_admission_tokens(1))
+            .unwrap();
+        scheduler.plan_iteration();
+        assert_eq!(scheduler.snapshot().active_ids, ["mesh"]);
+        for _ in 0..2 * crate::PRIORITY_AGING_TURNS {
+            scheduler.passovers.record_selection(2);
+        }
+        assert_eq!(scheduler.preempt_for_component_pressure(&[3]), ["mesh"]);
+        scheduler.preempt_for_component_pressure(&[0]);
+        let mut local = sequence("local", 2, 4).with_admission_tokens(1);
+        local.priority = 2;
+        scheduler.submit(local).unwrap();
+
+        scheduler.plan_iteration();
+
+        assert_eq!(scheduler.snapshot().active_ids, ["local"]);
     }
 }

@@ -534,8 +534,8 @@ model-output verification. The operator-facing behavior is specified in
 
 Opt-in mesh advertisement via Nostr relays (NIP-89, kind 31990):
 - `--publish`: republish listing every 60s (TTL 120s)
-- `--auto`: discover meshes, score them, health-probe, join best
-- Publish watchdog: if publisher dies, another node takes over — only when a relay completed its query (EOSE) without the listing, on both the first check and the recheck after backoff. No relay answering, or relays that send events and drop before EOSE, mean "cannot tell", not "listing gone"
+- `--auto`: discover meshes, score them, health-probe, join best. Startup fails when no Nostr relay answers rather than starting a new mesh on an outage
+- Publish watchdog: if publisher dies, another node takes over — only when a relay reached EOSE below the requested event limit without the listing, on both the first check and the recheck after backoff, for the same mesh ID. Silent, interrupted, or limit-truncated queries mean "cannot tell", not "listing gone"
 - `score_mesh()`: region match (+200), capacity, node count, VRAM, sticky preference (+500)
 - `smart_auto()`: picks best mesh or recommends starting new one with models for your VRAM
 

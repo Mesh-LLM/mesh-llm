@@ -541,7 +541,7 @@ Advertisement modes (configured via `[runtime.activity].advertisement`):
   explicitly-known-and-empty while non-admitting. Does not emit the enum.
 - `coarse_state` (default): emit the admission enum and also publish
   known-empty availability for old peers that do not recognize tag 49.
-- `private_coarse_state`: emit the enum only on private meshes; use
+- `private_coarse_state`: emit the enum only when public-discovery mode is off; use
   known-empty availability publicly.
 
 **Privacy**: the admission field encodes only the coarse state above. No raw

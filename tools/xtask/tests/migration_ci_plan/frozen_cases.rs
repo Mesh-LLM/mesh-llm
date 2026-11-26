@@ -59,7 +59,22 @@ fn check_case(case: &Case) -> TestResult {
         let golden = fs::read_to_string(plan)?;
         assert_eq!(text(&ported.stderr), "", "{}: stderr", case.name);
         assert_eq!(ported.status.code(), Some(0), "{}: status", case.name);
-        assert_eq!(text(&ported.stdout), format!("{golden}\n"), "{}", case.name);
+        // Keep the historical coverage bytes fixed; placement has its own
+        // executable planner/forwarding contract in ci_runner_cache_contract.
+        let mut current: Value = serde_json::from_slice(&ported.stdout)?;
+        assert!(
+            current["signals"]
+                .as_object_mut()
+                .ok_or("signals")?
+                .remove("hosted_runner_required")
+                .is_some_and(|value| value.is_boolean())
+        );
+        assert_eq!(
+            ci_controller::plan::plan_bytes::render(&current),
+            golden,
+            "{}: historical coverage bytes",
+            case.name
+        );
     } else {
         let golden = fs::read_to_string(expected.join(format!("{}.error.txt", case.name)))?;
         let stderr = text(&ported.stderr).replace(&placeholder, "<manifests>/");

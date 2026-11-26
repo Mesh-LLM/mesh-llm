@@ -328,6 +328,21 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("<64 hex characters>")
         .hint("text")),
+        "request_tiers.owners" => Some(sp(
+            "Request tier overrides",
+            "Owner id (64 hex characters) to the tier this node serves that owner's nodes at: local, trusted or mesh. By default this node's own owner is local, owners in the trust store are trusted, and everyone else is mesh.",
+            NETWORK_CATEGORY,
+            6,
+        )
+        .placeholder("{\"<64 hex characters>\":\"trusted\"}")
+        .hint("text")),
+        "request_tiers.local_kv_reserve_percent" => Some(sp(
+            "Local KV reserve",
+            "Percent of each model's KV budget that only local requests may use. 0 reserves nothing. Applies when a model loads.",
+            NETWORK_CATEGORY,
+            7,
+        )
+        .hint("number")),
         "owner_control.bind" => Some(sp(
             "Owner-control bind",
             "Local address used by the owner-control listener. Set this to the same port as the advertised control address when overriding owner-control discovery.",

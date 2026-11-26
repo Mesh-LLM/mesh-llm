@@ -108,7 +108,7 @@ mesh-llm serve --auto --headless
 | Goal | Command | Full guide |
 |---|---|---|
 | Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](mesh/docs/MESHES.md) |
-| Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](mesh/docs/MESHES.md) |
+| Start an unpublished mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](mesh/docs/MESHES.md) |
 | Serve one model without mesh networking (debugging/dev) | `mesh-llm serve --local-model-only --gguf /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
 | Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](mesh/docs/MESHES.md) |
 | Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](mesh/docs/MESHES.md) |
@@ -118,6 +118,7 @@ mesh-llm serve --auto --headless
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
 | Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/plugins/virtual-models.md](mesh/docs/plugins/virtual-models.md) |
 | Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
+| Earn by serving paid inference | `mesh-llm plugins install Mesh-LLM/ln-payments-plugin Mesh-LLM/lexe-wallet-plugin` | [earnings.md](earnings.md) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## How the mesh works
@@ -139,7 +140,8 @@ mesh-llm serve --auto --headless
 - **Layer packages.** Package repositories contain `model-package.json` plus
   GGUF fragments so peers fetch only the pieces needed for their assigned stage.
 - **Public discovery.** Published meshes advertise through Nostr discovery;
-  private meshes stay invite-token based.
+  join tokens locate published or unpublished meshes. [Private membership requires
+  admission control](mesh/docs/MESHES.md#ownership-and-admission-control).
 
 For a deeper operator guide, see [docs/USAGE.md](mesh/docs/USAGE.md). For every CLI
 command and switch, see [docs/CLI.md](mesh/docs/CLI.md).

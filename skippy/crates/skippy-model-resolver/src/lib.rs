@@ -2,6 +2,7 @@ pub mod catalog;
 pub mod hf_catalog;
 pub mod refs;
 pub mod resolve;
+pub mod startup;
 pub mod types;
 
 pub use catalog::{

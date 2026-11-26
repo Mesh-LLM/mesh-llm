@@ -794,4 +794,9 @@ mod tests {
             br#"{"error":{"message":"missing required field: messages"}}"#
         ));
     }
+    #[test]
+    fn a_request_refused_by_the_local_kv_reserve_is_retried_elsewhere() {
+        let body = br#"{"error":{"message":"request requires 6 KV tokens, which exceeds the 5 of the 10-token runtime pool that mesh requests may use; the rest is reserved for local requests"}}"#;
+        assert!(is_retryable_context_overflow_response(body));
+    }
 }

@@ -92,6 +92,7 @@ pub struct Node {
     pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
     pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
     pub(crate) gossip_reply_limiter: Arc<super::gossip::reply_limit::GossipReplyLimiter>,
+    pub(super) peer_discovery: Arc<Mutex<super::gossip::PendingDiscovery>>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -204,6 +205,8 @@ pub struct Node {
     pub(crate) trust_policy: TrustPolicy,
     /// Nodes besides this one that may serve its private requests.
     pub(crate) private_nodes: super::private_nodes::PrivateNodes,
+    /// Per-owner overrides of the tier this node serves requests at.
+    pub(crate) request_tier_owners: super::request_tier::RequestTierOwners,
     pub enumerate_host: bool,
     pub gpu_name: Option<String>,
     pub hostname: Option<String>,
@@ -234,6 +237,8 @@ pub struct Node {
     pub(crate) unmatched_model_requirements:
         Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    #[cfg(test)]
+    pub(crate) test_apply_config_deadline: Arc<std::sync::OnceLock<std::time::Duration>>,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -771,6 +776,7 @@ impl Node {
             gossip_verification: Arc::default(),
             gossip_encoder: Arc::default(),
             gossip_reply_limiter: Arc::default(),
+            peer_discovery: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -820,6 +826,7 @@ impl Node {
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
             private_nodes: Default::default(),
+            request_tier_owners: Default::default(),
             enumerate_host: false,
             gpu_name: None,
             hostname: None,
@@ -847,6 +854,7 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            test_apply_config_deadline: Arc::default(),
             native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),

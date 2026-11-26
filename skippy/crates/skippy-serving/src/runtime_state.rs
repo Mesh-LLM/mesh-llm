@@ -433,10 +433,9 @@ fn runtime_from_verified_model(
     config: &StageConfig,
     model: StageModel,
     observer: Option<Arc<dyn SessionLifecycleObserver>>,
-    content: Option<model_content::VerifiedModelContent>,
+    content: Option<Arc<model_content::VerifiedModelContent>>,
 ) -> Result<Arc<Mutex<RuntimeState>>> {
     // Verification and its post-open file checks finished outside this lock.
-    let content = content.map(Arc::new);
     let runtime = runtime_from_loaded_model(config, model, observer)?;
     panic_recovery::lock_runtime(&runtime).verified_model_content = content;
     Ok(runtime)

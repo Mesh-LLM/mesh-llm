@@ -224,54 +224,65 @@ pub async fn publish_watchdog(
 
     // Reusable client for repeated discovery checks.
     let disco = DiscoveryClient::new(&relays).await.ok();
-    let filter = MeshFilter::default();
-
     loop {
-        match discover_with_health(&relays, &filter, disco.as_ref()).await {
-            Ok((meshes, health)) => {
-                if should_take_over_publish(&node, &meshes, health).await {
-                    if !confirm_missing_listing_after_backoff(
-                        &relays,
-                        &filter,
-                        disco.as_ref(),
-                        &node,
-                    )
-                    .await
-                    {
-                        tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
-                        continue;
-                    }
-
-                    let _ = emit_event(OutputEvent::NostrPublishing {
-                        message: "📡 Taking over Nostr publishing for the mesh".to_string(),
-                    });
-                    let Some(keys) = load_watchdog_publish_keys(check_interval_secs).await else {
-                        continue;
-                    };
-                    publish_loop(
-                        node,
-                        keys,
-                        watchdog_takeover_publish_config(
-                            relays,
-                            mesh_name,
-                            region,
-                            check_interval_secs,
-                            status_tx,
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            }
-            Err(e) => {
-                tracing::debug!("Publish watchdog: Nostr check failed: {e}");
-            }
+        if !watchdog_takeover_confirmed(&node, &relays, disco.as_ref(), check_interval_secs).await {
+            continue;
         }
-
-        // Check frequently so we catch gaps fast
-        let next_check = (rand::random::<u64>() % 15) + 20; // 20-35s
-        tokio::time::sleep(Duration::from_secs(next_check)).await;
+        let _ = emit_event(OutputEvent::NostrPublishing {
+            message: "📡 Taking over Nostr publishing for the mesh".to_string(),
+        });
+        let Some(keys) = load_watchdog_publish_keys(check_interval_secs).await else {
+            continue;
+        };
+        publish_loop(
+            node,
+            keys,
+            watchdog_takeover_publish_config(
+                relays,
+                mesh_name,
+                region,
+                check_interval_secs,
+                status_tx,
+            ),
+        )
+        .await;
+        return;
     }
+}
+
+async fn watchdog_takeover_confirmed(
+    node: &crate::mesh::Node,
+    relays: &[String],
+    disco: Option<&DiscoveryClient>,
+    check_interval_secs: u64,
+) -> bool {
+    let filter = MeshFilter::default();
+    let (meshes, health) = match discover_with_health(relays, &filter, disco).await {
+        Ok(round) => round,
+        Err(error) => {
+            tracing::debug!("Publish watchdog: Nostr check failed: {error}");
+            watchdog_next_check().await;
+            return false;
+        }
+    };
+    let mesh_id = node.mesh_id().await;
+    if !should_take_over_publish(node, &meshes, health, mesh_id.as_deref()).await {
+        watchdog_next_check().await;
+        return false;
+    }
+    if !confirm_missing_listing_after_backoff(relays, &filter, disco, node, mesh_id.as_deref())
+        .await
+    {
+        tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
+        return false;
+    }
+    true
+}
+
+async fn watchdog_next_check() {
+    // Check frequently so we catch gaps fast.
+    let next_check = (rand::random::<u64>() % 15) + 20; // 20-35s
+    tokio::time::sleep(Duration::from_secs(next_check)).await;
 }
 
 async fn wait_for_local_serving_ready(node: &crate::mesh::Node) {
@@ -392,19 +403,16 @@ async fn watchdog_initial_delay() {
 
 /// What a discovery round says about our own mesh's listing.
 ///
-/// `Unknown` is the zero-relays-answered case: absence proves nothing
-/// when no relay spoke, and the watchdog must not publish a mesh that
-/// was never published on the strength of it.
+/// `Unknown` covers silent, interrupted and limit-truncated queries: the
+/// watchdog must not publish a mesh on the strength of unproven absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ListingPresence {
     /// A current listing for our mesh was seen.
     Present,
-    /// At least one relay completed its query (EOSE) and none had our
-    /// listing. Partial speech — events delivered without the query
-    /// finishing — is not absence evidence: the listing may still have
-    /// been coming when the round ended.
+    /// At least one relay reached EOSE below the event limit and none
+    /// had our listing. Partial or truncated results cannot prove absence.
     Missing,
-    /// No relay completed its query; absence is not evidence.
+    /// No relay completed an untruncated query; absence is not evidence.
     Unknown,
 }
 
@@ -427,11 +435,11 @@ async fn should_take_over_publish(
     node: &crate::mesh::Node,
     meshes: &[DiscoveredMesh],
     health: RelayHealth,
+    mesh_id: Option<&str>,
 ) -> bool {
     let our_peers = node.peers().await;
     let served = node.models_being_served().await;
-    let our_mesh_id = node.mesh_id().await;
-    listing_presence(meshes, health, our_mesh_id.as_deref(), &served) == ListingPresence::Missing
+    listing_presence(meshes, health, mesh_id, &served) == ListingPresence::Missing
         && (!our_peers.is_empty() || !served.is_empty())
 }
 
@@ -440,6 +448,7 @@ async fn confirm_missing_listing_after_backoff(
     filter: &MeshFilter,
     disco: Option<&DiscoveryClient>,
     node: &crate::mesh::Node,
+    checked_mesh_id: Option<&str>,
 ) -> bool {
     let backoff = (rand::random::<u64>() % 7) + 3;
     let _ = emit_event(OutputEvent::NostrPublishing {
@@ -458,7 +467,13 @@ async fn confirm_missing_listing_after_backoff(
     };
     let served = node.models_being_served().await;
     let our_mesh_id = node.mesh_id().await;
-    match listing_presence(&recheck.0, recheck.1, our_mesh_id.as_deref(), &served) {
+    match listing_presence_after_backoff(
+        &recheck.0,
+        recheck.1,
+        checked_mesh_id,
+        our_mesh_id.as_deref(),
+        &served,
+    ) {
         ListingPresence::Missing => true,
         ListingPresence::Present => {
             let _ = emit_event(OutputEvent::NostrPublishing {
@@ -466,14 +481,28 @@ async fn confirm_missing_listing_after_backoff(
             });
             false
         }
-        // Still no relay answered after the backoff: absence is not
-        // evidence, so skip this takeover round and retry later instead
-        // of publishing on the strength of an outage.
+        // An unfinished or limit-truncated query cannot establish absence.
         ListingPresence::Unknown => {
-            tracing::debug!("Publish watchdog: no relay answered after backoff — not taking over");
+            tracing::debug!(
+                "Publish watchdog: absence remains unconfirmed after backoff — not taking over"
+            );
             false
         }
     }
+}
+
+fn listing_presence_after_backoff(
+    meshes: &[DiscoveredMesh],
+    health: RelayHealth,
+    checked_mesh_id: Option<&str>,
+    current_mesh_id: Option<&str>,
+    served: &[String],
+) -> ListingPresence {
+    if current_mesh_id != checked_mesh_id {
+        tracing::debug!("Publish watchdog: mesh ID changed during backoff — retrying next round");
+        return ListingPresence::Unknown;
+    }
+    listing_presence(meshes, health, current_mesh_id, served)
 }
 
 async fn load_watchdog_publish_keys(check_interval_secs: u64) -> Option<Keys> {
@@ -778,6 +807,26 @@ mod listing_presence_tests {
         // The same round with a completed query elsewhere is a verdict.
         let completed = listing_presence(&meshes, health(2, 1), Some("abc"), &[]);
         assert_eq!(completed, ListingPresence::Missing);
+    }
+
+    #[test]
+    fn backoff_recheck_requires_the_same_mesh_identity() {
+        for (checked, current) in [
+            (Some("old"), Some("new")),
+            (None, Some("new")),
+            (Some("old"), None),
+        ] {
+            assert_eq!(
+                listing_presence_after_backoff(&[], health(1, 1), checked, current, &[]),
+                ListingPresence::Unknown,
+            );
+        }
+        for id in [None, Some("same")] {
+            assert_eq!(
+                listing_presence_after_backoff(&[], health(1, 1), id, id, &[]),
+                ListingPresence::Missing,
+            );
+        }
     }
 
     #[test]

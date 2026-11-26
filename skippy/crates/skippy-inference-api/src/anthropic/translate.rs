@@ -177,6 +177,7 @@ pub fn messages_request_to_generation(
             extra: BTreeMap::new(),
         }),
         extra: request.extra,
+        request_class: Default::default(),
     })
 }
 

@@ -428,6 +428,14 @@ impl InferenceBackend for HookedInferenceBackend {
         self.backend.system_one(request).await
     }
 
+    async fn system_one_with_context(
+        &self,
+        request: SystemOneRequest,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<SystemOneResponse> {
+        self.backend.system_one_with_context(request, context).await
+    }
+
     async fn chat_completion(
         &self,
         request: GenerationRequest,
@@ -441,6 +449,7 @@ impl InferenceBackend for HookedInferenceBackend {
         mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationResponse> {
+        request.request_class = context.request_class();
         let exchange_id = uuid::Uuid::new_v4().to_string();
         // Armed immediately after minting the exchange id — before
         // `before_chat_completion` and `on_effective_chat_completion` run —
@@ -539,6 +548,7 @@ impl InferenceBackend for HookedInferenceBackend {
         mut request: GenerationRequest,
         context: InferenceRequestContext,
     ) -> InferenceResult<GenerationEventStream> {
+        request.request_class = context.request_class();
         let exchange_id = uuid::Uuid::new_v4().to_string();
         context.publish_exchange_id(exchange_id.clone());
         // Same admission-time arming as `chat_completion_with_context` above

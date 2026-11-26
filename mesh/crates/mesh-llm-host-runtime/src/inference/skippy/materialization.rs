@@ -229,6 +229,7 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
+            max_request_tier: None,
         }
     }
 
@@ -393,6 +394,7 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
+            max_request_tier: None,
         };
 
         let error = resolve_stage_load_package(&load, StageSourceFetch::Allowed)

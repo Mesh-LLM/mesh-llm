@@ -6,7 +6,10 @@ use std::{
     fs::{File, Metadata},
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Instant, SystemTime},
 };
 
@@ -16,7 +19,14 @@ type ObservedFiles = Vec<(String, PathBuf, FileStamp)>;
 pub(crate) struct VerifiedModelContent {
     digest: String,
     files: ObservedFiles,
+    /// A stamp written within the timestamp-granularity window can hide a
+    /// same-length rewrite, so such proofs are rechecked by content.
+    racy: bool,
 }
+
+/// Coarse filesystem clocks (e.g. ext4 ctime ticks) can leave a rewrite in the
+/// same tick with an identical stamp; treat recent stamps as untrusted.
+const RACY_STAMP_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, PartialEq, Eq)]
 struct FileStamp {
@@ -44,6 +54,29 @@ impl FileStamp {
             ),
         }
     }
+
+    fn is_racy(&self, now: SystemTime) -> bool {
+        #[cfg(unix)]
+        let changed = u64::try_from(self.identity.2).ok().map(|secs| {
+            SystemTime::UNIX_EPOCH
+                + std::time::Duration::new(secs, self.identity.3.clamp(0, 999_999_999) as u32)
+        });
+        #[cfg(not(unix))]
+        let changed = None;
+        [self.modified, self.created, changed]
+            .into_iter()
+            .any(|time| match time {
+                Some(time) => now
+                    .duration_since(time)
+                    .map_or(true, |age| age < RACY_STAMP_WINDOW),
+                None => true,
+            })
+    }
+}
+
+fn any_racy(files: &ObservedFiles) -> bool {
+    let now = SystemTime::now();
+    files.iter().any(|(_, _, stamp)| stamp.is_racy(now))
 }
 
 impl VerifiedModelContent {
@@ -53,9 +86,15 @@ impl VerifiedModelContent {
     pub(crate) fn verify_during_load<T>(
         config: &StageConfig,
         load: impl FnOnce() -> Result<T>,
-    ) -> Result<(T, Option<Self>)> {
+    ) -> Result<(T, Option<Arc<Self>>)> {
         #[cfg(unix)]
         let (model, content) = match Self::observe_files(config).ok().flatten() {
+            // Recent stamps cannot prove the bytes the loader reads, so hash
+            // before load and recheck content afterwards instead.
+            Some(files) if any_racy(&files) => {
+                let content = Self::from_observed(files, &AtomicBool::new(false)).ok();
+                (load()?, content)
+            }
             Some(files) => {
                 verify_alongside_load(load, |cancelled| Self::from_observed(files, cancelled))?
             }
@@ -66,7 +105,10 @@ impl VerifiedModelContent {
             let content = Self::observe(config).ok().flatten();
             (load()?, content)
         };
-        Ok((model, content.filter(|proof| proof.still_matches(config))))
+        Ok((
+            model,
+            content.and_then(|proof| Arc::new(proof).revalidate(config)),
+        ))
     }
 
     #[cfg(any(not(unix), test))]
@@ -87,13 +129,14 @@ impl VerifiedModelContent {
         capture_files(files).map(Some)
     }
 
-    #[cfg(any(not(unix), test))]
+    #[cfg(test)]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
         Self::from_observed(capture_files(files)?, &AtomicBool::new(false))
     }
 
     fn from_observed(files: ObservedFiles, cancelled: &AtomicBool) -> Result<Self> {
         let started = Instant::now();
+        let racy = any_racy(&files);
         let mut verified_bytes = 0_u64;
         let mut digest = Sha256::new();
         digest.update(b"skippy-loaded-model-content-v1\0");
@@ -146,38 +189,22 @@ impl VerifiedModelContent {
         Ok(Self {
             digest,
             files: observed,
+            racy,
         })
     }
 
-    /// Reject a proof if model input selection or bytes changed while opening.
-    pub(crate) fn still_matches(&self, config: &StageConfig) -> bool {
-        let Ok(files) = source_files(config) else {
-            return false;
-        };
-        let unchanged = files.len() == self.files.len()
-            && files.iter().zip(&self.files).all(
-                |((name, path), (expected_name, expected_path, stamp))| {
-                    name == expected_name
-                        && path == expected_path
-                        && std::fs::metadata(path).is_ok_and(|metadata| {
-                            metadata.is_file() && FileStamp::read(&metadata) == *stamp
-                        })
-                },
-            );
-        if !unchanged {
-            return false;
+    /// Reuse strong file stamps or refresh the proof by hashing the same inputs.
+    pub(crate) fn revalidate(self: Arc<Self>, config: &StageConfig) -> Option<Arc<Self>> {
+        let files = capture_files(source_files(config).ok()?).ok()?;
+        if files != self.files {
+            return None;
         }
-        #[cfg(unix)]
-        {
-            true
+        if cfg!(unix) && !self.racy {
+            return Some(self);
         }
-        #[cfg(not(unix))]
-        {
-            // Size and last-write timestamps are not a strong file identity on
-            // these platforms. Recheck actual content after model open and at
-            // backend construction rather than trusting preserved timestamps.
-            Self::from_files(files).is_ok_and(|current| current.digest == self.digest)
-        }
+        // Recent or missing timestamps and non-Unix stamps require a digest check.
+        let refreshed = Self::from_observed(files, &AtomicBool::new(false)).ok()?;
+        (refreshed.digest == self.digest).then(|| Arc::new(refreshed))
     }
 
     pub(crate) fn bind(&self, identity: &str) -> String {
@@ -324,6 +351,35 @@ fn checkpoint_files(root: &Path) -> Result<Vec<(String, PathBuf)>> {
 mod tests {
     use super::*;
 
+    /// These tests rewrite a file in place with same-length bytes, so on Unix
+    /// only ctime can reveal the change. Filesystems stamp ctime from a coarse
+    /// clock; wait until that clock has moved past `path`'s ctime so the
+    /// rewrite cannot land in the same tick as the observed stamp.
+    fn wait_for_ctime_to_advance_past(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let ctime = |metadata: Metadata| (metadata.ctime(), metadata.ctime_nsec());
+            let observed = ctime(std::fs::metadata(path).unwrap());
+            let probe = path.with_extension("ctime-probe");
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                std::fs::write(&probe, b"").unwrap();
+                if ctime(std::fs::metadata(&probe).unwrap()) > observed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "filesystem ctime did not advance"
+                );
+                std::thread::yield_now();
+            }
+            std::fs::remove_file(probe).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_model_open_cancels_verification_before_joining() {
@@ -408,6 +464,7 @@ mod tests {
                 Ok(VerifiedModelContent {
                     digest: "proof".into(),
                     files: Vec::new(),
+                    racy: false,
                 })
             },
         )
@@ -431,6 +488,7 @@ mod tests {
         let (_, unchanged) = VerifiedModelContent::verify_during_load(&config, || Ok(())).unwrap();
         assert!(unchanged.is_some());
         let (model, proof) = VerifiedModelContent::verify_during_load(&config, || {
+            wait_for_ctime_to_advance_past(&path);
             std::fs::write(&path, b"new weights")?;
             Ok("loaded")
         })
@@ -449,9 +507,11 @@ mod tests {
             source_model_sha256: Some("ab".repeat(32)),
             ..StageConfig::default()
         };
-        let first = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
-        assert!(first.still_matches(&config));
+        let first =
+            Arc::new(VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap());
+        assert!(first.clone().revalidate(&config).is_some());
         let modified = model.metadata().unwrap().modified().unwrap();
+        wait_for_ctime_to_advance_past(&model);
         std::fs::write(&model, b"other weights").unwrap();
         File::options()
             .write(true)
@@ -459,7 +519,7 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        assert!(!first.still_matches(&config));
+        assert!(first.clone().revalidate(&config).is_none());
         let second = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
         assert_ne!(first.bind("same namespace"), second.bind("same namespace"));
         config.model_path = Some(
@@ -468,7 +528,24 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
         );
-        assert!(!second.still_matches(&config));
+        assert!(Arc::new(second).revalidate(&config).is_none());
+    }
+
+    #[test]
+    fn revalidation_keeps_the_refreshed_proof_when_it_rehashes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("model.gguf");
+        std::fs::write(&path, b"weights").unwrap();
+        let config = StageConfig {
+            model_path: Some(path.to_string_lossy().into_owned()),
+            ..StageConfig::default()
+        };
+        let mut proof = VerifiedModelContent::from_files(source_files(&config).unwrap()).unwrap();
+        proof.racy = true;
+        let proof = Arc::new(proof);
+        let refreshed = proof.clone().revalidate(&config).unwrap();
+        assert!(!Arc::ptr_eq(&refreshed, &proof));
+        assert_eq!(refreshed.digest, proof.digest);
     }
 
     #[test]

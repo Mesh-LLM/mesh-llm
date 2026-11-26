@@ -38,6 +38,28 @@ pub struct Cleanup {
     pub forced: bool,
     pub graceful_signal_failed: bool,
     pub failure: Option<Failure>,
+    pub pre_force: Option<Box<PreForceObservation>>,
+}
+
+/// Best-effort observations immediately before force, not an atomic snapshot.
+/// Diagnostic failures never replace the cleanup result or prevent termination.
+#[derive(Debug)]
+pub struct PreForceObservation {
+    pub leader: Result<LeaderState, Failure>,
+    /// None when this platform does not enumerate owned members.
+    pub members: Option<Result<Vec<ProcessMember>, Failure>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderState {
+    Alive,
+    Exited(ExitStatus),
+}
+
+#[derive(Debug)]
+pub struct ProcessMember {
+    pub pid: u32,
+    pub image: Result<String, Failure>,
 }
 
 /// Metadata only; elapsed is measured on the supervisor's single start clock

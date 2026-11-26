@@ -12,8 +12,9 @@ mod sequence;
 mod telemetry;
 
 pub use cache_policy::{
-    CacheAffinity, CacheAwareCandidate, StageCacheAffinity, order_cache_aware_candidates,
-    order_cache_aware_candidates_with_anchor, select_cache_aware_candidate,
+    CacheAffinity, CacheAwareCandidate, PRIORITY_AGING_TURNS, PriorityPassovers,
+    StageCacheAffinity, order_cache_aware_candidates, order_cache_aware_candidates_with_anchor,
+    select_cache_aware_candidate,
 };
 pub use capacity::{
     CapacityDemand, CapacityPlan, ComponentCapacitySnapshot, EvictableCacheEntry,

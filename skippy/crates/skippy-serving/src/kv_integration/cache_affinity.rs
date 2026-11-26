@@ -238,6 +238,7 @@ mod checkpoint_matching_tests {
                             seq_id: seq,
                             token_count: identity.token_ids.len() as u64,
                             recompute_cost: 1,
+                            retention_priority: 0,
                         },
                     )
                     .unwrap();

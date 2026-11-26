@@ -4962,7 +4962,6 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-api",
  "skippy-cache",
- "skippy-commands",
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
@@ -5274,6 +5273,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-config",
  "skippy-gpu-bench",
+ "skippy-hardware-profile",
  "skippy-native-runtime",
  "skippy-runtime",
  "skippy-runtime-install",
@@ -8847,9 +8847,12 @@ version = "0.80.0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
+ "process-wrap",
+ "rustix",
  "serde_json",
  "skippy-native-runtime",
  "sysinfo",
+ "tempfile",
 ]
 
 [[package]]
@@ -8948,6 +8951,7 @@ dependencies = [
  "hex",
  "libc",
  "regex-lite",
+ "reqwest 0.13.5",
  "rustls",
  "serde",
  "serde_json",
@@ -9907,6 +9911,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite 0.29.0",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

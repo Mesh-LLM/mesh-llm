@@ -16,7 +16,7 @@
         <span class="hero-subtitle-copy"><span class="hero-subtitle-prefix"></span><span class="hero-subtitle-animated"><span class="hero-subtitle-dynamic"></span><span class="hero-subtitle-dot">.</span></span></span>
       </p>
     </div>
-    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet. Large models get split into smaller pieces, memory-bound GPUs run smaller layer slices, and layers land on right-sized nodes.</p>
+    <p class="sr-only">Run models across machines in your homelab, in your business, or on the internet. Mesh splits large models into groups of layers and assigns them based on available GPU memory. GPUs with less memory run fewer layers.</p>
 
     <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
       <div class="hero-entry-points">
@@ -46,7 +46,7 @@
               <span>Public mesh</span>
               <i data-lucide="share-2" aria-hidden="true"></i>
             </a>
-            <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#topology">
+            <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#mesh-principles-title">
               <span>Learn more</span>
               <i data-lucide="arrow-down" aria-hidden="true"></i>
             </a>
@@ -54,7 +54,7 @@
         </div>
         <div class="hero-sdk" aria-labelledby="hero-sdk-title">
           <h2 id="hero-sdk-title">Embed Mesh</h2>
-          <p><strong>Your app. Powered by Mesh.</strong> Connect to a mesh or embed a node with local model serving on supported platforms.</p>
+          <p>Connect to a mesh or embed a node with local model serving on supported platforms.</p>
           <a class="hero-sdk-link" href="/docs/pages/sdk/">Embed in your app <span aria-hidden="true">→</span></a>
           <nav class="hero-sdk-languages" aria-label="SDK language guides">
             <a href="/docs/pages/sdk-rust/">Rust</a>
@@ -70,18 +70,6 @@
         </div>
       </div>
 
-      <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">
-        <span>Sponsored by</span>
-        <a class="sponsor-slot" href="{{ site.githubUrl }}" aria-label="Sponsor Mesh">
-          <svg aria-hidden="true" viewBox="0 0 50 50" fill="none">
-            <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
-            <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
-            <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
-            <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
-          </svg>
-        </a>
-      </div>
     </div>
 
     <div class="stage2-aperture-portal">
@@ -98,7 +86,7 @@
                   <span class="stage2-model-status">ready to shard</span>
                 </div>
                 <dl class="stage2-model-metrics">
-                  <div><dt>params</dt><dd>120B</dd></div>
+                  <div><dt>params</dt><dd>135B</dd></div>
                   <div><dt>weights</dt><dd>242GB</dd></div>
                   <div><dt>layers</dt><dd>10</dd></div>
                 </dl>
@@ -178,9 +166,9 @@
 
             </div>
             <div class="stage2-phase-copy" aria-hidden="true">
-              <p class="stage2-phase-title stage2-phase-title--split">Large models get split into smaller pieces</p>
-              <p class="stage2-phase-title stage2-phase-title--nodes">Memory-bound GPUs run smaller layer slices</p>
-              <p class="stage2-phase-title stage2-phase-title--place">Layers land on right-sized nodes</p>
+              <p class="stage2-phase-title stage2-phase-title--split">Mesh splits the model into groups of layers</p>
+              <p class="stage2-phase-title stage2-phase-title--nodes">GPUs with less memory run fewer layers</p>
+              <p class="stage2-phase-title stage2-phase-title--place">Mesh assigns layers based on available GPU memory</p>
             </div>
             <section class="stage2-phase-panel" data-stage2-phase-panel="phase-1"></section>
             <section class="stage2-phase-panel" data-stage2-phase-panel="phase-2"></section>

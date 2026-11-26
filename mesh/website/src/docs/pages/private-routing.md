@@ -9,6 +9,10 @@ and still send one request only to nodes you choose. Add `@private` (or
 `@incognito`) to the model name and the request is computed only on your own
 node and the nodes it lists. It never falls back to anyone else's.
 
+Private routing controls request destinations, not mesh membership. For a
+**private mesh** with restricted membership, configure
+[admission control](/docs/pages/private-meshes/#restrict-membership).
+
 ## Who can answer a private request
 
 A private request is answered only by the node the client talks to (the

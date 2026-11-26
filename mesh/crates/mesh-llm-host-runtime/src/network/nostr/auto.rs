@@ -111,11 +111,11 @@ pub fn rank_meshes(listings: &[&DiscoveredMesh], last_mesh_id: Option<&str>) -> 
         .map(|(id, group)| (Some(id), group))
         .chain(ungrouped.into_iter().map(|group| (None, group)))
         .map(|(id, mut group)| {
-            group.sort_by_key(|m| {
-                (
-                    std::cmp::Reverse(m.listing.publisher_serves == Some(true)),
-                    std::cmp::Reverse(m.published_at),
-                )
+            group.sort_by(|a, b| {
+                (b.listing.publisher_serves == Some(true))
+                    .cmp(&(a.listing.publisher_serves == Some(true)))
+                    .then_with(|| b.published_at.cmp(&a.published_at))
+                    .then_with(|| a.publisher_npub.cmp(&b.publisher_npub))
             });
             let score = group
                 .iter()
@@ -181,7 +181,10 @@ pub fn smart_auto(
             })
             .collect()
     } else {
-        meshes.iter().filter(|m| is_auto_eligible(m)).collect()
+        meshes
+            .iter()
+            .filter(|m| is_auto_eligible(m) && score_mesh(m, 0, last_mesh_id.as_deref()) > 0)
+            .collect()
     };
 
     // Score and rank whole meshes, not individual listings: several nodes of
@@ -189,10 +192,9 @@ pub fn smart_auto(
     // candidate list nor scatter joiners across stale mesh IDs.
     // If the user specified --mesh-name, take all candidates (they already
     // filtered by name above — the user explicitly asked for this mesh).
-    // Otherwise, require positive score to filter out stale meshes.
+    // Untargeted candidates already passed the per-listing capacity gate.
     let viable: Vec<(String, DiscoveredMesh)> = rank_meshes(&candidates, last_mesh_id.as_deref())
         .into_iter()
-        .filter(|mesh| target_name.is_some() || mesh.score > 0)
         .flat_map(|mesh| mesh.listings)
         .map(|m| (m.listing.invite_token.clone(), m))
         .collect();
@@ -493,6 +495,25 @@ mod scoring_tests {
     }
 
     #[test]
+    fn rank_meshes_breaks_publisher_ties_independently_of_input_order() {
+        let mut listings = [
+            publisher("0007", "b", Some(true), 1000),
+            publisher("0007", "a", Some(true), 1000),
+        ];
+        for _ in 0..2 {
+            let refs: Vec<_> = listings.iter().collect();
+            let ranked = rank_meshes(&refs, None);
+            let order: Vec<_> = ranked[0]
+                .listings
+                .iter()
+                .map(|m| m.publisher_npub.as_str())
+                .collect();
+            assert_eq!(order, ["a", "b"]);
+            listings.reverse();
+        }
+    }
+
+    #[test]
     fn rank_meshes_puts_serving_then_newest_publishers_first() {
         let listings = [
             publisher("0007", "old", None, 1000),
@@ -588,6 +609,31 @@ mod smart_auto_tests {
             publisher_npub: format!("npub-{mesh_id}"),
             published_at: 1000,
             expires_at: Some(2000),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn smart_auto_filters_full_publishers_before_grouping_unless_explicitly_named() {
+        let home = tempfile::tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
+        let mut full = make_mesh(Some("mesh-llm"), "same", &["m1"], 2, 0, 1, 1);
+        full.listing.invite_token = "full".into();
+        full.listing.publisher_serves = Some(true);
+        let mut available = full.clone();
+        available.listing.invite_token = "available".into();
+        available.listing.client_count = 0;
+        available.listing.publisher_serves = Some(false);
+        let meshes = [full, available];
+        for (target, expected) in [
+            (None, vec!["available"]),
+            (Some("mesh-llm"), vec!["full", "available"]),
+        ] {
+            let AutoDecision::Join { candidates } = smart_auto(&meshes, 8.0, target) else {
+                panic!("the available publisher must remain joinable");
+            };
+            let tokens: Vec<_> = candidates.iter().map(|(token, _)| token.as_str()).collect();
+            assert_eq!(tokens, expected);
         }
     }
 

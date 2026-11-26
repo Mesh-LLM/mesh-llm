@@ -39,6 +39,9 @@ async fn strict_policy_is_adopted_and_two_servers_relay_models_and_demand() -> R
         );
         assert_eq!(node.get_demand()["requested-model"].request_count, 4);
     }
+    // The relay can hand out the origin's signed bootstrap token. Admission
+    // to the origin then completes before the observer connects to the relay.
+    wait_for_peer(&observer, relay.id()).await;
     assert!(
         observer
             .peers()

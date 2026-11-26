@@ -142,6 +142,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
         }),
+        max_request_tier: None,
     }
 }
 
@@ -1022,5 +1023,26 @@ async fn peer_load_without_downloads_is_refused_before_execution() -> Result<()>
     );
     assert!(message.contains("refuses peer model downloads"), "{message}");
     assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_stage_loaded_for_a_peer_is_capped_at_the_peers_tier() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let stranger = make_test_endpoint_id(0x77);
+    let mut request =
+        crate::inference::skippy::StageControlRequest::Load(test_stage_load_request());
+    node.cap_stage_load_tier(stranger, &mut request).await;
+    let crate::inference::skippy::StageControlRequest::Load(load) = &request else {
+        unreachable!("the request stays a load");
+    };
+    assert_eq!(load.max_request_tier.as_deref(), Some("mesh"));
+
+    let mut own = crate::inference::skippy::StageControlRequest::LoadLocal(test_stage_load_request());
+    node.cap_stage_load_tier(node.endpoint.id(), &mut own).await;
+    let crate::inference::skippy::StageControlRequest::LoadLocal(load) = &own else {
+        unreachable!("the request stays a local load");
+    };
+    assert_eq!(load.max_request_tier.as_deref(), Some("local"));
     Ok(())
 }

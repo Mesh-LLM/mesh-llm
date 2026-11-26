@@ -9,6 +9,17 @@ join as an API-only client, or do both.
 
 ## Join tokens, discovery, and admission
 
+A **private mesh** restricts membership through enforced
+[admission control](#ownership-and-admission-control). Public discovery and
+private membership are independent: advertising a mesh reveals its discovery
+information, while admission policy determines who may participate.
+
+Publishing discovery information to Nostr makes it public, with or without a
+mesh name. Names help people find meshes; they do not restrict access. Private
+membership requires enforced admission control. Private request routing is a
+separate choice about which nodes may compute a request; see
+[private routing](https://meshllm.cloud/docs/pages/private-routing/).
+
 These are separate properties; a **join token** (also called an invite token)
 does not by itself mean a mesh is private:
 
@@ -18,8 +29,7 @@ does not by itself mean a mesh is private:
   unpublished or published mesh; reading a file does not enable admission control.
 - **Discoverability:** `--publish` advertises a mesh for discovery. A mesh you
   create without publishing is **unpublished**, not necessarily access-controlled.
-  The existing publication status value `private` means unpublished; it is not
-  evidence of an admission policy. `--auto` discovers published meshes.
+  `--auto` discovers published meshes.
 - **Admission:** describe the actual enforced policy, such as owner allowlisting
   or mesh version/build requirements. For a controlled private deployment,
   configure and verify that policy on the participating nodes rather than relying
@@ -330,8 +340,11 @@ mesh-llm discover --auto
 `discover --auto` prints the best invite token, which is useful for scripts.
 When some Nostr relays stay silent, `discover` prints an `N of M Nostr
 relay(s) answered` line. It exits nonzero when no relay answers, or when
-nothing matched and no relay finished its query, so scripts can tell an
-unreachable or incomplete search from an empty one.
+nothing matched and no relay reached EOSE below the requested event limit,
+so scripts can tell an unreachable or incomplete search from an empty one.
+Listings received before interruption or truncation remain usable, but cannot
+prove an unlisted mesh is absent. `serve --auto` also fails if no Nostr relay
+answers, rather than starting a new mesh during a relay outage.
 When using `--mesh-discovery-mode mdns`, discovery is LAN-scoped: mDNS TXT
 records advertise bounded capacity/model summaries and a token fingerprint.
 When the management API is reachable from LAN peers, for example with
@@ -466,20 +479,20 @@ Advertisement behavior is configured via `[runtime.activity].advertisement`:
   explicitly-known-and-empty while non-admitting.
 - `coarse_state` (default): emit the admission enum and also publish
   known-empty availability for old peers.
-- `private_coarse_state`: emit the enum only on private meshes; use
+- `private_coarse_state`: emit the enum only when public-discovery mode is off; use
   known-empty availability publicly.
 
 **Privacy**: only the coarse admission state is advertised. No raw activity
 data, input events, app/window names, usernames, idle durations, timestamps, or
 detector errors are ever encoded in gossip.
 
-### Public/private identity transitions
+### Discovery-mode identity transitions
 
-Switching between private mode and Nostr public discovery (`--auto`,
+Switching between unpublished operation and Nostr public discovery (`--auto`,
 `--publish`, or `--discover`) starts a fresh node and mesh identity in either
 direction. The active node key, Nostr key, mesh ID, last-mesh hint, signed
 genesis policy, and adopted membership are cleared. Other node-key namespaces,
 owner-account credentials, and trust-store settings are preserved. Restarts
-within the same mode retain identity; an expired invite cannot restore private
+within the same discovery mode retain identity; an expired invite cannot restore prior
 membership after crossing this boundary. A supplied fresh invite can still join
 its intended mesh normally.

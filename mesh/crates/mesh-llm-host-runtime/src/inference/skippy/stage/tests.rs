@@ -135,6 +135,7 @@ fn load_request() -> StageLoadRequest {
             endpoint: "127.0.0.1:9001".to_string(),
             node_id: None,
         }),
+        max_request_tier: None,
     }
 }
 

@@ -86,6 +86,8 @@ pub(crate) struct IterationScheduler {
 
 pub(super) struct ScheduledGenerationRequest<'a> {
     pub(super) id: &'a str,
+    /// Admission priority: the request tier's priority.
+    pub(super) priority: u64,
     pub(super) prompt_tokens: &'a [i32],
     pub(super) max_tokens: u32,
     pub(super) sampling: Option<&'a SamplingConfig>,
@@ -95,6 +97,7 @@ pub(super) struct ScheduledGenerationRequest<'a> {
 
 pub(super) struct ScheduledResumeRequest<'a> {
     pub(super) id: &'a str,
+    pub(super) priority: u64,
     pub(super) prompt_tokens: &'a [i32],
     pub(super) generated_tokens: &'a [i32],
     pub(super) max_tokens: u32,
@@ -136,6 +139,7 @@ struct IterationSchedulerShared {
 
 struct ScheduledRequest {
     id: String,
+    priority: u64,
     prompt_tokens: Vec<i32>,
     max_tokens: u32,
     sampling: Option<SamplingConfig>,
@@ -597,6 +601,7 @@ impl IterationScheduler {
         let _sequence = trace_context::bind_sequence(request.id);
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
             id: request.id.to_string(),
+            priority: request.priority,
             prompt_tokens: request.prompt_tokens.to_vec(),
             max_tokens: request.max_tokens,
             sampling: request.sampling.cloned(),
@@ -627,6 +632,7 @@ impl IterationScheduler {
         let _sequence = trace_context::bind_sequence(request.id);
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
             id: request.id.to_string(),
+            priority: request.priority,
             prompt_tokens: request.prompt_tokens.to_vec(),
             max_tokens: request.max_tokens,
             sampling: request.sampling.cloned(),
@@ -1148,7 +1154,7 @@ impl SchedulerWorker {
             request.prompt_tokens.clone(),
             request.max_tokens,
             request.sampling.clone(),
-            0,
+            request.priority,
         )
         .with_admission_tokens(admission_tokens);
         if !request.generated_tokens.is_empty() {

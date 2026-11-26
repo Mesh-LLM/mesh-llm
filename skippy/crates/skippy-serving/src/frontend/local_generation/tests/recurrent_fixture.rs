@@ -230,8 +230,8 @@ fn loaded_runtime_admission_uses_aggregate_pool_across_frontends() -> Result<()>
     let mut runtime = backend.runtime.lock().unwrap();
     let per_lane = runtime.context_tokens_per_lane() as usize;
     assert_eq!(runtime.kv_pool_tokens() as usize, per_lane * 2);
-    let first = GenerationTokenBudget::shared_for_runtime(&mut runtime, per_lane);
-    let second = GenerationTokenBudget::shared_for_runtime(&mut runtime, per_lane);
+    let first = GenerationTokenBudget::shared_for_runtime(&mut runtime, per_lane, 0);
+    let second = GenerationTokenBudget::shared_for_runtime(&mut runtime, per_lane, 0);
     assert!(Arc::ptr_eq(&first, &second));
     let _reservation = first
         .try_reserve(GenerationTokenBudgetRequest::new(per_lane + 1, 0))?
