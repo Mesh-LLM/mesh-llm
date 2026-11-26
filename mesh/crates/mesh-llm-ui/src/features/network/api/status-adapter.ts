@@ -328,14 +328,14 @@ function servingStrategyMetric(payload: StatusPayload): StatusMetric {
 function adaptMeshNodeSeeds(payload: StatusPayload): MeshNode[] {
   const selfNode: MeshNode = {
     id: payload.node_id,
-    label: payload.hostname ?? 'localhost',
+    label: payload.hostname ?? payload.my_hostname ?? 'localhost',
     x: 50,
     y: 50,
     status: mapNodeState(payload.node_state),
     role: 'self',
     meshState: payload.node_state,
     servingModels: payload.serving_models.map(servingModelName),
-    hostname: payload.hostname,
+    hostname: payload.hostname ?? payload.my_hostname,
     vramGB: payload.my_vram_gb,
     firstJoinedMeshTs: payload.first_joined_mesh_ts
   }
