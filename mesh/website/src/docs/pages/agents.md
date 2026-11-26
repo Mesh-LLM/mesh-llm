@@ -42,6 +42,8 @@ mesh-llm pi --host 127.0.0.1:9337
 
 The built-in launchers point the agent at Mesh for you. If `--model` is omitted, Mesh chooses from models available on the local mesh.
 
+If nothing listens on the port, the launcher starts a background client node (`mesh-llm client --auto`). Put joining flags before the launcher name to choose how that node joins, for example `mesh-llm --mesh-discovery-mode mdns goose` or `mesh-llm --join-file ~/.mesh-llm/invite.token goose`.
+
 `mesh-llm goose` and `mesh-llm claude` also give the agent Mesh's MCP tools from the node's console. If the node runs its console on another port than 3131, pass the same port with `--console`.
 
 ## Manual setup

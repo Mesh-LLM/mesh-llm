@@ -1,3 +1,4 @@
+mod auto_join_node;
 pub mod config_write;
 mod model_inventory;
 use model_inventory::ModelInventory;
@@ -8,7 +9,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::skills::install_skills_for_agent;
-use mesh_llm_cli::shell;
+use mesh_llm_cli::{JoiningOptions, shell};
 use url::Url;
 
 const OPENCODE_PROVIDER_ID: &str = "mesh";
@@ -453,11 +454,13 @@ fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
 }
 
 /// Ensure mesh-llm is running on `port`, then return available models, chosen model, spawned child.
-/// A node started here uses `console_port` for its console when one is given.
+/// A node started here uses `console_port` for its console when one is given,
+/// and joins with the launcher's `joining` flags.
 async fn check_mesh(
     client: &reqwest::Client,
     port: u16,
     console_port: Option<u16>,
+    joining: &JoiningOptions,
     model: &Option<String>,
 ) -> Result<(ModelInventory, String, Option<std::process::Child>)> {
     let mut err = mesh_llm_events::console_err();
@@ -469,19 +472,7 @@ async fn check_mesh(
             err,
             "🚀 No mesh-llm on port {port}; starting background auto-join node"
         )?;
-        let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
-        let mut command = std::process::Command::new(&exe);
-        command.args(["client", "--auto", "--port", &port.to_string()]);
-        if let Some(console_port) = console_port {
-            command.args(["--console", &console_port.to_string()]);
-        }
-        child = Some(
-            command
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .context("Failed to start mesh-llm node")?,
-        );
+        child = Some(auto_join_node::spawn(port, console_port, joining)?);
     }
 
     let models_url = format!("http://127.0.0.1:{port}/v1/models");
@@ -609,12 +600,17 @@ async fn fetch_mesh_models(
     Ok((models, chosen))
 }
 
-pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> Result<()> {
+pub async fn run_goose(
+    model: Option<String>,
+    port: u16,
+    console_port: u16,
+    joining: &JoiningOptions,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let (models, chosen, mut mesh_child) =
-        check_mesh(&client, port, Some(console_port), &model).await?;
+        check_mesh(&client, port, Some(console_port), joining, &model).await?;
 
     let providers_dir = goose_config_dir().join("custom_providers");
     std::fs::create_dir_all(&providers_dir)?;
@@ -692,12 +688,17 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
     Ok(())
 }
 
-pub async fn run_claude(model: Option<String>, port: u16, console_port: u16) -> Result<()> {
+pub async fn run_claude(
+    model: Option<String>,
+    port: u16,
+    console_port: u16,
+    joining: &JoiningOptions,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let (models, chosen, mut mesh_child) =
-        check_mesh(&client, port, Some(console_port), &model).await?;
+        check_mesh(&client, port, Some(console_port), joining, &model).await?;
 
     let base_url = format!("http://127.0.0.1:{port}");
     let mut settings = serde_json::json!({
@@ -949,7 +950,12 @@ fn write_pi_config_for_test(
     write_pi_config_to_path(models_path, model_names, &target.api_base_url)
 }
 
-pub async fn run_pi(model: Option<String>, host: &str, write: bool) -> Result<()> {
+pub async fn run_pi(
+    model: Option<String>,
+    host: &str,
+    write: bool,
+    joining: &JoiningOptions,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
@@ -959,7 +965,7 @@ pub async fn run_pi(model: Option<String>, host: &str, write: bool) -> Result<()
         let port = target
             .local_port
             .ok_or_else(|| anyhow::anyhow!("Pi host '{}' is missing a usable port", host))?;
-        let (models, chosen, child) = check_mesh(&client, port, None, &model).await?;
+        let (models, chosen, child) = check_mesh(&client, port, None, joining, &model).await?;
         (models, chosen, child)
     } else {
         let (models, chosen) = fetch_mesh_models(&client, &target.api_models_url, &model).await?;
@@ -1014,7 +1020,12 @@ fn run_pi_with_mesh(
     Ok(())
 }
 
-pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Result<()> {
+pub async fn run_opencode(
+    model: Option<String>,
+    host: &str,
+    write: bool,
+    joining: &JoiningOptions,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
@@ -1024,7 +1035,7 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
         let port = target
             .local_port
             .ok_or_else(|| anyhow::anyhow!("OpenCode host '{}' is missing a usable port", host))?;
-        let (models, chosen, child) = check_mesh(&client, port, None, &model).await?;
+        let (models, chosen, child) = check_mesh(&client, port, None, joining, &model).await?;
         (models, chosen, child)
     } else {
         let (models, chosen) = fetch_mesh_models(&client, &target.api_models_url, &model).await?;

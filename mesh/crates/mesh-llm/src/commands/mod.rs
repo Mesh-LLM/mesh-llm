@@ -11,7 +11,7 @@ mod runtime;
 mod setup;
 
 use anyhow::Result;
-use mesh_llm_cli::{Cli, Command, DiscoverArgs, ModelPrepareArgs, UninstallArgs};
+use mesh_llm_cli::{Cli, Command, DiscoverArgs, JoiningOptions, ModelPrepareArgs, UninstallArgs};
 
 use self::analytics::dispatch_analytics_command;
 use self::config::dispatch_config_command;
@@ -257,7 +257,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Goose { .. }
         | Command::Claude { .. }
         | Command::Pi { .. }
-        | Command::Opencode { .. } => dispatch_agent_command(cmd).await,
+        | Command::Opencode { .. } => dispatch_agent_command(cmd, &cli.joining).await,
         Command::Skills { command } => mesh_llm_commands::skills::run_skills_command(command),
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => {
@@ -272,23 +272,26 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     }
 }
 
-async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
+/// A launcher that finds no node on its port starts one, joining with `joining`.
+async fn dispatch_agent_command(cmd: &Command, joining: &JoiningOptions) -> Result<()> {
     match cmd {
         Command::Goose {
             model,
             port,
             console,
-        } => mesh_llm_commands::agent_cli::run_goose(model.clone(), *port, *console).await,
+        } => mesh_llm_commands::agent_cli::run_goose(model.clone(), *port, *console, joining).await,
         Command::Claude {
             model,
             port,
             console,
-        } => mesh_llm_commands::agent_cli::run_claude(model.clone(), *port, *console).await,
+        } => {
+            mesh_llm_commands::agent_cli::run_claude(model.clone(), *port, *console, joining).await
+        }
         Command::Pi { model, host, write } => {
-            mesh_llm_commands::agent_cli::run_pi(model.clone(), host, *write).await
+            mesh_llm_commands::agent_cli::run_pi(model.clone(), host, *write, joining).await
         }
         Command::Opencode { model, host, write } => {
-            mesh_llm_commands::agent_cli::run_opencode(model.clone(), host, *write).await
+            mesh_llm_commands::agent_cli::run_opencode(model.clone(), host, *write, joining).await
         }
         _ => unreachable!("dispatch_agent_command called for non-agent command"),
     }
