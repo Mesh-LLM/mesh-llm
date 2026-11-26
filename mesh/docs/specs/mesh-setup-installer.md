@@ -103,7 +103,8 @@ the offer record) takes the store's write lock, and a set member is placed
 only if it is still missing under that lock. Concurrent setup runs merge
 their offer records, so neither takes back what the other recorded. Later setup runs leave plugins as they are: a plugin
 the operator removed is not reinstalled and members added to the set later are
-not installed by setup. Two limits: a setup that times out records nothing, so
+not installed by setup. A member of that first snapshot that the set drops before
+it was offered counts as offered. Two limits: a setup that times out records nothing, so
 a member the operator removes before the next run is installed again, and an
 unreadable record counts as none, so the next setup offers the set again. The set's membership and each
 member's pinned release and checksums come from the plugin catalog.

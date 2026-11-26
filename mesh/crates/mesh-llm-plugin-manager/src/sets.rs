@@ -77,11 +77,19 @@ impl SetOffer {
     /// The offer after `result`: a member that landed, was already there or
     /// has no release here counts as offered; a failed one is not, so the
     /// next setup retries it, and the set is complete only when none failed.
+    /// A snapshot member the set (`set_members`) no longer lists counts as
+    /// offered: there is nothing left to offer for it.
     pub fn after(&self, set_members: &[String], result: &SetInstallResult) -> SetOffer {
         let mut members = self.members.clone();
         members.extend(result.installed.iter().map(|o| o.metadata.name.clone()));
         members.extend(result.already_installed.iter().cloned());
         members.extend(result.unavailable.iter().map(|(name, _)| name.clone()));
+        members.extend(
+            self.snapshot
+                .iter()
+                .filter(|member| !set_members.contains(member))
+                .cloned(),
+        );
         members.sort();
         members.dedup();
         let snapshot = if self.snapshot.is_empty() {
@@ -95,24 +103,27 @@ impl SetOffer {
             members,
         }
     }
-}
 
-impl SetOffer {
     /// What two runs recorded, together: neither can take back what the
-    /// other recorded. A set completed by either stays complete, a member
-    /// either recorded stays recorded, and the first snapshot stays.
+    /// other recorded. A member either recorded stays recorded and the first
+    /// snapshot stays. The merge is complete when a run completed and every
+    /// member of the kept snapshot is recorded: a run that read another
+    /// snapshot cannot complete a member it never offered, which the next
+    /// setup then retries.
     fn merged_with(self, other: SetOffer) -> SetOffer {
         let mut members = self.members;
         members.extend(other.members);
         members.sort();
         members.dedup();
+        let snapshot = if self.snapshot.is_empty() {
+            other.snapshot
+        } else {
+            self.snapshot
+        };
+        let snapshot_offered = snapshot.iter().all(|member| members.contains(member));
         SetOffer {
-            complete: self.complete || other.complete,
-            snapshot: if self.snapshot.is_empty() {
-                other.snapshot
-            } else {
-                self.snapshot
-            },
+            complete: (self.complete || other.complete) && snapshot_offered,
+            snapshot,
             members,
         }
     }
@@ -570,6 +581,57 @@ mod tests {
         .unwrap();
         assert_eq!(result.already_installed, ["alpha"]);
         assert!(result.installed.is_empty());
+    }
+
+    /// A run that read a different snapshot cannot complete a member of the
+    /// kept snapshot it never offered; the next setup offers it and, once the
+    /// set no longer lists it, counts it as offered.
+    #[test]
+    fn a_merged_offer_completes_only_when_its_snapshot_is_offered() {
+        let temp = TempDir::new().unwrap();
+        let both = vec!["alpha".to_string(), "beta".to_string()];
+        // Run A offered both; beta failed.
+        record_set_offer(
+            temp.path(),
+            "recommended",
+            SetOffer {
+                complete: false,
+                snapshot: both.clone(),
+                members: vec!["alpha".to_string()],
+            },
+        )
+        .unwrap();
+        // Run B read no record and saw the set as [alpha] only.
+        record_set_offer(
+            temp.path(),
+            "recommended",
+            SetOffer {
+                complete: true,
+                snapshot: vec!["alpha".to_string()],
+                members: vec!["alpha".to_string()],
+            },
+        )
+        .unwrap();
+        let merged = read_set_offer(temp.path(), "recommended").unwrap();
+        assert!(!merged.complete);
+        assert_eq!(merged.snapshot, both);
+
+        // The next setup sees the set as [alpha]: beta is no longer listed,
+        // so it counts as offered and the set completes.
+        let next = merged.after(&["alpha".to_string()], &SetInstallResult::default());
+        assert!(next.complete);
+        assert_eq!(next.members, both);
+        // While the set still lists beta, a run that installs it completes it.
+        let installed_beta = SetInstallResult {
+            installed: vec![InstallOutcome {
+                metadata: installed("beta"),
+                changed: true,
+            }],
+            ..SetInstallResult::default()
+        };
+        let retried = merged.after(&both, &installed_beta);
+        assert!(retried.complete);
+        assert_eq!(retried.members, both);
     }
 
     /// A failed member is not offered, so the next setup retries it, and the
