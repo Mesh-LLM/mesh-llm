@@ -4246,7 +4246,7 @@ html:has(> body.docs-body) {
 }
 
 .docs-body .docs-sidebar {
-  position: absolute;
+  position: fixed;
   inset: 64px auto auto 0;
   z-index: 25;
   width: 304px;
