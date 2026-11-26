@@ -25,8 +25,8 @@ fn ensure_description(current: Option<String>, fallback: &str) -> String {
 }
 
 fn normalize_http_operation_name(method: &str, path: &str) -> String {
-    let mut value = format!("__http_{}_{}", method.to_ascii_lowercase(), path);
-    value = value
+    let normalized_path: String = path
+        .trim_matches('/')
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() {
@@ -35,8 +35,12 @@ fn normalize_http_operation_name(method: &str, path: &str) -> String {
                 '_'
             }
         })
-        .collect::<String>();
-    value.trim_matches('_').to_string()
+        .collect();
+    if normalized_path.is_empty() {
+        format!("__http_{}", method.to_ascii_lowercase())
+    } else {
+        format!("__http_{}_{}", method.to_ascii_lowercase(), normalized_path)
+    }
 }
 
 fn template_prefix(uri_template: &str) -> String {
@@ -278,7 +282,6 @@ impl HttpItem {
     fn apply(self, builder: &mut DeclarativePluginBuilder) {
         match self {
             Self::Route(item) => {
-                builder.manifest.push_item(item.operation_manifest);
                 builder.manifest.push_item(item.http_manifest);
                 (item.register)(builder.ensure_operation_router());
             }
@@ -358,7 +361,6 @@ pub struct LocalCompletionRegistration {
 }
 
 pub struct LocalHttpRouteRegistration {
-    operation_manifest: ManifestEntry,
     http_manifest: ManifestEntry,
     register: OperationRouterRegistration,
 }
@@ -901,15 +903,6 @@ impl<TArgs> HttpRouteBuilder<TArgs> {
         let description = ensure_description(self.description, &operation_name);
         let handler = Arc::new(handler);
 
-        let mut op_inner = if let ManifestEntry::Operation(inner) =
-            operation_entry::<TArgs>(operation_name.clone(), description.clone()).into()
-        {
-            inner
-        } else {
-            unreachable!()
-        };
-        op_inner.output_schema_json = self.response_schema_json.clone();
-
         let mut binding_inner = if let ManifestEntry::HttpBinding(inner) = match method {
             "GET" => crate::manifest::http_get(path.clone(), operation_name.clone()).into(),
             "POST" => crate::manifest::http_post(path.clone(), operation_name.clone()).into(),
@@ -940,7 +933,6 @@ impl<TArgs> HttpRouteBuilder<TArgs> {
         });
 
         HttpItem::Route(LocalHttpRouteRegistration {
-            operation_manifest: ManifestEntry::Operation(op_inner),
             http_manifest: ManifestEntry::HttpBinding(binding_inner),
             register,
         })
@@ -952,3 +944,7 @@ fn parse_prompt_argument_ref(argument_ref: &str) -> Option<(String, String)> {
     let (prompt_name, argument_name) = remainder.rsplit_once('.')?;
     Some((prompt_name.to_string(), argument_name.to_string()))
 }
+
+#[cfg(test)]
+#[path = "dsl_tests.rs"]
+mod tests;
