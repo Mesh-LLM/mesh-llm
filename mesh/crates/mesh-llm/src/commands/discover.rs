@@ -150,7 +150,12 @@ async fn run_nostr_discover(
     }
 
     if auto_join {
-        let best = &ranked[0].listings[0];
+        let best = ranked
+            .iter()
+            .find_map(nostr::RankedMesh::available_publisher)
+            .ok_or_else(|| {
+                anyhow::anyhow!("all discovered publishers are at capacity; try again later")
+            })?;
         writeln!(err, "Auto-joining best match: {}", best)?;
         writeln!(err, "\nRun:")?;
         writeln!(err, "  mesh-llm serve --join {}", best.listing.invite_token)?;

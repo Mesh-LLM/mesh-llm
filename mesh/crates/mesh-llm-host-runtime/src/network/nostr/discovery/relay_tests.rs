@@ -104,6 +104,24 @@ async fn refused_relay() -> String {
 const DEADLINE: Duration = Duration::from_secs(2);
 
 #[tokio::test]
+async fn relay_urls_are_normalized_before_the_websocket_request() {
+    let relay = scripted_relay(Script::Answer {
+        stored: vec![],
+        live: vec![],
+    })
+    .await;
+    // A raw http::Uri rejects this path; RelayUrl percent-encodes it first.
+    let (_, health) = discover_round(&[format!("{relay}/日本")], &MeshFilter::default(), DEADLINE)
+        .await
+        .unwrap();
+    assert!(health.any_query_completed());
+    assert_eq!(
+        RelayUrl::parse("wss://bücher.example/").unwrap().as_str(),
+        "wss://xn--bcher-kva.example/"
+    );
+}
+
+#[tokio::test]
 async fn completed_queries_count_and_refused_relays_are_silent() {
     let relays = vec![
         scripted_relay(Script::Answer {

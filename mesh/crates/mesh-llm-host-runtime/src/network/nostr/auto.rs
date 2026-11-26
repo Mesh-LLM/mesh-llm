@@ -87,6 +87,15 @@ pub struct RankedMesh {
     pub listings: Vec<DiscoveredMesh>,
 }
 
+impl RankedMesh {
+    /// First bootstrap publisher with room, preserving the serving-first order.
+    pub fn available_publisher(&self) -> Option<&DiscoveredMesh> {
+        self.listings.iter().find(|mesh| {
+            mesh.listing.max_clients == 0 || mesh.listing.client_count < mesh.listing.max_clients
+        })
+    }
+}
+
 /// Group listings by mesh ID and rank the meshes, best first.
 ///
 /// Nodes of a public mesh converge on its lowest mesh ID, so when two meshes
@@ -263,6 +272,63 @@ mod scoring_tests {
             score > 400,
             "unnamed community mesh should score high, got {score}"
         );
+    }
+
+    #[test]
+    fn auto_token_selection_skips_full_publishers_without_hiding_them() {
+        let mut full = make_mesh(None, Some("a"), &[], 1, 0, 2, 2);
+        full.listing.publisher_serves = Some(true);
+        let mut available = full.clone();
+        available.listing.publisher_serves = Some(false);
+        available.listing.client_count = 1;
+        available.publisher_npub = "available".into();
+        let ranked = rank_meshes(&[&full, &available], None);
+        assert_eq!(ranked[0].listings.len(), 2);
+        assert_eq!(ranked[0].listings[0].listing.publisher_serves, Some(true));
+        assert_eq!(
+            ranked[0].available_publisher().unwrap().publisher_npub,
+            "available"
+        );
+
+        // With room in both publishers, serving-first is unchanged.
+        full.listing.client_count = 0;
+        let ranked = rank_meshes(&[&available, &full], None);
+        assert_eq!(
+            ranked[0]
+                .available_publisher()
+                .unwrap()
+                .listing
+                .publisher_serves,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn auto_token_selection_tries_the_next_mesh_and_refuses_all_full() {
+        let full = make_mesh(None, Some("a"), &[], 1, 0, 2, 2);
+        let mut unlimited = full.clone();
+        unlimited.listing.max_clients = 0;
+        unlimited.listing.mesh_id = Some("b".into());
+        let ranked = [
+            RankedMesh {
+                score: 100,
+                listings: vec![full.clone()],
+            },
+            RankedMesh {
+                score: 0,
+                listings: vec![unlimited],
+            },
+        ];
+        let selected = ranked
+            .iter()
+            .find_map(RankedMesh::available_publisher)
+            .unwrap();
+        assert_eq!(selected.listing.mesh_id.as_deref(), Some("b"));
+        let all_full = RankedMesh {
+            score: 100,
+            listings: vec![full],
+        };
+        assert!(all_full.available_publisher().is_none());
     }
 
     #[test]

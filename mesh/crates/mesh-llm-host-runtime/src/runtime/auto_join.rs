@@ -157,11 +157,27 @@ pub(super) async fn discover_nostr_join_candidates(
     });
 
     let relays = nostr_relays(&options.nostr_relay);
-    let meshes = discover_nostr_meshes(&relays).await?;
+    let (meshes, health) = match discover_nostr_meshes(&relays).await {
+        Ok(result) => result,
+        // The outage was reported; clients can start their API and rediscover later.
+        Err(_) if options.client => (Vec::new(), nostr::RelayHealth::default()),
+        Err(error) => return Err(error),
+    };
     log_nostr_auto_candidates(&meshes, target_name.as_ref());
+    let decision = smart_auto_blocking(meshes, my_vram_gb, target_name).await?;
+    if !options.client
+        && matches!(decision, nostr::AutoDecision::StartNew { .. })
+        && !health.any_query_completed()
+    {
+        let error = anyhow::anyhow!(
+            "Nostr auto-discovery is incomplete: no relay completed an untruncated query; refusing to start a new mesh"
+        );
+        record_nostr_discovery_failure(&error);
+        return Err(error);
+    }
     handle_auto_decision(
         options,
-        smart_auto_blocking(meshes.clone(), my_vram_gb, target_name).await?,
+        decision,
         auto_join_candidates,
         my_vram_gb,
         has_startup_models,
@@ -169,28 +185,28 @@ pub(super) async fn discover_nostr_join_candidates(
     .await
 }
 
-pub(super) async fn discover_nostr_meshes(relays: &[String]) -> Result<Vec<nostr::DiscoveredMesh>> {
+pub(super) async fn discover_nostr_meshes(
+    relays: &[String],
+) -> Result<(Vec<nostr::DiscoveredMesh>, nostr::RelayHealth)> {
     let filter = nostr::MeshFilter::default();
-    let result = nostr::discover_with_health(relays, &filter, None)
+    nostr::discover_with_health(relays, &filter, None)
         .await
         .and_then(|(meshes, health)| {
             anyhow::ensure!(
                 health.any_relay_answered(),
-                "Nostr auto-discovery is unavailable: no relay answered; refusing to start a new mesh"
+                "Nostr auto-discovery is unavailable: no relay answered"
             );
-            Ok(meshes)
-        });
-    match result {
-        Ok(meshes) => Ok(meshes),
-        Err(err) => {
-            record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
-            let _ = emit_event(OutputEvent::DiscoveryFailed {
-                message: "Nostr auto-discovery failed".to_string(),
-                detail: Some(err.to_string()),
-            });
-            Err(err)
-        }
-    }
+            Ok((meshes, health))
+        })
+        .inspect_err(record_nostr_discovery_failure)
+}
+
+fn record_nostr_discovery_failure(error: &anyhow::Error) {
+    record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
+    let _ = emit_event(OutputEvent::DiscoveryFailed {
+        message: "Nostr auto-discovery failed".to_string(),
+        detail: Some(error.to_string()),
+    });
 }
 
 pub(super) fn log_nostr_auto_candidates(
@@ -734,48 +750,12 @@ pub(super) fn run_auto_model_identity(
 }
 
 #[cfg(test)]
+#[path = "auto_join/discovery_tests.rs"]
+mod discovery_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn nostr_startup_errors_when_no_relay_answers() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let relay = format!("ws://{}", listener.local_addr().unwrap());
-        drop(listener);
-        let error = discover_nostr_meshes(&[relay]).await.unwrap_err();
-        assert!(error.to_string().contains("no relay answered"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn nostr_startup_accepts_a_completed_empty_query() {
-        use futures_util::{SinkExt, StreamExt};
-        use nostr_sdk::prelude::*;
-        use tokio_tungstenite::tungstenite::Message;
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let relay = format!("ws://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let Some(Ok(Message::Text(text))) = socket.next().await else {
-                panic!("expected subscription request");
-            };
-            let ClientMessage::Req {
-                subscription_id, ..
-            } = ClientMessage::from_json(text.as_str()).unwrap()
-            else {
-                panic!("expected REQ");
-            };
-            socket
-                .send(Message::text(
-                    RelayMessage::eose(subscription_id.into_owned()).as_json(),
-                ))
-                .await
-                .unwrap();
-        });
-        assert!(discover_nostr_meshes(&[relay]).await.unwrap().is_empty());
-        server.await.unwrap();
-    }
 
     #[test]
     fn successful_join_mesh_label_preserves_named_and_unnamed_meshes() {

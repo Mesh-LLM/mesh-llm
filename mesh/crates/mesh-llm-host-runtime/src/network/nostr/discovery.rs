@@ -319,7 +319,8 @@ async fn query_relay(relay: &str, round: &mut RelayRound) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let (mut socket, _) = tokio_tungstenite::connect_async(relay).await?;
+    let relay = RelayUrl::parse(relay)?;
+    let (mut socket, _) = tokio_tungstenite::connect_async(relay.as_str()).await?;
     let subscription_id = SubscriptionId::generate();
     let request = ClientMessage::req(subscription_id.clone(), mesh_listing_filter());
     socket.send(Message::text(request.as_json())).await?;
