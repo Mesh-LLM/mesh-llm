@@ -326,6 +326,9 @@ pub(super) async fn shutdown_runtime_loaded_models(
         }
         node.unregister_runtime_instance_lifecycle(handle.port);
         handle.shutdown().await;
+        if let Some(service) = node.native_model_lifecycle.get() {
+            service.record_unloaded(&instance_id);
+        }
         let _ = lifecycle
             .lock()
             .await

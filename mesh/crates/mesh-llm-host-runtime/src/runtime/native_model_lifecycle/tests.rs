@@ -31,6 +31,7 @@ mod requests {
                 models: BTreeMap::from([("test".into(), residency)]),
                 targets: snapshot,
                 intents,
+                gate_wait_checkpoint: std::sync::Mutex::new(None),
             }),
             receiver,
             targets,
@@ -135,6 +136,300 @@ mod requests {
         };
         finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
         assert!(request.await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_drains_native_lease_unloads_and_reloads_after_release() {
+        // Large idle timeout (300s) proves handoff unloads immediately instead of waiting for idle eviction.
+        let (lifecycle, mut intents, targets) = fixture(300);
+
+        // 1. Load native model and hold an active request lease.
+        let active = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire("test").await.unwrap().unwrap() })
+        };
+        finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
+        let active_lease = active.await.unwrap();
+
+        let mut checkpoints = lifecycle.install_gate_wait_checkpoint();
+
+        // 2. Start exclusive_gpu plugin handoff: must wait while `active_lease` is held.
+        let handoff_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire_exclusive_gpu_handoff().await.unwrap() })
+        };
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), checkpoints.recv())
+                .await
+                .expect("handoff should reach write gate")
+                .expect("checkpoint channel open"),
+            "exclusive_gpu_handoff_write"
+        );
+        assert!(
+            intents.try_recv().is_err(),
+            "handoff must not unload while native RequestLease is active"
+        );
+
+        // 3. Dropping the active native lease lets handoff proceed and unload immediately.
+        drop(active_lease);
+        let ModelIntent::Unload {
+            target,
+            completion: Some(completion),
+            options,
+            ..
+        } = intents.recv().await.unwrap()
+        else {
+            panic!("expected unload intent for exclusive_gpu handoff")
+        };
+        assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
+        assert!(!options.force);
+        targets.send_modify(|t| {
+            t.targets.clear();
+        });
+        completion
+            .send(Ok(crate::api::RuntimeUnloadResponse {
+                model: "loaded-test".into(),
+                instance_id: "runtime-1".into(),
+                unloaded: true,
+            }))
+            .unwrap();
+        let handoff_lease = handoff_task.await.unwrap();
+
+        // 4. While the plugin holds `handoff_lease`, a new native request must block without loading.
+        let reload_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire("test").await.unwrap().unwrap() })
+        };
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), checkpoints.recv())
+                .await
+                .expect("reload should reach read gate")
+                .expect("checkpoint channel open"),
+            "acquire_read"
+        );
+        assert!(
+            intents.try_recv().is_err(),
+            "native reload must wait until exclusive_gpu handoff lease is dropped"
+        );
+
+        // 5. Releasing `handoff_lease` allows the waiting native request to reload cleanly.
+        drop(handoff_lease);
+        finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
+        let reloaded = reload_task.await.unwrap();
+        assert_eq!(lifecycle.execution_model("test"), "loaded-test");
+        drop(reloaded);
+    }
+
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_queued_after_acquire_does_not_deadlock_selected_instance_admission()
+     {
+        let (lifecycle, mut intents, targets) = fixture(300);
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        assert!(node.native_model_lifecycle.set(lifecycle.clone()).is_ok());
+        node.register_runtime_instance_lifecycle(
+            1234,
+            Arc::new(tokio::sync::Mutex::new(
+                crate::runtime::InstanceLifecycleRecord::new(
+                    crate::runtime::InstanceLifecycleState::Serving,
+                    10,
+                ),
+            )),
+        );
+
+        // 1. Cold-load native model and obtain the outer `RequestLease`.
+        let active = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire("test").await.unwrap() })
+        };
+        finish_load(&lifecycle, intents.recv().await.unwrap(), &targets);
+        let outer_lease = active.await.unwrap();
+
+        let mut checkpoints = lifecycle.install_gate_wait_checkpoint();
+
+        // 2. Queue an exclusive_gpu handoff write lock while the outer read lease is held.
+        let mut handoff_fut = std::pin::pin!(lifecycle.acquire_exclusive_gpu_handoff());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
+            "handoff must wait while outer read lease is held"
+        );
+        assert_eq!(
+            checkpoints
+                .try_recv()
+                .expect("handoff should queue write gate"),
+            "exclusive_gpu_handoff_write"
+        );
+        // Tokio's write-preferring RwLock now blocks any fresh read lock on this gate.
+        assert!(lifecycle.models["test"].gate.try_read().is_err());
+
+        // 3. Selected-instance admission inside `with_request_lease` must reuse
+        // the existing read lease instead of deadlocking behind the queued writer.
+        let selected = with_request_lease(outer_lease, async {
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                node.begin_runtime_instance_request(1234),
+            )
+            .await
+            .expect("selected-instance admission must not deadlock behind queued handoff")
+            .expect("instance should accept work")
+            .expect("registered instance should return guard")
+        })
+        .await;
+
+        // 4. Even after the outer scope exits, polling `handoff_fut` directly proves
+        // `InstanceRequestGuard` still holds the shared read lease and blocks unload.
+        assert!(
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
+            "handoff must remain blocked while InstanceRequestGuard holds the reused lease"
+        );
+        assert!(
+            intents.try_recv().is_err(),
+            "handoff must not emit unload intent while InstanceRequestGuard holds the reused lease"
+        );
+
+        // 5. Dropping `selected` releases the last lease reference and lets handoff unload.
+        drop(selected);
+        assert!(
+            handoff_fut.as_mut().poll(&mut cx).is_pending(),
+            "handoff should now be waiting for unload completion"
+        );
+        let ModelIntent::Unload {
+            target,
+            completion: Some(completion),
+            ..
+        } = intents
+            .try_recv()
+            .expect("unload intent should arrive once selected request ends")
+        else {
+            panic!("expected unload intent");
+        };
+        assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
+        completion
+            .send(Ok(crate::api::RuntimeUnloadResponse {
+                model: "loaded-test".into(),
+                instance_id: "runtime-1".into(),
+                unloaded: true,
+            }))
+            .unwrap();
+        let _handoff_lease = handoff_fut.await.unwrap();
+        node.endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_timeout_keeps_gate_until_unload_finishes_and_clears_instance() {
+        let (lifecycle, mut intents, _targets) = fixture(300);
+        *lifecycle.models["test"].instance.lock().unwrap() =
+            Some(("runtime-1".into(), "loaded-test".into(), 1234));
+
+        // 1. Start handoff with a short timeout and hold the unload open past timeout.
+        let handoff_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move {
+                lifecycle
+                    .acquire_exclusive_gpu_handoff_with_timeout(Duration::from_millis(40))
+                    .await
+            })
+        };
+        let ModelIntent::Unload {
+            target,
+            completion: Some(completion),
+            ..
+        } = tokio::time::timeout(Duration::from_secs(2), intents.recv())
+            .await
+            .expect("unload intent should arrive")
+            .expect("intent channel open")
+        else {
+            panic!("expected unload intent");
+        };
+        assert_eq!(target, UnloadTarget::Instance("runtime-1".into()));
+
+        // 2. Wait for the caller's handoff timeout to expire while unload is still in flight.
+        let err = handoff_task
+            .await
+            .unwrap()
+            .expect_err("handoff should time out while unload is still running");
+        assert!(err.to_string().contains("timed out"), "{err:#}");
+
+        // 3. The detached unload owner must keep both operation and write gate locked
+        // until the control loop actually completes the unload.
+        assert!(lifecycle.models["test"].operation.try_lock().is_err());
+        assert!(lifecycle.models["test"].gate.try_read().is_err());
+        assert!(lifecycle.models["test"].gate.try_write().is_err());
+
+        // 4. Completing the unload clears the stale instance record and releases the gate.
+        completion
+            .send(Ok(crate::api::RuntimeUnloadResponse {
+                model: "loaded-test".into(),
+                instance_id: "runtime-1".into(),
+                unloaded: true,
+            }))
+            .unwrap();
+        let _gate = tokio::time::timeout(
+            Duration::from_secs(2),
+            lifecycle.models["test"].gate.write(),
+        )
+        .await
+        .expect("unload owner should release write gate after completion");
+        drop(_gate);
+        assert!(
+            lifecycle.models["test"].instance.lock().unwrap().is_none(),
+            "completed unload must clear residency.instance even after caller timed out"
+        );
+
+        // 5. A subsequent handoff succeeds immediately without trying to unload a stale instance.
+        let _handoff = lifecycle.acquire_exclusive_gpu_handoff().await.unwrap();
+        assert!(
+            intents.try_recv().is_err(),
+            "cleared instance record must not trigger a duplicate unload"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_unloaded_clears_only_matching_instance_and_allows_subsequent_handoff() {
+        let (lifecycle, mut intents, _targets) = fixture(300);
+        lifecycle.record_loaded("test", "runtime-1", "loaded-test", 1234);
+
+        // Teardown of a different instance must not disturb the active record.
+        lifecycle.record_unloaded("runtime-other");
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_some());
+
+        // Teardown of the tracked instance clears the record so exclusive_gpu
+        // handoff does not try to unload a vanished instance.
+        lifecycle.record_unloaded("runtime-1");
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_none());
+
+        let _handoff = lifecycle.acquire_exclusive_gpu_handoff().await.unwrap();
+        assert!(
+            intents.try_recv().is_err(),
+            "exited instance must not trigger a stale unload intent"
+        );
+    }
+
+    #[tokio::test]
+    async fn exclusive_gpu_handoff_propagates_unload_failure_without_dropping_instance() {
+        let (lifecycle, mut intents, _targets) = fixture(300);
+        *lifecycle.models["test"].instance.lock().unwrap() =
+            Some(("runtime-1".into(), "loaded-test".into(), 1234));
+
+        let handoff_task = {
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move { lifecycle.acquire_exclusive_gpu_handoff().await })
+        };
+        let ModelIntent::Unload {
+            completion: Some(completion),
+            ..
+        } = intents.recv().await.unwrap()
+        else {
+            panic!("expected unload intent")
+        };
+        completion
+            .send(Err(anyhow::anyhow!("maintained owner intent")))
+            .unwrap();
+        let err = handoff_task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("failed to unload native model"));
+        assert!(lifecycle.models["test"].instance.lock().unwrap().is_some());
     }
 
     /// Rejections and lost completions wait another idle interval before retrying.

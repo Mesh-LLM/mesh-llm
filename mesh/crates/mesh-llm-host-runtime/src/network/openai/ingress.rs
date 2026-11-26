@@ -25,6 +25,7 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
 mod missing_model;
+mod plugin_gpu_handoff;
 #[cfg(test)]
 #[path = "ingress/private_scope_tests.rs"]
 mod private_scope_tests;
@@ -789,6 +790,13 @@ async fn route_to_plugin_endpoint(
     model_name: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    let _gpu_handoff =
+        match plugin_gpu_handoff::acquire_for_plugin(ctx.node, &endpoint.plugin_name, model_name)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(reason) => return proxy::RouteDispatchOutcome::Failed(reason),
+        };
     let tiered_call = plugin_manager.begin_tiered_invocation(
         &endpoint.plugin_name,
         crate::mesh::request_tier::current_request_tier(),
@@ -1890,3 +1898,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ingress_tests/telemetry_rejection.rs"]
 mod telemetry_rejection;
+
+#[cfg(test)]
+#[path = "ingress_tests/exclusive_gpu.rs"]
+mod exclusive_gpu;

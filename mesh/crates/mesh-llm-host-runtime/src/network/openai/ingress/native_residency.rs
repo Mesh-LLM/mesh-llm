@@ -192,7 +192,7 @@ async fn dispatch_cold(
         )
         .await;
     };
-    let _lease = match lifecycle.acquire(model_name).await {
+    let lease = match lifecycle.acquire(model_name).await {
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(model = model_name, %error, "native model not ready");
@@ -237,14 +237,33 @@ async fn dispatch_cold(
     if execution_model != model_name {
         proxy::rewrite_model_field(request, &execution_model);
     }
-    route_prepared_request(
-        local_only,
-        stream,
-        request,
-        &route,
-        Some(&execution_model),
-        required_tokens,
-        observer,
+    // Scope the held lease so selected-instance admission reuses it instead of
+    // taking a second read lock on the same write-preferring residency gate.
+    // Release it up front if no local candidate remains after scope and
+    // workload filtering.
+    let eligible = workload_routing::ingress_candidates(
+        ctx.node,
+        &execution_model,
+        &request.client_path,
+        &targets,
+    )
+    .await;
+    let lease = eligible
+        .iter()
+        .any(|target| matches!(target, election::InferenceTarget::Local(_)))
+        .then_some(lease)
+        .flatten();
+    crate::runtime::native_model_lifecycle::with_request_lease(
+        lease,
+        route_prepared_request(
+            local_only,
+            stream,
+            request,
+            &route,
+            Some(&execution_model),
+            required_tokens,
+            observer,
+        ),
     )
     .await
 }

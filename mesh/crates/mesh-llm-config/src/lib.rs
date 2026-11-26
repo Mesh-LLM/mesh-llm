@@ -1022,6 +1022,10 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.allow_inference_observation"],
             ),
             (
+                "PluginConfigEditor::exclusive_gpu",
+                vec!["plugin.<plugin-name>.exclusive_gpu"],
+            ),
+            (
                 "PluginConfigEditor::command",
                 vec!["plugin.<plugin-name>.command"],
             ),
