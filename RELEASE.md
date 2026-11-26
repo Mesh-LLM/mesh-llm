@@ -359,6 +359,11 @@ it. A build without the secret is valid and reports nothing unless someone sets
 `MESH_LLM_POSTHOG_KEY` in the environment at run time, which is the documented
 self-hosting path.
 
+Skippy's engine events (`generation`, `model_load`, `host_profile`) go to
+Skippy's own analytics project, keyed the same way by `SKIPPY_POSTHOG_KEY`
+from the `SKIPPY_POSTHOG_KEY` repository secret. They are sent only when
+mesh-llm's own reporting is on, under its consent and install identifier.
+
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.

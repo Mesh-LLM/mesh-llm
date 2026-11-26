@@ -66,6 +66,7 @@ jobs:
     env:
       GIT_MASTER: '1'
       MESH_LLM_POSTHOG_KEY: ''
+      SKIPPY_POSTHOG_KEY: ''
     outputs:
       source_sha: ${{ steps.freeze.outputs.source_sha }}
     steps:
