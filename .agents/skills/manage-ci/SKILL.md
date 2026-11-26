@@ -627,6 +627,46 @@ same-repository branch pushed by a collaborator. Do not describe that setting
 as the approval boundary for this exception. The repository-wide PR gate and
 checked-in expiry are the maintainer-controlled approval boundary.
 
+### Cache authority by trust context
+
+`select-ci-runners` is the only source of cache authority. "Exception active"
+means the caller passed `depot_pr_enabled=true` and the UTC date is before
+2027-09-14. Direct Depot remote cache (`allow_depot_remote_cache`) is `false`
+in every row.
+
+| Event and trust class | Provider | Native GHA cache | Trusted sccache seed |
+|---|---|---|---|
+| `pull_request`, same-repository merge ref, exception active, not forced hosted | Depot | true (Depot repository-wide proxy) | false |
+| `pull_request`, exact `DEPOT_PR_CANARY_REF`, base and head repository `Mesh-LLM/mesh-llm`, exception inactive, not forced hosted | Depot | false | false |
+| `pull_request` fork, non-merge ref, forced hosted, or gate off or expired without a matching `DEPOT_PR_CANARY_REF` | hosted | true (ref-scoped; sccache disk-only) | true |
+| `pull_request_target` | hosted, never Depot | true | true |
+| `push` to `refs/heads/main` of `Mesh-LLM/mesh-llm`, role's main gate `true`, not forced hosted | Depot | exception active | false |
+| `workflow_dispatch` on main of `Mesh-LLM/mesh-llm`, source `push`, role's main gate `true` (`manual_use_depot` ignored), not forced hosted | Depot | exception active | false |
+| `workflow_dispatch` on main of `Mesh-LLM/mesh-llm`, manual source, main gate or `manual_use_depot`, not forced hosted | Depot | exception active | false |
+| `workflow_dispatch` declaring a `pull_request(_target)` source | hosted | true (sccache disk-only) | true |
+| Other pushes, tags, schedules, forced hosted, gates off | hosted | true | true |
+
+The role decides which gate it passes. Quality, Linux host, Linux accelerator
+runtimes, static ABI and native SDK pass `DEPOT_RUNNERS_ENABLED`; every other
+slice role passes `depot_main_enabled: 'false'`. The Linux CPU runtime is
+forced hosted. Release passes `depot_pr_enabled: 'false'`, so a Depot release
+job never receives native cache authority. `configure-sccache-gha` further
+forces PR and dispatched-PR compiler caching to the job-local disk.
+
+Every sccache startup in a job placed by `select-ci-runners` applies these
+outputs through `configure-sccache-gha`. That includes
+`mozilla-actions/sccache-action`, `setup-macos-lld` and any custom start.
+Hosted-literal jobs that take no selector outputs, such as release `build_linux_arm64` on `ubuntu-24.04-arm`, are listed as exemptions in `sccache_startup_policy` with the guard that owns their compiler-cache policy. macOS host and runtime slices run it after `setup-macos-lld`
+with workflow `SCCACHE_GHA_ENABLED=false`. That keeps their effective
+disk-only compiler cache, and a denied context clears ambient WebDAV or
+Actions-cache endpoints before the job-owned socket restarts. The release
+ARM64 smoke binds the release selector outputs before compiling its verifier.
+
+PR outcome: PRs keep the accepted bounded exception in
+`ci/DEPOT_PR_RISK_EXCEPTION.md` without expansion. Trusted-main Depot keeps
+the caches this table grants. Historical shared Depot cache contents are
+untrusted inputs; no existing entry is promoted to trusted input.
+
 ## Cache contract
 
 - Main Windows runtime jobs own shared Windows ABI publication after successful

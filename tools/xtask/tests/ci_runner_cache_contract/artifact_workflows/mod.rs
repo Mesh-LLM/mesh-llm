@@ -57,3 +57,4 @@ mod release_notes_step;
 mod release_ui_step;
 mod release_windows_intent;
 mod reporter_intent;
+mod sccache_startup_policy;

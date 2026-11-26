@@ -126,6 +126,18 @@ The selector fails hosted at the start of 2027-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a
 repository variable cannot extend it.
 
+## PR eligibility decision (#2784, 2026-11-21)
+
+PRs keep this accepted, bounded exception unchanged: same scope, same
+2027-09-14 expiry, no new role, lane, event or cache. Trusted-main Depot
+jobs keep the native cache authority the selector grants while the exception
+is active, and lose it when it expires. Direct Depot remote cache stays
+disabled. Historical shared Depot cache contents are untrusted inputs. No
+existing entry is promoted to trusted input by key prefix, by expiry, or by a
+checksum stored with the same cached bytes. The per-context table is in
+`.agents/skills/manage-ci/SKILL.md`. Renewal or expansion still needs a
+separately reviewed change or verified server-enforced isolation.
+
 ## Validation record
 
 The exact-SHA five-lane Depot canary, provider-separated schema-v3 metrics,
