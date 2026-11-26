@@ -2,12 +2,16 @@ use skippy_runtime::ModelStateKind;
 
 use crate::frontend::SpeculativeDecodeConfig;
 
-const RECURRENT_NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 1;
+const RECURRENT_NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 2;
 
-/// Hybrid and recurrent models roll back at most two verify rows in place, so
-/// a wider native MTP window copies the whole recurrent state to host on every
-/// window (#2318). Cap them to one draft until rollback depth follows the
-/// speculative window.
+/// Hybrid and recurrent models can roll back a limited number of verify rows
+/// in place; a wider window copies the whole recurrent state to host on every
+/// window (#2318). The rollback budget the planner sizes is
+/// `max(draft, verify) + 1` — the anchor plus the larger of the draft and
+/// verify windows — so the draft cap alone does not determine whether a
+/// window stays in place. Two draft tokens were measured to avoid the
+/// full-state copy on a split-serving workload with a small verify window;
+/// deeper windows fall back to the checkpoint/replay path.
 pub(in crate::frontend) fn native_mtp_draft_cap(
     requested: usize,
     state_kind: Option<ModelStateKind>,
@@ -36,9 +40,10 @@ pub(in crate::frontend) fn apply_native_mtp_draft_cap(
             skippy_events::diagnostics::ServingDiagnostic::Warning {
                 message: format!(
                     "native MTP draft tokens capped from {requested} to {capped}: this model has \
-                     recurrent state, and more than one draft token is about 7x slower on hybrid \
-                     and recurrent models until the rollback depth is sized from the speculative \
-                     window (#2318)"
+                     recurrent state, and more than two draft tokens copies the whole recurrent \
+                     state to host on every window; the planner sizes rollback from \
+                     max(draft, verify) + 1, so the in-place budget depends on the verify \
+                     window, not just the draft count (#2318)"
                 ),
                 context: Some(format!("model_state_kind={state_kind:?}")),
             },
@@ -51,9 +56,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hybrid_and_recurrent_models_cap_native_mtp_to_one_draft() {
+    fn hybrid_and_recurrent_models_cap_native_mtp_to_two_drafts() {
         for kind in [ModelStateKind::Hybrid, ModelStateKind::Recurrent] {
-            assert_eq!(native_mtp_draft_cap(3, Some(kind)), 1, "{kind:?}");
+            assert_eq!(native_mtp_draft_cap(4, Some(kind)), 2, "{kind:?}");
+            assert_eq!(native_mtp_draft_cap(2, Some(kind)), 2, "{kind:?}");
             assert_eq!(native_mtp_draft_cap(1, Some(kind)), 1, "{kind:?}");
         }
     }
@@ -69,13 +75,13 @@ mod tests {
     fn capping_a_hybrid_plan_keeps_min_within_max() {
         let mut speculative = SpeculativeDecodeConfig::default();
         speculative.native_mtp.enabled = true;
-        speculative.native_mtp.max_draft_tokens = 3;
-        speculative.native_mtp.min_draft_tokens = 2;
+        speculative.native_mtp.max_draft_tokens = 4;
+        speculative.native_mtp.min_draft_tokens = 3;
 
         apply_native_mtp_draft_cap(&mut speculative, Some(ModelStateKind::Hybrid));
 
-        assert_eq!(speculative.native_mtp.max_draft_tokens, 1);
-        assert_eq!(speculative.native_mtp.min_draft_tokens, 1);
+        assert_eq!(speculative.native_mtp.max_draft_tokens, 2);
+        assert_eq!(speculative.native_mtp.min_draft_tokens, 2);
         speculative.validate().expect("capped plan stays valid");
     }
 }
