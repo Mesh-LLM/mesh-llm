@@ -5999,16 +5999,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "process-supervision"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
-dependencies = [
- "libc",
- "thiserror 2.0.21",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "process-wrap"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7440,12 +7430,12 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skippy-api"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41fdbda215f0f31eb4fa32db1f59afba66ea453aa9aefc875060c9c43203aff4"
 dependencies = [
  "anyhow",
  "hex",
- "process-supervision",
  "reqwest",
  "same-file",
  "serde",
@@ -7467,6 +7457,7 @@ dependencies = [
  "skippy-runtime",
  "skippy-runtime-install",
  "skippy-serving",
+ "skippy-subprocess",
  "skippy-topology",
  "tempfile",
  "thiserror 2.0.21",
@@ -7477,8 +7468,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-cache"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3c0d5942c54a74df1c50d5267f0b31732953a3740173c188961b5db62960c64"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7492,8 +7484,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-commands"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9565150705ab5984092a3d94c8253c536da764d7134efe1464043efef3a9c5d"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7527,8 +7520,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-config"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "362f31c1aefebbd2844e67c9d7fa7d856458c421cea0935805abc6f648c02620"
 dependencies = [
  "anyhow",
  "serde",
@@ -7538,8 +7532,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-coordinator"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b26941e7660f5eaa0fb38017d152dea33eaeffc027810698a4805270998a1b21"
 dependencies = [
  "skippy-model-artifact",
  "thiserror 2.0.21",
@@ -7547,8 +7542,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-events"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52b59d8e50391ffcfc39968b59c03ffabf66bbd1d8d4a209578c65786ca2c6ca"
 dependencies = [
  "serde",
  "uuid",
@@ -7556,8 +7552,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-ffi"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2aa173d015426920c3f2a56af9db9daf230825a5ddf4c788c10874940aee328"
 dependencies = [
  "bindgen",
  "libloading 0.9.0",
@@ -7565,12 +7562,13 @@ dependencies = [
 
 [[package]]
 name = "skippy-gpu-bench"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4357d82119ed4f387d5d8d2c2bf0251c7110ff0313fef2102b938509d4223b26"
 dependencies = [
- "process-supervision",
  "serde",
  "serde_json",
+ "skippy-subprocess",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -7578,16 +7576,18 @@ dependencies = [
 
 [[package]]
 name = "skippy-guardrails"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a880506146b940572a9c589c403cbef46399acee4a7ad2bd524210074e1291e4"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "skippy-hardware-profile"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c6e706c86fb77537f41b9ed1e37616ef59bdc6a0995234b05467e51b02a78a0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -7601,8 +7601,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-hf-hub"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dcf095d7aecd8aa3c6efc62a9ef825a9502de61a8b7a9eee045f7a41a58e2ca"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -7630,8 +7631,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-inference-api"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "768db535c3c83b9653024064d8636ef724e9edd346168431229122413a073992"
 dependencies = [
  "async-trait",
  "axum",
@@ -7651,13 +7653,15 @@ dependencies = [
 
 [[package]]
 name = "skippy-metrics"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66185873cdb275193dbd800d7bad994815d9245cab64f248e67d3d726a71565d"
 
 [[package]]
 name = "skippy-model"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d54c030fca3c413b69baab32f4728fbf02f5d4b398b8e22b20f30e5912c1cb"
 dependencies = [
  "anyhow",
  "clap",
@@ -7672,8 +7676,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-artifact"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99909374d2f356ed99b95d8e865b11fc1101c27d9f0ede6ab39e8f13c9152178"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7684,8 +7689,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-hf"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff30ba45264e0b1aadf1bfc22288af67ef85e549c7075f273370e5b3e0038ab"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7710,8 +7716,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-package"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36df6c142431b73482b0e43c2957ca6c9887e807014a8dc26c6df6210b7ccb7c"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7736,16 +7743,18 @@ dependencies = [
 
 [[package]]
 name = "skippy-model-ref"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2765d2c740ec6bd524ea7dc324f7ce6facc9b58dfea38af28238a9d4fe6203ec"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "skippy-model-resolver"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b96efe4bf7c4ccfc5397ae82e102995a7a3290860d01783a300782d613d50e6a"
 dependencies = [
  "anyhow",
  "serde",
@@ -7756,8 +7765,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-native-runtime"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9fb59dda51fafac952b3679826ca76e9fc55f2cc960a925d962079bcb8ca75"
 dependencies = [
  "anyhow",
  "hex",
@@ -7768,8 +7778,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-package-format"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfb0ee536d93113e58f05756e37cc9994990bb64836a57e465c2aa6cd5b05dd5"
 dependencies = [
  "serde",
  "serde_json",
@@ -7778,8 +7789,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-protocol"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "229c64aa2dfbc8113a471219c15505e9197e2b63834e0aa8c395837e0688f53d"
 dependencies = [
  "prost",
  "prost-build",
@@ -7790,8 +7802,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "094fa995da66d715c717ea31789acb25a0f3d21686383c3888cd5997b453e688"
 dependencies = [
  "anyhow",
  "crossbeam-queue",
@@ -7810,8 +7823,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-runtime-install"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6e18d19156b6a08a70120e4994603881652181981fb52b12bc0c2cfb3bc4189"
 dependencies = [
  "anyhow",
  "dirs",
@@ -7834,8 +7848,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-scheduler"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92a14dc8c6f933fc9e7623257abac90fe081e7506d87b16f45f2d169b2ed662f"
 dependencies = [
  "skippy-runtime",
  "thiserror 2.0.21",
@@ -7843,8 +7858,9 @@ dependencies = [
 
 [[package]]
 name = "skippy-serving"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b33a9590d27fff877703ffe3196665bc4a5463e4af37b3390efbb194767a5e73"
 dependencies = [
  "ahash",
  "anyhow",
@@ -7878,17 +7894,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-subprocess"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "642ac7fde53572fb601292c9c3dff340d5908d7f1ecdf145a4efc9d6b7a415ed"
+dependencies = [
+ "libc",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "skippy-tokenizer"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46e417128ba4658997b14036216137e704b392414713002639e84257a34449b2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "skippy-topology"
-version = "0.80.1"
-source = "git+https://github.com/Mesh-LLM/skippy?rev=99d47871db31087e34e9e1bb286503d139edc59d#99d47871db31087e34e9e1bb286503d139edc59d"
+version = "0.80.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b603c1fc39925cd8e26408da61e7cff3a64783bc675270ee426f600682beb3"
 dependencies = [
  "serde",
  "serde_json",

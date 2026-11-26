@@ -23,16 +23,16 @@ runners.
 | Lint | `ubuntu-24.04` | `just lint` |
 | Test | `ubuntu-24.04`, `macos-15`, `windows-2022` | `just test-rust --locked --no-fail-fast` |
 | Console | `ubuntu-24.04` | `just test-ui` |
-| Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/ci-skippy-runtime.sh`, `just build`, `just smoke`, `just test-with-runtime` |
+| Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/fetch-skippy-runtime.sh` (pinned release) or `scripts/ci-skippy-runtime.sh` (named ref), `just mesh`, `just smoke`, `just test-with-runtime` |
 
 `just lint` is `cargo fmt --all -- --check`, Clippy on the workspace with
 warnings denied, ShellCheck on `scripts/*.sh`, `scripts/tests/*.sh` and
 `mesh/scripts/*.sh`, and the script tests in `scripts/tests/`.
 
-The smoke job checks Skippy out under `.deps/skippy`, builds or restores its
-CPU runtime, downloads a pinned test model and checks its SHA-256. Caches: the
-runtime built from the pinned Skippy commit, and the test model. Both are
-`actions/cache` entries; the compiler cache is sccache's GitHub backend.
+The smoke job downloads the pinned release's CPU runtime, a pinned test model,
+and checks the model SHA-256. A named Skippy ref instead checks source out under
+`.deps/skippy` and builds its CPU runtime. The model is cached; the compiler
+cache is sccache's GitHub backend.
 
 The workflow has `contents: read` and uses no secret or variable. A pull
 request cancels its own earlier run.

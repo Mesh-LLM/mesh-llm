@@ -9,6 +9,6 @@ The workflows are plain. Keep them that way.
 - Each job calls a `just` recipe or a script under `scripts/`. Put logic there,
   where it can be run locally, not in workflow YAML.
 - Skippy is built, tested and released in its own repository. Do not add Skippy
-  builds, GPU runtimes or Skippy tests here. The smoke builds the CPU runtime
-  from the pinned Skippy revision only because it needs one to run.
+  builds, GPU runtimes or Skippy tests here. The smoke downloads the CPU runtime
+  from the pinned release; only a named Skippy ref builds one from source.
 - Pin every action to a full commit SHA. Run `actionlint` before pushing.

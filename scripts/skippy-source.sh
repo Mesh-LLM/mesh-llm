@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MeshLLM builds against the Skippy revision pinned in Cargo.toml and
+# MeshLLM builds against the Skippy crates.io release pinned in Cargo.toml and
 # Cargo.lock. This script points the build at a local Skippy checkout instead,
 # for work that spans both repositories.
 #
@@ -11,18 +11,32 @@
 #                                         <ref> is a branch, tag, full commit
 #                                         SHA or pull/<number>; the URL names a
 #                                         fork (default: the pinned repository)
-#   scripts/skippy-source.sh --pinned     go back to the pinned revision
+#   scripts/skippy-source.sh --pinned     go back to the pinned crates.io release
 #
-# The override is .cargo/skippy-local.toml (not committed). While it exists,
-# Cargo.lock no longer matches, so build without --locked; build-host.sh does
-# that for you. Do not commit the Cargo.lock it produces.
+# The override is .cargo/skippy-local.toml (not committed). A checkout at a
+# different release temporarily changes the Skippy versions in Cargo.toml.
+# Build without --locked; build-host.sh does that for you. Do not commit the
+# overridden Cargo.toml or Cargo.lock.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OVERRIDE="$REPO_ROOT/.cargo/skippy-local.toml"
-pin_url="$(sed -n 's/^skippy-ffi = .*git = "\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml")"
-pin_rev="$(sed -n 's/^skippy-ffi = .*rev = "\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml")"
-[[ -n "$pin_url" && -n "$pin_rev" ]] || { echo "no Skippy pin found in Cargo.toml" >&2; exit 1; }
+LOCK_BACKUP="$REPO_ROOT/.cargo/skippy-pinned.lock"
+pin="$("$REPO_ROOT/scripts/skippy-pin.sh")"
+read -r pin_url pin_rev pin_version <<<"$pin"
+
+set_skippy_versions() {
+    local version="$1" temp
+    temp="$(mktemp "$REPO_ROOT/.cargo/skippy-manifest.XXXXXX")"
+    awk -v version="$version" '
+        /^(hf_hub|skippy-[a-z-]+) = \{/ {
+            sub(/version = "=[^"]+"/, "version = \"=" version "\"")
+        }
+        { print }
+    ' "$REPO_ROOT/Cargo.toml" >"$temp"
+    cat "$temp" >"$REPO_ROOT/Cargo.toml"
+    rm -f "$temp"
+}
 
 if (($# == 0)); then
     if [[ -f "$OVERRIDE" ]]; then
@@ -35,9 +49,19 @@ if (($# == 0)); then
 fi
 
 if [[ "$1" == "--pinned" ]]; then
+    if [[ ! -f "$OVERRIDE" ]]; then
+        echo "already using pinned Skippy v$pin_version ($pin_rev)"
+        exit 0
+    fi
+    [[ -f "$LOCK_BACKUP" ]] || {
+        echo "cannot restore pinned Cargo.lock: $LOCK_BACKUP is missing" >&2
+        exit 1
+    }
+    set_skippy_versions "$pin_version"
     rm -f "$OVERRIDE"
-    git -C "$REPO_ROOT" checkout -- Cargo.lock
-    echo "using pinned $pin_rev"
+    cp "$LOCK_BACKUP" "$REPO_ROOT/Cargo.lock"
+    rm -f "$LOCK_BACKUP"
+    echo "using pinned Skippy v$pin_version ($pin_rev)"
     exit 0
 fi
 
@@ -58,9 +82,13 @@ source_dir="$(cd "$1" && pwd -P)"
     echo "$source_dir is not a Skippy checkout (crates/skippy-ffi/Cargo.toml is missing)" >&2
     exit 1
 }
+source_version="$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' "$source_dir/Cargo.toml" | head -1)"
+[[ -n "$source_version" ]] || { echo "no Skippy release version in $source_dir/Cargo.toml" >&2; exit 1; }
+[[ -f "$OVERRIDE" ]] || cp "$REPO_ROOT/Cargo.lock" "$LOCK_BACKUP"
+set_skippy_versions "$source_version"
 {
     echo "# checkout: $source_dir"
-    echo "[patch.\"$pin_url\"]"
+    echo "[patch.crates-io]"
     for manifest in "$source_dir"/crates/*/Cargo.toml; do
         name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$manifest" | head -1)"
         echo "$name = { path = \"$(dirname "$manifest")\" }"

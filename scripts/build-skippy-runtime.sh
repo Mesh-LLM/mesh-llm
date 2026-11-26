@@ -11,7 +11,7 @@
 #   - --from-source or MESH_LLM_RUNTIME_FROM_SOURCE=1 asks for it;
 #   - a local checkout or another ref is chosen with scripts/skippy-source.sh;
 #   - the pin is not a release, or the release has no package for this machine
-#     and backend (ROCm, Vulkan, Windows), or --cuda-arch/--rocm-arch is given.
+#     and backend (including Vulkan), or --cuda-arch/--rocm-arch is given.
 # A source build uses the pinned commit, fetched into .deps/skippy.
 # Backend: --backend, else MESH_LLM_RUNTIME_BACKEND, else detected the way the
 # in-tree build did: metal on macOS; on Linux cuda, rocm or vulkan when their

@@ -79,3 +79,4 @@ microkit-work/
 /.lsmcp/
 compile_commands.json
 .cargo/skippy-local.toml
+.cargo/skippy-pinned.lock

@@ -18,11 +18,8 @@ set -euo pipefail
 out="$1"
 backend="${2:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-pin="$(grep -m1 '^skippy-ffi = ' "$REPO_ROOT/Cargo.toml")"
-url="$(sed -n 's/.*git = "\([^"]*\)".*/\1/p' <<<"$pin")"
-rev="$(sed -n 's/.*rev = "\([^"]*\)".*/\1/p' <<<"$pin")"
-version="$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' <<<"$pin")"
-[[ -n "$url" && -n "$rev" && -n "$version" ]] || { echo "no Skippy pin in Cargo.toml" >&2; exit 1; }
+pin="$("$REPO_ROOT/scripts/skippy-pin.sh")"
+read -r url rev version <<<"$pin"
 none() { echo "No Skippy runtime to download: $1" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || none "jq is not installed"
 

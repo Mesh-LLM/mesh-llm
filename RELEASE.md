@@ -47,11 +47,11 @@ An entry is removed in the same change that closes it.
 
 Two more things stop a release before it publishes:
 
-- **No Skippy release exists yet.** The build downloads the runtime from
-  `https://github.com/Mesh-LLM/skippy/releases`, and stops when it cannot.
-- **`runtime_download_gate`** runs the runtime download tests including the
-  ignored one, which fails until the pinned Skippy refuses an archive that
-  differs from its catalog entry.
+- **The pinned Skippy release must remain available.** The build downloads
+  the runtime from `https://github.com/Mesh-LLM/skippy/releases` and stops
+  when it cannot.
+- **`runtime_download_gate`** runs the runtime download tests, including the
+  check that refuses an archive whose runtime differs from its catalog entry.
 
 ## Dispatch
 
@@ -116,7 +116,7 @@ from `release.yml` after that release.
 - Repository secrets `MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE` and
   `MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE` (below).
 - Repository secret `MESH_LLM_POSTHOG_KEY` (optional, below).
-- A published Skippy release whose version is the pinned Skippy's
+- A published Skippy release whose version is the pinned crates.io version
   (`skippy-native-runtime` in `Cargo.lock`). That version is the runtime
   release: hosts download its runtime and never reuse one cached by an earlier
   Skippy. A host upgraded without network access needs that runtime supplied

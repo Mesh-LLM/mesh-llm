@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print the Skippy repository and commit a CI run should build against.
 #   scripts/ci-resolve-skippy.sh [ref]
-# With no ref: the revision pinned in Cargo.toml. A ref is a full commit SHA,
+# With no ref: the release commit pinned in scripts/skippy-pin.sh. A ref is a full commit SHA,
 # `pull/<number>` for a Skippy pull request, a branch or tag name, or a full
 # `refs/heads/...` or `refs/tags/...` name. A name that is both a branch and a
 # tag is refused; use the full name.
@@ -10,9 +10,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-pin_url="$(sed -n 's/^skippy-ffi = .*git = "\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml")"
-pin_rev="$(sed -n 's/^skippy-ffi = .*rev = "\([^"]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml")"
-[[ -n "$pin_url" && "$pin_rev" =~ ^[0-9a-f]{40}$ ]] || { echo "no Skippy pin in Cargo.toml" >&2; exit 1; }
+pin="$("$REPO_ROOT/scripts/skippy-pin.sh")"
+read -r pin_url pin_rev _ <<<"$pin"
 repository="$(sed -E 's#^https://github\.com/##; s#\.git$##' <<<"$pin_url")"
 url="${SKIPPY_GIT_URL:-$pin_url}"
 

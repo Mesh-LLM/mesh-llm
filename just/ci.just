@@ -6,6 +6,8 @@ lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     shellcheck scripts/*.sh scripts/tests/*.sh mesh/scripts/*.sh
+    scripts/tests/skippy-pin-test.sh
+    scripts/tests/skippy-source-test.sh
     scripts/tests/ci-resolve-skippy-test.sh
     scripts/tests/ci-skippy-runtime-test.sh
     scripts/tests/install-asset-test.sh

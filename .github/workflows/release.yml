@@ -161,9 +161,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # MeshLLM must refuse a downloaded runtime that differs from the catalog
-  # entry chosen for the host. The last case is #[ignore]d until the pinned
-  # Skippy revision checks it, so this job fails, and nothing is published,
-  # until that pin moves.
+  # entry chosen for the host. Exercise the full download test suite before
+  # any release can be published.
   runtime_download_gate:
     name: Refuse runtimes that differ from their catalog entry
     needs: metadata

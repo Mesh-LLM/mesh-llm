@@ -54,7 +54,7 @@ skill and the inventory in the same change.
 
 ## Testing MeshLLM against a Skippy change
 
-Lint and the Rust tests always use the Skippy revision pinned in `Cargo.toml`.
+Lint and the Rust tests always use the Skippy crates.io release pinned in `Cargo.toml`.
 The smoke job can use another one:
 
 - In a pull request, add a line `Skippy-Ref: pull/123` (or a branch, tag or

@@ -2,7 +2,7 @@
 
 ## Repository and instruction scope
 
-This repository is MeshLLM. Its product tree is `mesh/`, and product guidance is in `mesh/AGENTS.md`. Skippy, the inference runtime, lives in its own repository and is built, tested and released there. MeshLLM depends on Skippy's crates at the Git revision pinned in the root `Cargo.toml` and `Cargo.lock`, and loads a packaged Skippy runtime at run time. Do not add Skippy source, llama.cpp patches, GPU runtime builds or Skippy tests here.
+This repository is MeshLLM. Its product tree is `mesh/`, and product guidance is in `mesh/AGENTS.md`. Skippy, the inference runtime, lives in its own repository and is built, tested and released there. MeshLLM depends on exact Skippy crates.io versions pinned in the root `Cargo.toml` and `Cargo.lock`; `scripts/skippy-pin.sh` names the matching source commit for runtime fallback builds. MeshLLM loads a packaged Skippy runtime at run time. Do not add Skippy source, llama.cpp patches, GPU runtime builds or Skippy tests here.
 
 Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, `scripts/` and `.github/` are shared infrastructure. There is no `shared/` product tree. Some root scripts forward to `mesh/scripts/`. Build outputs remain at root `target/`, and CI checks Skippy out under `.deps/skippy`. The generated website output is root `docs/`; do not hand-edit it.
 
@@ -25,7 +25,7 @@ Always use `just`. Never build manually. Bare `just` (or `just build`) downloads
 
 `cargo check` and `cargo build` do not count as complete product builds: they skip the console, and `cargo check` produces no binary. See `mesh/AGENTS.md` for packaging commands and `CONTRIBUTING.md` for the full workflow.
 
-To build against a local Skippy checkout instead of the pinned revision, run `scripts/skippy-source.sh <checkout>`, or `scripts/skippy-source.sh --ref <branch|tag|commit|pull/N> [repository-url]` to have it fetched; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. Do not commit the `Cargo.lock` it produces.
+To build against a local Skippy checkout instead of the pinned release, run `scripts/skippy-source.sh <checkout>`, or `scripts/skippy-source.sh --ref <branch|tag|commit|pull/N> [repository-url]` to have it fetched; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. A checkout at another version temporarily changes `Cargo.toml`; do not commit it or the `Cargo.lock` it produces.
 
 ### Distribution builds
 

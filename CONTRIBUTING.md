@@ -61,9 +61,9 @@ This produces `target/debug/mesh-llm` and `target/debug/native-runtimes`. `just 
 that the Skippy release pinned in `Cargo.toml` published for this machine,
 checks it against the release's checksums, and puts it in
 `target/debug/native-runtimes`, where the host finds it with no settings.
-It builds the runtime from source instead (the pinned commit, fetched into
+It builds the runtime from source instead (the commit in `scripts/skippy-pin.sh`, fetched into
 `.deps/skippy`) when the release has no package for this machine and backend
-(ROCm, Vulkan, Windows), when you select another Skippy source (below), or when
+(including Vulkan), when you select another Skippy source (below), or when
 you ask: `MESH_LLM_RUNTIME_FROM_SOURCE=1 just build`. The backend is detected (Metal on
 macOS; CUDA, ROCm or Vulkan on Linux and Windows when their tools are installed; otherwise
 CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. Naming
@@ -83,10 +83,10 @@ scripts/skippy-source.sh ../skippy     # build against that checkout
 scripts/skippy-source.sh --ref main    # or fetch a branch, tag, commit or pull/<number>
 scripts/skippy-source.sh --ref my-branch https://github.com/me/skippy   # from a fork
 scripts/skippy-source.sh               # show what the build uses
-scripts/skippy-source.sh --pinned      # back to the pinned revision
+scripts/skippy-source.sh --pinned      # back to the pinned crates.io release
 ```
 
-Do not commit the `Cargo.lock` that a local override produces.
+Do not commit the `Cargo.toml` or `Cargo.lock` changes that a local override produces.
 
 Run real inference through the host you built, on a runtime directory and a
 GGUF model you supply. The script uses a throwaway home and cache:
@@ -235,8 +235,9 @@ Pull requests run [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 | Console | `just test-ui` |
 | Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>`, then `just test-with-runtime <runtime-dir>` |
 
-`just test-all` runs the first three. The smoke job builds Skippy's CPU runtime
-from the pinned Skippy commit, builds MeshLLM, and requires a real completion.
+`just test-all` runs the first three. The smoke job downloads the CPU runtime
+from the pinned Skippy release, builds MeshLLM, and requires a real completion.
+With `Skippy-Ref` it builds the runtime and MeshLLM against that source instead.
 It does not cover GPU runtimes, macOS, or Windows.
 
 Run `just lint` after changing a shell script or a workflow; it includes

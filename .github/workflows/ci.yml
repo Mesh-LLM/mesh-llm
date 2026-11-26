@@ -71,14 +71,14 @@ jobs:
 
   # Real inference through MeshLLM on Skippy's CPU runtime.
   #
-  # By default this uses the Skippy revision pinned in Cargo.toml. To test a
+  # By default this uses the Skippy crates.io release pinned in Cargo.toml. To test a
   # MeshLLM pull request against a Skippy branch or pull request, add a line
   # to the pull request description:
   #
   #     Skippy-Ref: pull/123
   #
   # This job then builds the runtime and MeshLLM from that Skippy source. Lint
-  # and the Rust tests still use the pinned revision. With no such line the
+  # and the Rust tests still use the pinned crates. With no such line the
   # runtime is the one the pinned Skippy release published. Either way the
   # runtime comes from the same commit this job compiles MeshLLM against. A branch or pull
   # request is resolved once per run: after a new Skippy push, re-run this
