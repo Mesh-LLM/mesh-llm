@@ -357,3 +357,72 @@ async fn a_membership_refuses_a_peer_announcing_another_mesh() -> Result<()> {
     assert_eq!(newcomer.mesh_id().await, membership.mesh_id().await);
     Ok(())
 }
+
+#[tokio::test]
+async fn membership_keeps_startup_dns_fallback_after_config_apply() -> Result<()> {
+    use crate::mesh::node::{NodeStartupSpec, ScopedNodeIdentity};
+    use mesh_llm_config::DnsFallbackMode;
+
+    let dir = tempfile::tempdir()?;
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(&config_path, "[network]\ndns_fallback = \"never\"\n")?;
+
+    let owner = test_owner_keypair(0x61, 0x62);
+    let auths = HashMap::new();
+    let (mut node, _channels) = Node::start_with_spec(NodeStartupSpec {
+        role: super::super::NodeRole::Worker,
+        relay: RelayConfig {
+            urls: &[],
+            auths: &auths,
+            policy: RelayPolicy::ExplicitlyDisabled,
+        },
+        quic_bind: QuicBindSelection {
+            ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            port: None,
+        },
+        max_vram_gb: None,
+        enumerate_host: false,
+        owner_config: None,
+        config_path: Some(&config_path),
+        local_mesh_requirements: crate::MeshRequirements::unrestricted(),
+        identity: Some(ScopedNodeIdentity {
+            key: SecretKey::generate(),
+            state_dir: dir.path().to_path_buf(),
+        }),
+    })
+    .await?;
+    assert_eq!(node.dns_fallback, Some(DnsFallbackMode::Never));
+
+    let ownership = sign_node_ownership(
+        &owner,
+        node.id().as_bytes(),
+        current_time_unix_ms() + DEFAULT_NODE_CERT_LIFETIME_SECS * 1000,
+        None,
+        None,
+    )?;
+    let mut trust_store = TrustStore::default();
+    trust_store.add_trusted_owner(owner.owner_id(), None);
+    node.owner_keypair = Some(owner.clone());
+    node.trust_policy = TrustPolicy::Allowlist;
+    *node.owner_attestation.lock().await = Some(ownership);
+    *node.trust_store.lock().await = trust_store;
+
+    {
+        let mut state = node.config_state.lock().await;
+        let mut updated = state.config().clone();
+        updated.network.dns_fallback = Some(DnsFallbackMode::Deferred);
+        state.apply(updated, 0);
+        assert_eq!(
+            state.config().network.effective_dns_fallback(),
+            Some(DnsFallbackMode::Deferred)
+        );
+    }
+
+    let membership = membership_of(&node, &[&owner]).await?;
+    assert_eq!(node.dns_fallback, Some(DnsFallbackMode::Never));
+    assert_eq!(membership.dns_fallback, Some(DnsFallbackMode::Never));
+
+    node.close_memberships().await;
+    node.close_endpoint().await;
+    Ok(())
+}

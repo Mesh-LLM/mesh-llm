@@ -173,8 +173,8 @@ where
 
 impl Node {
     /// Put back what an applied snapshot does not carry: redacted telemetry
-    /// headers, and the `[private]` list and `[request_tiers]` a legacy
-    /// snapshot has no field for.
+    /// headers, and the `[private]`, `[request_tiers]`, and `[network]`
+    /// settings a legacy snapshot has no field for.
     pub(super) async fn restore_unsent_settings(
         &self,
         mesh_config: &mut crate::plugin::MeshConfig,
@@ -188,6 +188,7 @@ impl Node {
         if snapshot.config_toml.is_none() {
             mesh_config.private = state.config().private.clone();
             mesh_config.request_tiers = state.config().request_tiers.clone();
+            mesh_config.network = state.config().network.clone();
         }
     }
 }

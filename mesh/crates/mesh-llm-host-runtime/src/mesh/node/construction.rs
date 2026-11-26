@@ -103,13 +103,12 @@ impl Node {
         let config = config_state_init.config();
         let reload = identity.is_none();
         let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());
+        let state_dir = identity.as_ref().map(|id| id.state_dir.as_path());
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),
             endpoint.id(),
             hardware.hostname.clone(),
-            identity
-                .as_ref()
-                .map(|identity| identity.state_dir.as_path()),
+            state_dir,
         )?;
         let owner_summary = verify_node_ownership(
             owner_runtime.owner_attestation.as_ref(),
@@ -134,6 +133,7 @@ impl Node {
             public_addr,
             quic_bind,
             relay_policy: relay.policy,
+            dns_fallback,
             owner_keypair,
             local_mesh_requirements,
             state: Arc::new(Mutex::new(MembershipState::default())),
@@ -233,10 +233,7 @@ impl Node {
                 |identity| crate::network::peer_blocks::PeerBlocks::load(&identity.state_dir),
             ),
             route_target_health: Arc::new(std::sync::OnceLock::new()),
-            config_revision_tx: {
-                let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
-                Arc::new(tx)
-            },
+            config_revision_tx: Arc::new(tokio::sync::watch::channel(config_revision_init).0),
             activity_policy_guard: policy.activity,
             public_mesh: policy.public_mesh,
             drain_timeout_secs: policy.drain_timeout_secs,
@@ -250,11 +247,7 @@ impl Node {
             native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
-            owner_attestation_path: saved_owner_attestation_path(
-                identity
-                    .as_ref()
-                    .map(|identity| identity.state_dir.as_path()),
-            ),
+            owner_attestation_path: saved_owner_attestation_path(state_dir),
             unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,

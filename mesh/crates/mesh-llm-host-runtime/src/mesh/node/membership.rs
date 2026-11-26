@@ -320,6 +320,7 @@ impl Node {
             public_addr,
             quic_bind,
             relay_policy: config.relay.policy,
+            dns_fallback: self.dns_fallback,
             owner_keypair: Some(owner_keypair),
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
             local_endpoints: self.local_endpoints.clone(),
@@ -506,13 +507,7 @@ impl Node {
         &self,
         config: &MembershipNodeConfig<'_>,
     ) -> Result<(Endpoint, QuicBindSelection)> {
-        let dns_fallback = self
-            .config_state
-            .lock()
-            .await
-            .config()
-            .network
-            .effective_dns_fallback();
+        let dns_fallback = self.dns_fallback;
         let bind = |port| QuicBindSelection {
             ip: self.quic_bind.ip,
             port,
