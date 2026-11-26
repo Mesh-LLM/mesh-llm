@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::{
@@ -107,7 +108,7 @@ async fn run_setup_executes_planned_steps_and_github_star_action() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
         ]
     );
     assert_eq!(actions.github, vec![SetupGitHubStarPlan::PromptIfEligible]);

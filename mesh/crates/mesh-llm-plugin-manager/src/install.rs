@@ -6,7 +6,7 @@ use reqwest::Client;
 use sha2::Digest;
 
 use crate::{
-    archive::{ExtractedPluginArchive, stage_plugin_archive},
+    archive::{ExtractedPluginArchive, StagedPluginArchive, stage_plugin_archive},
     catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
@@ -114,7 +114,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, options, progress, None, CommitMode::Replace).await
 }
 
 pub fn install_plugin_archive(
@@ -146,8 +146,10 @@ pub fn install_plugin_archive(
         asset: asset_name.clone(),
     });
     let store = PluginStore::new(&options.store_root);
+    let staged = stage_for_install(&archive_path, archive_ext, name, options)?;
+    let _lock = store.lock_writes()?;
     let current = store.load_optional(name)?;
-    let extracted = extract_for_install(&archive_path, archive_ext, name, options)?;
+    let extracted = staged.commit()?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -174,21 +176,21 @@ pub fn install_plugin_archive(
 
 /// Every install path extracts through here, so the executable it checks is
 /// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches.
-pub(crate) fn extract_for_install(
+/// names the one the host launches. The caller commits the staged package
+/// under the store's write lock.
+pub(crate) fn stage_for_install(
     archive_path: &std::path::Path,
     archive_ext: ArchiveExt,
     name: &str,
     options: &PluginInstallOptions,
-) -> Result<ExtractedPluginArchive> {
-    let staged = stage_plugin_archive(
+) -> Result<StagedPluginArchive> {
+    stage_plugin_archive(
         archive_path,
         archive_ext,
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )?;
-    staged.commit()
+    )
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -219,7 +221,14 @@ pub async fn update_plugin(
         version: None,
         pin: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current)).await
+    install_resolved_plugin(
+        resolved,
+        options,
+        progress,
+        Some(current),
+        CommitMode::Replace,
+    )
+    .await
 }
 
 struct ResolvedInstallSource {
@@ -276,16 +285,28 @@ fn resolve_catalog_entry(
 }
 
 /// Install `entry` at the release the catalog snapshot it came from pins,
-/// without fetching the catalog again. A caller that resolved several entries
+/// without fetching the catalog again, only if it is still not installed
+/// when the package is put in place. A caller that resolved several entries
 /// from one snapshot installs each through this, so a catalog that changes
-/// mid-operation cannot change what the operation installs.
+/// mid-operation cannot change what the operation installs. A plugin that
+/// someone else installed while this one downloaded is left exactly as it
+/// is, and the outcome is that plugin with `changed: false`.
 pub async fn install_catalog_entry(
     entry: &CatalogEntry,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<InstallOutcome> {
     let resolved = resolve_catalog_entry(entry, None, options)?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, options, progress, None, CommitMode::CreateOnly).await
+}
+
+/// Whether an install may replace a plugin that is installed when its
+/// package is put in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitMode {
+    Replace,
+    /// Keep a plugin that appeared since the install started.
+    CreateOnly,
 }
 
 async fn install_resolved_plugin(
@@ -293,6 +314,7 @@ async fn install_resolved_plugin(
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
+    mode: CommitMode,
 ) -> Result<InstallOutcome> {
     let release_client = GitHubReleaseClient::new()?;
     progress.report(PluginProgressEvent::ResolvingGitHub {
@@ -363,24 +385,40 @@ async fn install_resolved_plugin(
     progress.report(PluginProgressEvent::Extracting {
         asset: asset.name.clone(),
     });
-    let extracted = extract_for_install(
+    let staged = stage_for_install(
         &archive_path,
         options.target.archive_ext(),
         &resolved.plugin_name,
         options,
-    )?;
-    let _ = fs::remove_file(&archive_path);
-
-    let metadata = build_installed_metadata(
-        &resolved,
-        &release.tag_name,
-        asset,
-        &options.target,
-        extracted,
-        current.as_ref(),
-        Some(verified_sha256),
     );
-    PluginStore::new(&options.store_root).save(&metadata)?;
+    let _ = fs::remove_file(&archive_path);
+    let staged = staged?;
+
+    let store = PluginStore::new(&options.store_root);
+    let committed = commit_staged(&store, staged, &resolved.plugin_name, mode, |extracted| {
+        build_installed_metadata(
+            &resolved,
+            &release.tag_name,
+            asset,
+            &options.target,
+            extracted,
+            current.as_ref(),
+            Some(verified_sha256),
+        )
+    })?;
+    let metadata = match committed {
+        Committed::Placed(metadata) => metadata,
+        Committed::Kept(present) => {
+            progress.report(PluginProgressEvent::AlreadyCurrent {
+                name: present.name.clone(),
+                version: present.installed_version.clone(),
+            });
+            return Ok(InstallOutcome {
+                metadata: present,
+                changed: false,
+            });
+        }
+    };
 
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
@@ -398,6 +436,34 @@ async fn install_resolved_plugin(
         metadata,
         changed: true,
     })
+}
+
+#[derive(Debug, PartialEq)]
+enum Committed {
+    /// The staged package is in place and recorded with this metadata.
+    Placed(InstalledPluginMetadata),
+    /// `CommitMode::CreateOnly` found this plugin installed and left it.
+    Kept(InstalledPluginMetadata),
+}
+
+/// Put `staged` in place and record it, under the store's write lock, so no
+/// other writer changes `name` between the check and the write.
+fn commit_staged(
+    store: &PluginStore,
+    staged: StagedPluginArchive,
+    name: &str,
+    mode: CommitMode,
+    metadata_for: impl FnOnce(ExtractedPluginArchive) -> InstalledPluginMetadata,
+) -> Result<Committed> {
+    let _lock = store.lock_writes()?;
+    if mode == CommitMode::CreateOnly
+        && let Some(present) = store.load_optional(name)?
+    {
+        return Ok(Committed::Kept(present));
+    }
+    let metadata = metadata_for(staged.commit()?);
+    store.save(&metadata)?;
+    Ok(Committed::Placed(metadata))
 }
 
 fn build_installed_metadata(
@@ -1014,6 +1080,59 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    /// A set member staged while the operator installed the same plugin:
+    /// the operator's package and metadata stay as they are.
+    #[test]
+    fn a_create_only_commit_keeps_a_plugin_installed_meanwhile() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let staged = stage_for_install(&archive_path, ArchiveExt::TarGz, "demo", &options).unwrap();
+
+        // The operator's install lands, disabled, while the member was staged.
+        install_plugin_archive("demo", "9.9.9", &archive_path, &options, &mut |_| {}).unwrap();
+        let store = PluginStore::new(&options.store_root);
+        let theirs = store.set_enabled("demo", false).unwrap();
+        std::fs::write(theirs.install_path.join("operator-marker"), b"").unwrap();
+
+        let committed = commit_staged(&store, staged, "demo", CommitMode::CreateOnly, |_| {
+            panic!("a create-only commit must not build metadata over an installed plugin")
+        })
+        .unwrap();
+        assert_eq!(committed, Committed::Kept(theirs.clone()));
+        assert_eq!(store.load("demo").unwrap(), theirs);
+        assert!(theirs.install_path.join("operator-marker").is_file());
+    }
+
+    #[test]
+    fn a_replace_commit_puts_the_staged_package_in_place() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let theirs =
+            install_plugin_archive("demo", "9.9.9", &archive_path, &options, &mut |_| {}).unwrap();
+        std::fs::write(theirs.metadata.install_path.join("old-marker"), b"").unwrap();
+        let staged = stage_for_install(&archive_path, ArchiveExt::TarGz, "demo", &options).unwrap();
+        let store = PluginStore::new(&options.store_root);
+
+        let committed = commit_staged(&store, staged, "demo", CommitMode::Replace, |extracted| {
+            InstalledPluginMetadata {
+                installed_version: "1.0.0".to_string(),
+                install_path: extracted.install_path,
+                ..theirs.metadata.clone()
+            }
+        })
+        .unwrap();
+        let Committed::Placed(placed) = committed else {
+            panic!("a replace commit places the package: {committed:?}");
+        };
+        assert_eq!(store.load("demo").unwrap(), placed);
+        assert_eq!(placed.installed_version, "1.0.0");
+        assert!(!placed.install_path.join("old-marker").exists());
     }
 
     #[test]

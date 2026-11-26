@@ -10,7 +10,10 @@ use crate::source_ref::is_valid_name;
 
 mod control_behavior;
 mod exchange_access;
+mod write_lock;
+
 pub use exchange_access::InstalledOpenAiExchangeAccess;
+pub use write_lock::StoreWriteLock;
 
 pub use control_behavior::{
     InstalledPluginConditionOperator, InstalledPluginConditionValue,
@@ -345,6 +348,13 @@ impl PluginStore {
         &self.root
     }
 
+    /// Wait until no other writer is changing this store, and keep it that
+    /// way until the guard drops. `save` does not take it itself, so an
+    /// install can check, place its package and save under one lock.
+    pub fn lock_writes(&self) -> Result<StoreWriteLock> {
+        StoreWriteLock::acquire(&self.root)
+    }
+
     pub fn save(&self, metadata: &InstalledPluginMetadata) -> Result<()> {
         validate_plugin_name(&metadata.name)?;
         let plugin_dir = self.plugin_dir(&metadata.name);
@@ -418,6 +428,7 @@ impl PluginStore {
     }
 
     pub fn set_enabled(&self, name: &str, enabled: bool) -> Result<InstalledPluginMetadata> {
+        let _lock = self.lock_writes()?;
         let mut metadata = self.load(name)?;
         metadata.enabled = enabled;
         self.save(&metadata)?;
@@ -426,6 +437,7 @@ impl PluginStore {
 
     pub fn delete(&self, name: &str) -> Result<()> {
         validate_plugin_name(name)?;
+        let _lock = self.lock_writes()?;
         let metadata = self.load(name).ok();
         if let Some(metadata) = metadata
             && metadata.install_path.exists()

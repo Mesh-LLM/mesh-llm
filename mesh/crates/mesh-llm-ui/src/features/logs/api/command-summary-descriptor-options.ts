@@ -9,6 +9,7 @@ export const SETUP_FLAGS = [
   '--service',
   '--no-service',
   '--skip-runtime',
+  '--skip-plugin-install',
   '--verbose'
 ] as const
 export const UNINSTALL_FLAGS = [
@@ -58,7 +59,13 @@ export const SETUP_CONFLICTS = [['--service', '--no-service']] as const
 export const UNINSTALL_CONFLICTS = [['--purge-config', '--keep-config']] as const
 export const AUTH_INIT_CONFLICTS = [['--no-passphrase', '--keychain']] as const
 export const UPDATE_CONFLICTS = [['--flavor', '--detect-flavor']] as const
-export const PLUGIN_INSTALL_CONFLICTS = [['reference', '--archive']] as const
+export const PLUGIN_INSTALL_CONFLICTS = [
+  ['reference', '--archive'],
+  ['reference', '--set'],
+  ['--set', '--archive'],
+  ['--set', '--name'],
+  ['--set', '--version']
+] as const
 export const SKILLS_INSTALL_CONFLICTS = [['--agent', '--all']] as const
 export const MODEL_SEARCH_CONFLICTS = [['--gguf', '--mlx']] as const
 export const TUNE_CONFLICTS = [

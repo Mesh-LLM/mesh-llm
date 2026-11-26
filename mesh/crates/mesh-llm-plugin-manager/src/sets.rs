@@ -97,21 +97,48 @@ impl SetOffer {
     }
 }
 
+impl SetOffer {
+    /// What two runs recorded, together: neither can take back what the
+    /// other recorded. A set completed by either stays complete, a member
+    /// either recorded stays recorded, and the first snapshot stays.
+    fn merged_with(self, other: SetOffer) -> SetOffer {
+        let mut members = self.members;
+        members.extend(other.members);
+        members.sort();
+        members.dedup();
+        SetOffer {
+            complete: self.complete || other.complete,
+            snapshot: if self.snapshot.is_empty() {
+                other.snapshot
+            } else {
+                self.snapshot
+            },
+            members,
+        }
+    }
+}
+
 pub fn read_set_offer(store_root: &std::path::Path, set_name: &str) -> Result<SetOffer> {
     Ok(read_offers(store_root)?
         .remove(set_name)
         .unwrap_or_default())
 }
 
+/// Record `offer` for `set_name`, merged with the record as it is now under
+/// the store's write lock: another setup run may have recorded more since
+/// this one read it, and what it recorded is kept.
 pub fn record_set_offer(
     store_root: &std::path::Path,
     set_name: &str,
     offer: SetOffer,
 ) -> Result<()> {
+    let _lock = PluginStore::new(store_root).lock_writes()?;
     let mut offers = read_offers(store_root)?;
-    offers.insert(set_name.to_string(), offer);
-    std::fs::create_dir_all(store_root)
-        .with_context(|| format!("create plugin store {}", store_root.display()))?;
+    let merged = match offers.remove(set_name) {
+        Some(latest) => latest.merged_with(offer),
+        None => offer,
+    };
+    offers.insert(set_name.to_string(), merged);
     let path = store_root.join(OFFERED_FILE);
     // Write beside the record and rename over it, so a crash never leaves a
     // torn file.
@@ -232,6 +259,11 @@ pub async fn install_set_with<P>(
             }
         }
         match install_member(&member.name, progress).await {
+            // Installed by someone else while this member downloaded: theirs
+            // is kept, as for a member that was already there.
+            Ok(outcome) if !outcome.changed => {
+                result.already_installed.push(member.name.clone());
+            }
             Ok(outcome) => result.installed.push(outcome),
             Err(error) => result
                 .failed
@@ -483,6 +515,61 @@ mod tests {
         assert_eq!(read_set_offer(&root, "other").unwrap(), SetOffer::default());
         // The record is a file in the store root, not a plugin.
         assert!(PluginStore::new(&root).list().unwrap().is_empty());
+    }
+
+    /// Two setup runs read the same record; the one that finished writes
+    /// first, the slower partial one second. The record keeps both.
+    #[test]
+    fn a_slower_partial_run_cannot_take_back_a_completed_offer() {
+        let temp = TempDir::new().unwrap();
+        let snapshot = vec!["alpha".to_string(), "beta".to_string()];
+        let completed = SetOffer {
+            complete: true,
+            snapshot: snapshot.clone(),
+            members: snapshot.clone(),
+        };
+        record_set_offer(temp.path(), "recommended", completed.clone()).unwrap();
+        record_set_offer(
+            temp.path(),
+            "recommended",
+            SetOffer {
+                complete: false,
+                snapshot: snapshot.clone(),
+                members: vec!["alpha".to_string()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_set_offer(temp.path(), "recommended").unwrap(),
+            completed
+        );
+    }
+
+    /// A member another run installed meanwhile is reported as already
+    /// installed, not as installed by this run.
+    #[tokio::test]
+    async fn a_member_installed_meanwhile_counts_as_already_installed() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+        let resolution = resolve_set(
+            &catalog(
+                &[("alpha", true)],
+                r#"{"name":"recommended","description":"d","plugins":["alpha"]}"#,
+            ),
+            "recommended",
+            TARGET,
+        )
+        .unwrap();
+        let result = install_set_with(&resolution, &store, &mut (), async |name, _| {
+            Ok(InstallOutcome {
+                metadata: installed(name),
+                changed: false,
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.already_installed, ["alpha"]);
+        assert!(result.installed.is_empty());
     }
 
     /// A failed member is not offered, so the next setup retries it, and the

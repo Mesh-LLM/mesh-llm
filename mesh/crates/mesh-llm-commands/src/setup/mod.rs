@@ -13,6 +13,7 @@ pub(crate) mod service_host;
 #[cfg(windows)]
 mod service_host_windows;
 pub(crate) mod service_paths;
+mod service_plugin_store;
 pub(crate) mod service_runner;
 // Only the Windows service host runs it; its tests run everywhere.
 #[cfg(any(windows, test))]
@@ -24,8 +25,8 @@ pub use actions::SetupActions;
 pub use command::{SetupCommandArgs, run_setup, run_setup_command};
 pub use environment::{SetupEnvironment, SetupOptions, SetupPlatform};
 pub use plan::{
-    SetupGitHubStarPlan, SetupGitHubStarSkipReason, SetupPlan, SetupPluginsPlan, SetupRuntimePlan,
-    SetupServicePlan, SetupStep,
+    SetupGitHubStarPlan, SetupGitHubStarSkipReason, SetupPlan, SetupPluginStore, SetupPluginsPlan,
+    SetupRuntimePlan, SetupServicePlan, SetupStep,
 };
 pub use planner::{SetupPlanError, plan_setup};
 pub use prompt::{SetupConfirmPrompt, SetupPromptDefault, SetupPromptKind, SetupPrompter};

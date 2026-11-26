@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::command::{CliSetupActions, SetupServiceOutcome};
 use super::github::SetupGitHubOutcome;
 use super::github_runner::{GhCommand, GhCommandError};
@@ -127,7 +128,10 @@ async fn a_failing_plugin_install_never_fails_setup() {
     .await
     .expect("an unreachable plugin catalog must not fail setup");
 
-    assert_eq!(plan.core_steps, vec![SetupStep::InstallPlugins]);
+    assert_eq!(
+        plan.core_steps,
+        vec![SetupStep::InstallPlugins(SetupPluginStore::Invoking)]
+    );
     assert!(matches!(
         actions.plugins_outcome,
         crate::plugin_sets::SetupPluginsOutcome::Unavailable(_)

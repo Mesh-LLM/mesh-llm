@@ -57,12 +57,22 @@ pub enum SetupGitHubStarSkipReason {
     HiddenPrompt,
 }
 
+/// Which plugin store setup installs the default set into.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SetupPluginStore {
+    /// The store the invoking environment names (`MESH_LLM_PLUGIN_DIR`).
+    Invoking,
+    /// The store the service this setup installs and starts reads: its
+    /// `service.env` decides, not the invoking shell.
+    Service,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SetupStep {
     InstallRuntime,
     PruneInactiveRuntimes,
     /// Non-fatal: the action reports a failure and setup carries on.
-    InstallPlugins,
+    InstallPlugins(SetupPluginStore),
     InstallService,
     PrintServiceGuidance,
 }
@@ -79,7 +89,12 @@ fn build_core_steps(
     }
     // Before the service so a node it starts already finds the plugins.
     if matches!(plugins, SetupPluginsPlan::InstallDefaultSet) {
-        steps.push(SetupStep::InstallPlugins);
+        let store = if matches!(service, SetupServicePlan::Install) {
+            SetupPluginStore::Service
+        } else {
+            SetupPluginStore::Invoking
+        };
+        steps.push(SetupStep::InstallPlugins(store));
     }
     match service {
         SetupServicePlan::Install => steps.push(SetupStep::InstallService),

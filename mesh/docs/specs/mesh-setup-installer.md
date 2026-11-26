@@ -94,7 +94,14 @@ store, `MESH_LLM_PLUGIN_DIR` or by default `~/.mesh-llm/plugins`, as `offered-se
 already present, or has no release for this platform; a member that failed, and
 a set that could not be read, are not recorded and are tried again by the next
 setup run), after the runtime and before the service, so a node the service
-starts finds the plugins. Later setup runs leave plugins as they are: a plugin
+starts finds the plugins. When setup also installs the service on Linux or macOS,
+the store is the one that service reads: `MESH_LLM_PLUGIN_DIR` from its
+`service.env`, otherwise the default store, not the invoking shell's. A set
+member someone else installs while setup downloads it is kept as they
+installed it: every plugin store write (install, enable, disable, delete and
+the offer record) takes the store's write lock, and a set member is placed
+only if it is still missing under that lock. Concurrent setup runs merge
+their offer records, so neither takes back what the other recorded. Later setup runs leave plugins as they are: a plugin
 the operator removed is not reinstalled and members added to the set later are
 not installed by setup. Two limits: a setup that times out records nothing, so
 a member the operator removes before the next run is installed again, and an

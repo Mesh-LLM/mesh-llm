@@ -1,12 +1,13 @@
 use super::prompt::confirm_yes_no;
 use super::service_paths::ServiceInstallContext;
+use super::service_plugin_store::service_plugin_store;
 use super::service_runner::{CliServiceCommandRunner, ServiceCommandRunner};
 use super::summary::{
     print_runtime_install_result, print_service_install_result, print_setup_summary,
 };
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupOptions,
-    SetupPlan, SetupPrompter, SetupStep,
+    SetupPlan, SetupPluginStore, SetupPrompter, SetupStep,
     github::{SetupGitHubOutcome, execute_github_star_plan},
     github_runner::{GhCommandRunner, ProcessGhCommandRunner},
     plan_setup,
@@ -206,10 +207,10 @@ impl<'a> CliSetupActions<'a> {
 
     /// Install the default plugin set. Never fails setup: what went wrong is
     /// printed with the command that retries it, and kept for the summary.
-    async fn install_plugins(&mut self) -> Result<()> {
+    async fn install_plugins(&mut self, store: SetupPluginStore) -> Result<()> {
         let options = match self.plugin_options.clone() {
             Some(options) => Ok(options),
-            None => PluginInstallOptions::from_env(),
+            None => self.plugin_install_options(store),
         };
         let outcome = match options {
             Ok(options) => {
@@ -223,6 +224,30 @@ impl<'a> CliSetupActions<'a> {
         print_plugins_warnings(&outcome);
         self.plugins_outcome = outcome;
         Ok(())
+    }
+
+    /// Install into the store the node will read: the invoking shell's, or,
+    /// when setup also installs and starts the service, the service's.
+    fn plugin_install_options(&self, store: SetupPluginStore) -> Result<PluginInstallOptions> {
+        let mut options = PluginInstallOptions::from_env()?;
+        if store == SetupPluginStore::Service {
+            let context = match self.service_context.clone() {
+                Some(context) => context,
+                None => ServiceInstallContext::detect(self.environment.platform, true)?,
+            };
+            if let Some(root) = service_plugin_store(&context)? {
+                options.install_root = root.join("installed");
+                options.store_root = root;
+            }
+        }
+        if self.verbose {
+            let _ = writeln!(
+                mesh_llm_events::console_err(),
+                "Plugin store: {}",
+                options.store_root.display()
+            );
+        }
+        Ok(options)
     }
 
     fn install_service(&mut self) -> Result<()> {
@@ -309,7 +334,7 @@ impl SetupActions for CliSetupActions<'_> {
             match step {
                 SetupStep::InstallRuntime => self.install_runtime().await,
                 SetupStep::PruneInactiveRuntimes => self.report_runtime_prune(),
-                SetupStep::InstallPlugins => self.install_plugins().await,
+                SetupStep::InstallPlugins(store) => self.install_plugins(store).await,
                 SetupStep::InstallService => self.install_service(),
                 SetupStep::PrintServiceGuidance => {
                     self.service_outcome = SetupServiceOutcome::PrintedGuidance;

@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
     SetupOptions, SetupPlatform, SetupPrompter, SetupRuntimePlan, SetupServicePlan, SetupStep,
@@ -46,7 +47,7 @@ fn interactive_unix_enter_accepts_default_yes_service_prompt() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Service),
             SetupStep::InstallService,
         ]
     );
@@ -70,7 +71,7 @@ fn interactive_unix_explicit_no_skips_service_prompt() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
         ]
     );
     assert_eq!(prompter.prompts.len(), 1);
@@ -100,7 +101,7 @@ fn non_interactive_unix_never_prompts_and_prints_service_guidance() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
             SetupStep::PrintServiceGuidance,
         ]
     );
@@ -194,7 +195,10 @@ fn skip_runtime_omits_install_and_prune_steps() {
     assert_eq!(plan.runtime, SetupRuntimePlan::Skip);
     assert_eq!(
         plan.core_steps,
-        vec![SetupStep::InstallPlugins, SetupStep::InstallService]
+        vec![
+            SetupStep::InstallPlugins(SetupPluginStore::Service),
+            SetupStep::InstallService
+        ]
     );
 }
 
@@ -245,7 +249,7 @@ fn yes_and_no_service_keeps_explicit_service_skip_without_prompt() {
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
         ]
     );
     assert!(prompter.prompts.is_empty());
@@ -286,7 +290,11 @@ fn the_default_plugin_set_installs_without_a_prompt_in_every_mode() {
         (SetupOptions { yes: true, ..base }, true),
     ] {
         let (steps, prompts) = plugin_steps(options, interactive);
-        assert_eq!(steps, vec![SetupStep::InstallPlugins], "{options:?}");
+        assert_eq!(
+            steps,
+            vec![SetupStep::InstallPlugins(SetupPluginStore::Invoking)],
+            "{options:?}"
+        );
         assert_eq!(prompts, 0, "{options:?}");
     }
 }
@@ -323,6 +331,9 @@ fn plugins_install_before_the_service_and_independently_of_the_runtime() {
     );
     assert_eq!(
         steps,
-        vec![SetupStep::InstallPlugins, SetupStep::InstallService]
+        vec![
+            SetupStep::InstallPlugins(SetupPluginStore::Service),
+            SetupStep::InstallService
+        ]
     );
 }

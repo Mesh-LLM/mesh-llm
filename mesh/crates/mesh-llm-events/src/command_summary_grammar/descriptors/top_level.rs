@@ -8,6 +8,7 @@ const SETUP_FLAGS: &[&str] = &[
     "--service",
     "--no-service",
     "--skip-runtime",
+    "--skip-plugin-install",
     "--verbose",
 ];
 const UNINSTALL_FLAGS: &[&str] = &[

@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::test_support::{FakePrompter, RecordingActions};
 use super::{SetupEnvironment, SetupOptions, SetupPlatform, SetupStep, run_setup};
 
@@ -23,7 +24,7 @@ async fn run_setup_no_interactive_uses_guidance_step_and_hidden_star_without_pro
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
-            SetupStep::InstallPlugins,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
             SetupStep::PrintServiceGuidance,
         ]
     );
