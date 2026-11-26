@@ -929,12 +929,18 @@ pub(crate) fn clear_last_native_error() {
 
 /// Attaches the native error lines logged on this thread since the last clear
 /// to `error`, so the cause travels with the error instead of staying in the log.
+/// A [`NativeError`](crate::NativeError) stays typed in the result, so callers
+/// that classify by status still find it.
 pub(crate) fn with_last_native_error(error: anyhow::Error) -> anyhow::Error {
     let lines = NATIVE_ERROR_LINES.with(|lines| std::mem::take(&mut *lines.borrow_mut()));
     if lines.is_empty() {
         return error;
     }
-    anyhow::anyhow!(lines.join("; ")).context(error.to_string())
+    let detail = anyhow::anyhow!(lines.join("; "));
+    match error.downcast::<crate::NativeError>() {
+        Ok(native) => detail.context(native),
+        Err(error) => detail.context(error.to_string()),
+    }
 }
 
 unsafe extern "C" fn write_native_log(
