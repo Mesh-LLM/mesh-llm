@@ -342,9 +342,14 @@ fn assert_one_typed_exchange(lifecycle: &[Value], channel: &[Value], context: &s
             "{context} request_id: {event}"
         );
     }
-    // Only a completed exchange names a served dispatch.
+    // A served dispatch is named once the exchange completed or a 2xx
+    // response reached the client (a stream the client then dropped).
     let finished = phase(lifecycle, "exchange_finished")[0];
-    let served = if finished["execution_outcome"] == "completed" {
+    let began_2xx = finished["status"]
+        .as_u64()
+        .is_some_and(|status| (200..300).contains(&status))
+        && finished["any_response_bytes_emitted"] == true;
+    let served = if finished["execution_outcome"] == "completed" || began_2xx {
         Value::from(id.as_str())
     } else {
         Value::Null
@@ -464,6 +469,10 @@ async fn cancelled_typed_chat_keeps_the_one_id_on_its_terminal_channel_event() {
         events.iter().any(|e| e["phase"] == "terminal")
     })
     .await;
-    assert_one_typed_exchange(&lifecycle, &channel, "cancelled");
+    let id = assert_one_typed_exchange(&lifecycle, &channel, "cancelled");
+    // The client dropped a stream it had started receiving: the dispatch
+    // served what it sent, so the terminal still names it.
+    let finished = phase(&lifecycle, "exchange_finished")[0];
+    assert_eq!(finished["served_exchange_id"], id.as_str(), "{finished}");
     server.abort();
 }

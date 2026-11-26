@@ -271,8 +271,9 @@ pub struct OpenAiExchangeEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// On `exchange_finished`: the `exchange_id` of the dispatch that served,
-    /// which differs from `exchange_id` after a model re-pick. Absent when the
-    /// exchange did not complete.
+    /// which differs from `exchange_id` after a model re-pick. The host sends
+    /// `null` when no dispatch served the exchange (it neither completed nor
+    /// began a 2xx response); this view reads that as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub served_exchange_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

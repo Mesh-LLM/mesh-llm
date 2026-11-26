@@ -918,15 +918,24 @@ impl ExchangeSession {
         // `exchange_id` stays the session's (response streams are keyed by it);
         // this names the dispatch that served, which `attempt_history` may
         // have dropped past its cap.
-        // An admitted dispatch served only if the exchange completed: routing
-        // can still exhaust its candidates after admission. Every selection,
-        // failed ones included, stays on `attempt_history`.
+        // An admitted dispatch served only if the exchange completed or a 2xx
+        // response had started reaching the client (a stream cut by the client
+        // or a timeout still served what it sent). Routing can exhaust its
+        // candidates after admission, and that error body serves nothing.
+        // Every selection, failed ones included, stays on `attempt_history`.
         let execution_outcome = exchange_terminal_outcome::resolve(&emission, outcome);
+        let partly_served = emission
+            .status
+            .is_some_and(|status| (200..300).contains(&status))
+            && emission
+                .commitment
+                .as_ref()
+                .is_some_and(|commitment| commitment.byte_count > 0);
         event["served_exchange_id"] = json!(
             emission
                 .served_exchange_id
                 .as_deref()
-                .filter(|_| execution_outcome == "completed")
+                .filter(|_| execution_outcome == "completed" || partly_served)
         );
         event["any_response_bytes_emitted"] = json!(
             emission
