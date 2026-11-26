@@ -63,6 +63,7 @@ mod serving_ports;
 mod serving_surface;
 pub mod shared_serving;
 mod shutdown_signal;
+mod shutdown_steps;
 mod split_participant_settle;
 mod split_planning;
 mod split_topology_lock;
