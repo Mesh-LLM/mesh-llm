@@ -1518,6 +1518,7 @@ fn legacy_proto_config_to_mesh(
         request_tiers: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        network: Default::default(),
         updates: Default::default(),
         defaults: None,
         runtime: Default::default(),

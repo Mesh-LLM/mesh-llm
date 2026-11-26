@@ -46,6 +46,7 @@ fn config_sync_noop_apply_skips_disk_write() {
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![crate::plugin::ModelConfigEntry {

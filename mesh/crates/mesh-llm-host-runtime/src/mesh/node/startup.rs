@@ -70,10 +70,21 @@ fn relay_mode_for_startup(relay: RelayConfig<'_>) -> Result<iroh::endpoint::Rela
     }
 }
 
+pub(super) fn iroh_dns_fallback_mode(
+    mode: mesh_llm_config::DnsFallbackMode,
+) -> iroh::dns::FallbackMode {
+    match mode {
+        mesh_llm_config::DnsFallbackMode::Never => iroh::dns::FallbackMode::Never,
+        mesh_llm_config::DnsFallbackMode::IfSystemEmpty => iroh::dns::FallbackMode::IfSystemEmpty,
+        mesh_llm_config::DnsFallbackMode::Deferred => iroh::dns::FallbackMode::Deferred,
+    }
+}
+
 pub(super) async fn bind_mesh_endpoint(
     secret_key: SecretKey,
     relay: RelayConfig<'_>,
     quic_bind: QuicBindSelection,
+    dns_fallback: Option<mesh_llm_config::DnsFallbackMode>,
 ) -> Result<Endpoint> {
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(secret_key)
@@ -83,6 +94,14 @@ pub(super) async fn bind_mesh_endpoint(
         ])
         .transport_config(startup_transport_config())
         .relay_mode(relay_mode_for_startup(relay)?);
+
+    if let Some(mode) = dns_fallback {
+        let resolver = iroh::dns::DnsResolver::builder()
+            .with_system_defaults()
+            .with_fallback_mode(iroh_dns_fallback_mode(mode))
+            .build();
+        builder = builder.dns_resolver(resolver);
+    }
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
         tracing::info!("Binding QUIC to {addr}");
@@ -359,5 +378,49 @@ impl Node {
             StartupResolution::Names(names) => names.iter().any(|name| name == model_name),
             StartupResolution::AnyName => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mesh_llm_config::DnsFallbackMode;
+
+    #[test]
+    fn dns_fallback_mode_maps_all_variants() {
+        assert_eq!(
+            iroh_dns_fallback_mode(DnsFallbackMode::Never),
+            iroh::dns::FallbackMode::Never
+        );
+        assert_eq!(
+            iroh_dns_fallback_mode(DnsFallbackMode::IfSystemEmpty),
+            iroh::dns::FallbackMode::IfSystemEmpty
+        );
+        assert_eq!(
+            iroh_dns_fallback_mode(DnsFallbackMode::Deferred),
+            iroh::dns::FallbackMode::Deferred
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_mesh_endpoint_accepts_explicit_dns_fallback_mode() {
+        let auths = std::collections::HashMap::new();
+        let secret_key = SecretKey::generate();
+        let endpoint = bind_mesh_endpoint(
+            secret_key,
+            RelayConfig {
+                urls: &[],
+                auths: &auths,
+                policy: crate::mesh::connections::RelayPolicy::Disabled,
+            },
+            QuicBindSelection {
+                ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port: None,
+            },
+            Some(DnsFallbackMode::Never),
+        )
+        .await
+        .expect("endpoint should bind with DnsFallbackMode::Never");
+        endpoint.close().await;
     }
 }

@@ -89,8 +89,10 @@ impl Node {
             Some(identity) => identity.key.clone(),
             None => startup_secret_key(&role).await?,
         };
+        let config_state_init = super::startup::load_config_state(config_path)?;
+        let dns_fallback = config_state_init.config().network.effective_dns_fallback();
         let (endpoint, public_addr) =
-            bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind).await?;
+            bind_discoverable_endpoint(secret_key.clone(), relay, quic_bind, dns_fallback).await?;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
@@ -98,17 +100,15 @@ impl Node {
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
         super::startup::end_if_stopping(&endpoint).await?;
-        let config_state_init = super::startup::load_config_state(config_path)?;
         let config = config_state_init.config();
         let reload = identity.is_none();
         let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());
+        let state_dir = identity.as_ref().map(|id| id.state_dir.as_path());
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),
             endpoint.id(),
             hardware.hostname.clone(),
-            identity
-                .as_ref()
-                .map(|identity| identity.state_dir.as_path()),
+            state_dir,
         )?;
         let owner_summary = verify_node_ownership(
             owner_runtime.owner_attestation.as_ref(),
@@ -133,6 +133,7 @@ impl Node {
             public_addr,
             quic_bind,
             relay_policy: relay.policy,
+            dns_fallback,
             owner_keypair,
             local_mesh_requirements,
             state: Arc::new(Mutex::new(MembershipState::default())),
@@ -232,10 +233,7 @@ impl Node {
                 |identity| crate::network::peer_blocks::PeerBlocks::load(&identity.state_dir),
             ),
             route_target_health: Arc::new(std::sync::OnceLock::new()),
-            config_revision_tx: {
-                let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
-                Arc::new(tx)
-            },
+            config_revision_tx: Arc::new(tokio::sync::watch::channel(config_revision_init).0),
             activity_policy_guard: policy.activity,
             public_mesh: policy.public_mesh,
             drain_timeout_secs: policy.drain_timeout_secs,
@@ -249,11 +247,7 @@ impl Node {
             native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
-            owner_attestation_path: saved_owner_attestation_path(
-                identity
-                    .as_ref()
-                    .map(|identity| identity.state_dir.as_path()),
-            ),
+            owner_attestation_path: saved_owner_attestation_path(state_dir),
             unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,
@@ -337,8 +331,9 @@ async fn bind_discoverable_endpoint(
     secret_key: SecretKey,
     relay: RelayConfig<'_>,
     quic_bind: QuicBindSelection,
+    dns_fallback: Option<mesh_llm_config::DnsFallbackMode>,
 ) -> Result<(Endpoint, Option<crate::mesh::stun::PublicAddr>)> {
-    let endpoint = bind_mesh_endpoint(secret_key, relay, quic_bind).await?;
+    let endpoint = bind_mesh_endpoint(secret_key, relay, quic_bind, dns_fallback).await?;
     if relay.policy.uses_relay() {
         // Ensure invite tokens can include the relay; sinkholed networks still
         // proceed with direct UDP after the bounded wait.

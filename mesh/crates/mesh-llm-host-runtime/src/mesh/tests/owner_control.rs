@@ -1148,3 +1148,33 @@ async fn a_legacy_snapshot_keeps_the_private_list_and_request_tiers() -> Result<
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_legacy_snapshot_keeps_network_dns_fallback() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[network]\ndns_fallback = \"never\"\n")?;
+    *node.config_state.lock().await = crate::runtime::config_state::ConfigState::load(&path)?;
+
+    let mut applied = crate::plugin::MeshConfig::default();
+    node.restore_unsent_settings(
+        &mut applied,
+        &crate::proto::node::NodeConfigSnapshot::default(),
+    )
+    .await;
+    assert_eq!(
+        applied.network.dns_fallback,
+        Some(mesh_llm_config::DnsFallbackMode::Never)
+    );
+
+    let mut modern_applied = crate::plugin::MeshConfig::default();
+    let modern_snapshot = crate::proto::node::NodeConfigSnapshot {
+        config_toml: Some(String::new()),
+        ..Default::default()
+    };
+    node.restore_unsent_settings(&mut modern_applied, &modern_snapshot)
+        .await;
+    assert_eq!(modern_applied.network.dns_fallback, None);
+    Ok(())
+}

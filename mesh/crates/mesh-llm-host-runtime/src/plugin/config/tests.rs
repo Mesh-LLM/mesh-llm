@@ -34,6 +34,7 @@ fn config_override_env_names_owner_totality_is_unchanged() {
             "MESH_LLM_LIFECYCLE_LOG_PARSER",
             "MESH_LLM_NO_UPDATE_CHECK",
             "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+            "MESH_LLM_DNS_FALLBACK",
             "MESH_LLM_BENCHMARK_TUNE_TRIAL",
             "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
         ]
@@ -207,6 +208,50 @@ fn load_config_through_production_wrapper_rejects_invalid_no_update_check_env_ov
     let err = load_config(Some(&config_path))
         .expect_err("an invalid MESH_LLM_NO_UPDATE_CHECK value must fail, never be defaulted");
     assert!(format!("{err:#}").contains("MESH_LLM_NO_UPDATE_CHECK"));
+}
+
+#[test]
+fn load_config_through_production_wrapper_applies_dns_fallback_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_dns_fallback_env_override"
+        ),
+        "MESH_LLM_DNS_FALLBACK",
+        "never",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "[network]\ndns_fallback = \"deferred\"\n").unwrap();
+
+    let config = load_config(Some(&config_path)).expect("load config with dns_fallback override");
+    assert_eq!(
+        config.network.effective_dns_fallback(),
+        Some(mesh_llm_config::DnsFallbackMode::Never)
+    );
+}
+
+#[test]
+fn load_config_through_production_wrapper_rejects_invalid_dns_fallback_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_rejects_invalid_dns_fallback_env_override"
+        ),
+        "MESH_LLM_DNS_FALLBACK",
+        "always",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").unwrap();
+
+    let err = load_config(Some(&config_path))
+        .expect_err("an invalid MESH_LLM_DNS_FALLBACK value must fail, never be defaulted");
+    assert!(format!("{err:#}").contains("MESH_LLM_DNS_FALLBACK"));
 }
 
 #[test]

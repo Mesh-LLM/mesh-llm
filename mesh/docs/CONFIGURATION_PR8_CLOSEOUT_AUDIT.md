@@ -41,7 +41,7 @@ schema row or stale manifest row from passing review:
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
 `telemetry.export_interval_secs`, `telemetry.queue_size`,
 `telemetry.prompt_shape_metrics`, `telemetry.metrics.endpoint`,
-`analytics.enabled`, `updates.check`,
+`analytics.enabled`, `updates.check`, `network.dns_fallback`,
 `logging.audit.enabled`, `logging.audit.log_path`, `logging.audit.log_format`,
 `logging.audit.log_level`, `logging.audit.max_file_size_mb`,
 `logging.audit.max_files`, `logging.enabled`, `logging.application_state_root`,

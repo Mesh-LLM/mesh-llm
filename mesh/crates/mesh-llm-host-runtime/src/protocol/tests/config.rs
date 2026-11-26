@@ -301,6 +301,7 @@ fn mesh_requirements_survive_owner_control_config_round_trip() {
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![],
@@ -433,6 +434,7 @@ fn config_sync_config_hash_determinism() {
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
@@ -473,6 +475,7 @@ fn config_sync_config_hash_determinism() {
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
@@ -547,6 +550,7 @@ fn pinned_gpu_proto_roundtrip() {
         telemetry: Default::default(),
         analytics: Default::default(),
         updates: Default::default(),
+        network: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {

@@ -320,6 +320,7 @@ impl Node {
             public_addr,
             quic_bind,
             relay_policy: config.relay.policy,
+            dns_fallback: self.dns_fallback,
             owner_keypair: Some(owner_keypair),
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
             local_endpoints: self.local_endpoints.clone(),
@@ -506,13 +507,19 @@ impl Node {
         &self,
         config: &MembershipNodeConfig<'_>,
     ) -> Result<(Endpoint, QuicBindSelection)> {
+        let dns_fallback = self.dns_fallback;
         let bind = |port| QuicBindSelection {
             ip: self.quic_bind.ip,
             port,
         };
         if let Some(port) = config.quic_port {
-            match bind_mesh_endpoint(config.secret_key.clone(), config.relay, bind(Some(port)))
-                .await
+            match bind_mesh_endpoint(
+                config.secret_key.clone(),
+                config.relay,
+                bind(Some(port)),
+                dns_fallback,
+            )
+            .await
             {
                 Ok(endpoint) => return Ok((endpoint, bind(Some(port)))),
                 Err(error) => tracing::info!(
@@ -521,8 +528,13 @@ impl Node {
                 ),
             }
         }
-        let endpoint =
-            bind_mesh_endpoint(config.secret_key.clone(), config.relay, bind(None)).await?;
+        let endpoint = bind_mesh_endpoint(
+            config.secret_key.clone(),
+            config.relay,
+            bind(None),
+            dns_fallback,
+        )
+        .await?;
         Ok((endpoint, bind(None)))
     }
 }

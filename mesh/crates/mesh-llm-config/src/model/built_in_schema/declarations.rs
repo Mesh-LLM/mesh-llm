@@ -52,6 +52,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         analytics_setting("analytics.enabled", ConfigValueSchema::Boolean),
         updates_setting("updates.check", ConfigValueSchema::Boolean),
+        network_setting(
+            "network.dns_fallback",
+            string_enum(["never", "if-system-empty", "deferred"]),
+        ),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
         logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),
@@ -218,14 +222,38 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         ConfigValueSchema::String,
     )];
     settings.extend([
-        basic_setting(&format!("{model_prefix}.provider"), ConfigValueSchema::String),
-        basic_setting(&format!("{model_prefix}.variant"), ConfigValueSchema::String),
-        basic_setting(&format!("{model_prefix}.options"), ConfigValueSchema::object()),
-        basic_setting(&format!("{model_prefix}.request_defaults"), ConfigValueSchema::object()),
-        top_level_setting(&format!("{model_prefix}.lifecycle.load"), string_enum(["startup", "on_demand"])),
-        top_level_setting(&format!("{model_prefix}.lifecycle.idle_timeout_secs"), ConfigValueSchema::Integer),
-        top_level_setting(&format!("{model_prefix}.lifecycle.prefetch"), ConfigValueSchema::Boolean),
-        basic_setting(&format!("{model_prefix}.source"), ConfigValueSchema::object()),
+        basic_setting(
+            &format!("{model_prefix}.provider"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{model_prefix}.variant"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{model_prefix}.options"),
+            ConfigValueSchema::object(),
+        ),
+        basic_setting(
+            &format!("{model_prefix}.request_defaults"),
+            ConfigValueSchema::object(),
+        ),
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.load"),
+            string_enum(["startup", "on_demand"]),
+        ),
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.idle_timeout_secs"),
+            ConfigValueSchema::Integer,
+        ),
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.prefetch"),
+            ConfigValueSchema::Boolean,
+        ),
+        basic_setting(
+            &format!("{model_prefix}.source"),
+            ConfigValueSchema::object(),
+        ),
     ]);
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),
@@ -385,15 +413,37 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
     ];
     let mut binding = plugin_setting(
         &format!("{plugin_prefix}.operation_bindings"),
-        ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::Object {
-            properties: ["name", "provider", "profile", "setup_operation", "setup_input_json", "operations"]
-                .into_iter().map(|name| ConfigObjectPropertySchema {
-                    name: name.into(), label: name.into(), required: true,
-                    value_schema: if name == "operations" { ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::String) } } else { ConfigValueSchema::String },
-                }).collect(),
-        }) },
+        ConfigValueSchema::Array {
+            items: Box::new(ConfigValueSchema::Object {
+                properties: [
+                    "name",
+                    "provider",
+                    "profile",
+                    "setup_operation",
+                    "setup_input_json",
+                    "operations",
+                ]
+                .into_iter()
+                .map(|name| ConfigObjectPropertySchema {
+                    name: name.into(),
+                    label: name.into(),
+                    required: true,
+                    value_schema: if name == "operations" {
+                        ConfigValueSchema::Array {
+                            items: Box::new(ConfigValueSchema::String),
+                        }
+                    } else {
+                        ConfigValueSchema::String
+                    },
+                })
+                .collect(),
+            }),
+        },
     );
-    binding.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::OwnerControl];
+    binding.control_surfaces = vec![
+        ConfigControlSurface::ConfigFile,
+        ConfigControlSurface::OwnerControl,
+    ];
     binding.description = Some("Operator-approved exclusive local provider/profile, fixed setup payload and operation allowlist. Changes revoke existing handles; restart applies new bindings.".into());
     settings.push(binding);
     settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
@@ -782,15 +832,15 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(
             &format!("{prefix}.activation_codec"),
             string_enum([
-            "lossless",
-            "f16",
-            "bf16",
-            "s8-row",
-            "fp8-e4m3-row",
-            "fp8-e4m3-block32",
-            "fp8-e5m2-row",
-            "f32",
-        ]),
+                "lossless",
+                "f16",
+                "bf16",
+                "s8-row",
+                "fp8-e4m3-row",
+                "fp8-e4m3-block32",
+                "fp8-e5m2-row",
+                "f32",
+            ]),
         ),
     ]
 }

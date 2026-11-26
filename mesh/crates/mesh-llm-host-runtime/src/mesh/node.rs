@@ -86,6 +86,9 @@ pub struct Node {
     pub(crate) public_addr: Option<stun::PublicAddr>,
     pub(crate) quic_bind: QuicBindSelection,
     pub(crate) relay_policy: RelayPolicy,
+    /// Effective DNS fallback policy captured at startup and shared with
+    /// membership endpoints so config changes take effect on restart.
+    pub(crate) dns_fallback: Option<mesh_llm_config::DnsFallbackMode>,
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MembershipState>>,
@@ -743,6 +746,7 @@ impl Node {
             public_addr: None,
             quic_bind: QuicBindSelection::default(),
             relay_policy: RelayPolicy::Disabled,
+            dns_fallback: None,
             owner_keypair: None,
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
             state: Arc::new(Mutex::new(MembershipState::default())),

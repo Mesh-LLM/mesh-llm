@@ -402,6 +402,7 @@ async fn make_configured_test_node(
         public_addr: None,
         quic_bind: QuicBindSelection::default(),
         relay_policy: RelayPolicy::DefaultPublic,
+        dns_fallback: None,
         owner_keypair: None,
         local_mesh_requirements,
         state: Arc::new(Mutex::new(MembershipState::default())),
