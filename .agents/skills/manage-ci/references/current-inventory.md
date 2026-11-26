@@ -1612,6 +1612,10 @@ Each selector also writes one `decision_record` output and step-summary line
 with the event, ref, gates, override, provider, cache authority, selected
 runner and its own `RUNNER_ENVIRONMENT`.
 
+A `supported` row moves to Depot on main only through its own per-role
+proposal, thresholds and rollback in `ci/DEPOT_MIGRATION.md` ("Per-role
+rollout").
+
 ### Cache authority by trust context
 
 Selector outputs by context (`select-ci-runners`). Roles pick the main gate:

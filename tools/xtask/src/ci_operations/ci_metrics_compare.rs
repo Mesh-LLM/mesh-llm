@@ -132,11 +132,15 @@ struct Evidence {
     common_names: bool,
     comparable_dimensions: bool,
     candidate_queue: Option<f64>,
+    candidate_terminal_queue: Option<f64>,
 }
 
 fn recommendation(evidence: &Evidence) -> (&'static str, &'static str) {
     let queue = evidence.candidate_queue;
-    if queue.is_some_and(|seconds| seconds >= QUEUE_CONTAMINATION_SECONDS) {
+    let contaminated = |seconds: Option<f64>| {
+        seconds.is_some_and(|seconds| seconds >= QUEUE_CONTAMINATION_SECONDS)
+    };
+    if contaminated(queue) || contaminated(evidence.candidate_terminal_queue) {
         return (
             "rollback",
             "candidate queue p95 crossed the deterministic contamination threshold",
@@ -196,6 +200,13 @@ pub(crate) fn compare_reports(baseline: &Value, candidate: &Value) -> Value {
         common_names: !common_names.is_empty(),
         comparable_dimensions,
         candidate_queue: number(field(next_queue, "p95")),
+        candidate_terminal_queue: number(field(
+            field(
+                field(candidate, "workflow"),
+                "terminal_job_runner_queue_seconds",
+            ),
+            "p95",
+        )),
     });
     let execution = |cohort: &Value| field(field(cohort, "execution_seconds"), "p95").clone();
     object([
@@ -241,4 +252,26 @@ pub(crate) fn compare_reports(baseline: &Value, candidate: &Value) -> Value {
         ("recommendation", Value::text(state)),
         ("interpretation", Value::text(interpretation)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Evidence, recommendation};
+
+    fn evidence(queue: f64, terminal: f64) -> Evidence {
+        Evidence {
+            provider_separated: true,
+            sufficient: true,
+            common_names: true,
+            comparable_dimensions: true,
+            candidate_queue: Some(queue),
+            candidate_terminal_queue: Some(terminal),
+        }
+    }
+
+    #[test]
+    fn terminal_job_queue_contamination_rolls_back_an_otherwise_eligible_candidate() {
+        assert_eq!(recommendation(&evidence(30.0, 10.0)).0, "eligible");
+        assert_eq!(recommendation(&evidence(30.0, 300.0)).0, "rollback");
+    }
 }
