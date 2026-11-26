@@ -384,6 +384,46 @@ async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthR
     probe_openai_compatible_http_endpoint_for_protocol(address, None).await
 }
 
+fn is_loopback_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Some(url::Host::Domain(host)) => {
+            host.trim_end_matches('.').eq_ignore_ascii_case("localhost")
+        }
+        None => false,
+    }
+}
+
+/// Build an HTTP client for plugin endpoint health probes.
+///
+/// Loopback `http://` probes reuse `local_http_client_builder()` (no TLS roots,
+/// no proxy, no redirects). Non-loopback `http://` probes try the default
+/// builder first so system roots stay available for HTTPS proxies and redirects,
+/// falling back to `tls_certs_only([])` when the host has no CA bundle.
+fn build_health_probe_client(
+    url: &Url,
+    timeout: std::time::Duration,
+) -> Result<reqwest::Client, reqwest::Error> {
+    if url.scheme() == "http" {
+        if is_loopback_host(url) {
+            return mesh_llm_system::local_http::local_http_client_builder()
+                .timeout(timeout)
+                .build();
+        }
+        if let Ok(client) = reqwest::Client::builder().timeout(timeout).build() {
+            return Ok(client);
+        }
+        return reqwest::Client::builder()
+            .tls_certs_only([])
+            .timeout(timeout)
+            .build();
+    }
+    reqwest::Client::builder().timeout(timeout).build()
+}
+
 async fn probe_openai_compatible_http_endpoint_for_protocol(
     address: &str,
     protocol: Option<&str>,
@@ -400,10 +440,7 @@ async fn probe_openai_compatible_http_endpoint_for_protocol(
         }
     };
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-    {
+    let client = match build_health_probe_client(&models_url, std::time::Duration::from_secs(3)) {
         Ok(client) => client,
         Err(err) => {
             return EndpointHealthRecord {
@@ -939,3 +976,7 @@ mod managed_task_tests {
         assert!(!model_matches_protocol(&depth, Some("openai_compatible")));
     }
 }
+
+#[cfg(test)]
+#[path = "health_probe_tests.rs"]
+mod probe_client_tests;
