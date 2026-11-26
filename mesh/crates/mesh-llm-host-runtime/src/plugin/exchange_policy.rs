@@ -63,7 +63,13 @@ impl NodeExchangePolicy {
         event.as_object_mut().unwrap().remove("request_wire_digest");
         let result =
             match skippy_inference_api::http_exchange::current_http_exchange_observation_id() {
-                Some(id) => manager.selected_exchange_phase(&id, event).await,
+                // The typed backend's id is `backend_exchange_id`; inside a
+                // session the event's `exchange_id` is the session's, which
+                // the session fills in once the typed one is dropped.
+                Some(id) => {
+                    event.as_object_mut().unwrap().remove("exchange_id");
+                    manager.selected_exchange_phase(&id, event).await
+                }
                 None => manager.exchange_phase(event).await,
             };
         match result.error_status() {
@@ -220,8 +226,14 @@ impl HttpExchangePolicy for NodeExchangePolicy {
                     .flatten()
             })
             .collect();
+        // The exchange id is node-made, like the other paths'; the client's
+        // request id stays its own field. The typed dispatch inside this
+        // exchange takes the same id (`HttpExchangeAdmission::exchange_id`), so
+        // its `X-Exchange-Id` header, the request log and the channel events
+        // all name it alike.
+        let exchange_id = crate::network::openai::request_parse::new_node_exchange_id();
         let mut event = super::request_event(
-            request_id.as_uuid().to_string(),
+            exchange_id.clone(),
             endpoint,
             method,
             path,
@@ -229,6 +241,7 @@ impl HttpExchangePolicy for NodeExchangePolicy {
             sanitized,
             false,
         );
+        event["request_id"] = json!(request_id.as_uuid().to_string());
         event["node_endpoint_id"] = json!(self.node.id().to_string());
         event["emission_boundary"] = json!("http_body_poll");
         event["dispatch_path"] = json!("typed_frontend");
@@ -253,6 +266,7 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         });
         HttpExchangeAdmission {
             observation_id: Some(session.observation_id().to_owned()),
+            exchange_id: Some(exchange_id),
             observer: Some(TypedEmission::new(session)),
             denial,
             response_headers: result.headers,

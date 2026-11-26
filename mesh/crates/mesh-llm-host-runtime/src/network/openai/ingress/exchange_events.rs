@@ -255,6 +255,9 @@ pub(in crate::network::openai) struct RawProxyTerminalFacts<'a> {
     /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.
     /// Host-served only.
     pub(in crate::network::openai) client_nonce: Option<(&'a str, ClientNonceSource)>,
+    /// [`proxy::BufferedHttpRequest::selected_attempt`], reported only when the
+    /// exchange was served.
+    pub(in crate::network::openai) selected_attempt: Option<u32>,
 }
 
 /// Publish the raw-proxy path's terminal event for a served exchange, enriched
@@ -295,6 +298,7 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         request_digest,
         requested_by_node_id,
         client_nonce,
+        selected_attempt,
     } = facts;
     let mut envelope = OpenAiExchangeEnvelope::terminal(
         exchange_id.to_string(),
@@ -304,7 +308,8 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         None,
         client_nonce.map(|(_, source)| source),
     )
-    .with_failure_class(exchange_failure_class(final_outcome));
+    .with_failure_class(exchange_failure_class(final_outcome))
+    .with_served_attempt(selected_attempt.filter(|_| outcome_was_served(final_outcome)));
     // A failed exchange has no serving provenance to name the asker in, so
     // it is stated here, only for the exchanges that failed: the same value
     // a served one already gives plugins inside its provenance.
@@ -374,19 +379,21 @@ pub(super) fn exchange_output_digests_from_outcome(
 /// and dispatch is about to happen. There is no typed `GenerationRequest`
 /// on this path (see the #1331 design note), so the envelope carries only
 /// the model — the same narrow route fact path 1's `ChatExchangeRoute`
-/// carries. Mints the exchange id here, at admission, so it can pair this
-/// effective event with its terminal event even when concurrent raw-proxy
-/// requests share the same model. Returns `None` — no id minted, no publish
+/// carries. Derives the exchange id here, at admission (see
+/// [`proxy::BufferedHttpRequest::exchange_id`]), so it can pair this effective event with its
+/// terminal event even when concurrent raw-proxy requests share the same
+/// model. Returns `None` — no id derived, no publish
 /// — when nobody declares `openai.exchange.v1`: nothing downstream would
 /// ever see it.
-pub(super) async fn mint_and_publish_effective_raw_proxy(
+pub(super) async fn derive_and_publish_effective_raw_proxy(
     plugin_manager: &crate::plugin::PluginManager,
+    request: &proxy::BufferedHttpRequest,
     model_name: &str,
 ) -> Option<String> {
     if !plugin_manager.has_subscriber().await {
         return None;
     }
-    let exchange_id = uuid::Uuid::new_v4().to_string();
+    let exchange_id = request.exchange_id();
     plugin_manager
         .publish(&OpenAiExchangeEnvelope::effective(
             exchange_id.clone(),
@@ -446,6 +453,9 @@ pub(super) struct RemoteDeliveredFacts<'a> {
     pub(super) request_digest: Option<String>,
     /// The client's `x-mesh-twin-bracket` value, copied unread.
     pub(super) twin_bracket_id: Option<String>,
+    /// [`proxy::BufferedHttpRequest::selected_attempt`], reported only when the
+    /// exchange was served.
+    pub(super) selected_attempt: Option<u32>,
 }
 
 /// The terminal envelope for an exchange a peer delivered: `RemoteMesh`,
@@ -467,6 +477,11 @@ pub(super) fn remote_delivered_terminal(
         facts.peer_capsule_id,
     )
     .with_twin_bracket_id(facts.twin_bracket_id)
+    .with_served_attempt(
+        facts
+            .selected_attempt
+            .filter(|_| outcome_was_served(outcome)),
+    )
     .with_failure_class(exchange_failure_class(outcome));
     if let Some(provenance) = serving_provenance_for_remote_mesh(
         facts.target,
@@ -515,6 +530,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
         request_digest,
         // Validated in `route_request`; copied unread.
         twin_bracket_id: twin_bracket_id(request).ok().flatten(),
+        selected_attempt: request.selected_attempt(),
     }
 }
 

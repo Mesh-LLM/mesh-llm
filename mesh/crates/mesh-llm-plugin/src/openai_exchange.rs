@@ -266,6 +266,16 @@ pub type OpenAiExchangeHandler = std::sync::Arc<
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OpenAiExchangeEvent {
     pub exchange_id: String,
+    /// The client-facing request id, kept separate from the node-internal
+    /// `exchange_id`. Absent from hosts that do not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// On `exchange_finished`: the `exchange_id` of the dispatch that served,
+    /// which differs from `exchange_id` after a model re-pick. The host sends
+    /// `null` when no dispatch served the exchange (it neither completed nor
+    /// began a 2xx response); this view reads that as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served_exchange_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_id: Option<String>,
     pub phase: String,
@@ -320,7 +330,7 @@ mod event_tests {
     #[test]
     fn parses_host_phases_and_terminal_evidence_without_losing_false() {
         for phase in ["request_received", "backend_selected", "exchange_finished"] {
-            let mut payload = json!({"exchange_id":"exchange", "observation_id":"local-observation",
+            let mut payload = json!({"exchange_id":"exchange", "request_id":"request", "observation_id":"local-observation",
                 "phase":phase, "endpoint":"chat_completions", "observation_point":"gateway_ingress",
                 "method":"POST", "path":"/v1/chat/completions", "headers":{},
                 "request_wire_digest":{"sha256":"original","byte_count":10}});
@@ -337,6 +347,8 @@ mod event_tests {
             }
             let event = OpenAiExchangeEvent::parse(&payload).unwrap();
             assert_eq!(event.observation_id.as_deref(), Some("local-observation"));
+            assert_eq!(event.request_id.as_deref(), Some("request"));
+            assert!(event.served_exchange_id.is_none());
             assert_eq!(
                 event.evidence_complete,
                 (phase == "exchange_finished").then_some(false)

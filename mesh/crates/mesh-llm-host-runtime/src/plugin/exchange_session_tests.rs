@@ -409,6 +409,370 @@ async fn later_admitted_selected_route_clears_an_earlier_candidates_denial() {
     assert!(state.attempt_history[1].get("admission_denied").is_none());
 }
 
+/// `served_exchange_id` names a dispatch that was admitted: a later denied
+/// attempt must not take it over.
+#[tokio::test]
+async fn denied_attempt_does_not_become_the_served_dispatch() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(1, false).await;
+    let (session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    // The plugin denies attempt 1 only: attempt 2 is admitted, then attempt 1's
+    // id is reused for a denied one.
+    for (attempt, id) in [(2, "admitted"), (1, "denied")] {
+        let mut selected = request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, true)
+            .await;
+    }
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().served_exchange_id.as_deref(),
+        Some("admitted")
+    );
+}
+
+/// A dispatch names its own exchange: the session must hand a plugin the id
+/// the `backend_selected` event carries (a model re-pick has its own), and
+/// only fill in the session's id for an event that has none.
+#[tokio::test]
+async fn selected_event_keeps_its_own_exchange_id_and_empty_takes_the_sessions() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (session, admission) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "session-id".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(admission.error_status().is_none());
+    for (carried, expected) in [(Some("repick-id"), "repick-id"), (None, "session-id")] {
+        let mut selected = request_event(
+            "ignored".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(1);
+        selected["target"] = json!("peer");
+        match carried {
+            Some(id) => selected["exchange_id"] = json!(id),
+            None => {
+                selected.as_object_mut().unwrap().remove("exchange_id");
+            }
+        }
+        manager
+            .selected_exchange_phase(session.observation_id(), selected)
+            .await;
+        let state = manager
+            .inner
+            .exchange_observations
+            .0
+            .lock()
+            .unwrap()
+            .get(session.observation_id())
+            .and_then(Weak::upgrade)
+            .unwrap();
+        let state = state.lock().unwrap();
+        assert_eq!(state.selected.as_ref().unwrap()["exchange_id"], expected);
+    }
+}
+
+/// After a re-pick the terminal keeps the session's id, which the response side
+/// streams were opened under, and `attempt_history` records each attempt's.
+#[tokio::test]
+async fn terminal_keeps_the_sessions_exchange_id_after_a_repick() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (mut session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    for (attempt, id) in [(1, "dispatch-0"), (2, "dispatch-1")] {
+        let mut selected = request_event(
+            id.into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+            .await;
+    }
+    session.observer().finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["exchange_id"], "dispatch-0");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-0");
+    assert_eq!(terminal["attempt_history"][1]["exchange_id"], "dispatch-1");
+    assert_eq!(terminal["served_exchange_id"], "dispatch-1");
+}
+
+/// A required hook that fails at `backend_selected` (a 503 before dispatch,
+/// not a deny) leaves no served dispatch either.
+#[tokio::test]
+async fn failed_required_hook_does_not_become_the_served_dispatch() {
+    let (manager, _, _) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, true).await;
+    let (session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    let mut selected = request_event(
+        "dispatch-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    selected["target"] = json!("peer-1");
+    let result = manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    assert!(!result.denied);
+    assert!(result.error_status().is_some(), "the required hook failed");
+    let state = manager
+        .inner
+        .exchange_observations
+        .0
+        .lock()
+        .unwrap()
+        .get(session.observation_id())
+        .and_then(Weak::upgrade)
+        .unwrap();
+    assert!(state.lock().unwrap().served_exchange_id.is_none());
+}
+
+/// An admitted dispatch that did not complete (routing exhausted its
+/// candidates after admission) is not the served one: the terminal names no
+/// served dispatch, and the selection stays on `attempt_history`.
+#[tokio::test]
+async fn terminal_names_no_served_dispatch_when_the_exchange_failed() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let (mut session, _) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "dispatch-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    let mut selected = request_event(
+        "dispatch-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    selected["target"] = json!("peer-1");
+    manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    session.observer().finish(commit_wire_bytes(b"error"));
+    session.finish("backend_error").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["execution_outcome"], "backend_error");
+    assert!(terminal["served_exchange_id"].is_null(), "{terminal}");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "dispatch-1");
+}
+
+/// A late winning dispatch past the `attempt_history` cap still names itself on
+/// the terminal, and every `backend_selected` reports the session's request id
+/// rather than the dispatch's.
+#[tokio::test]
+async fn terminal_names_the_served_dispatch_past_the_attempt_history_cap() {
+    let (manager, _, terminals) =
+        crate::plugin::selected_attempt_test_support::attempt_policy_manager(0, false).await;
+    let mut received = request_event(
+        "dispatch-0".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    received["request_id"] = json!("client-request");
+    let (mut session, _) = ExchangeSession::begin(&manager, received).await;
+    for attempt in 1..=20 {
+        let mut selected = request_event(
+            format!("dispatch-{attempt}"),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        selected["attempt"] = json!(attempt);
+        selected["target"] = json!(format!("peer-{attempt}"));
+        manager
+            .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+            .await;
+    }
+    session.observer().finish(commit_wire_bytes(b"response"));
+    session.finish("completed").await;
+    let terminal = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = terminals.lock().unwrap().first().cloned() {
+                break event;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(terminal["attempt_history"].as_array().unwrap().len(), 16);
+    assert_eq!(terminal["served_exchange_id"], "dispatch-20");
+    assert_eq!(terminal["request_id"], "client-request");
+}
+
+/// With a response-body observer, a re-pick must leave the terminal under the
+/// id the response stream was opened with, or the observer cannot find its
+/// receipt for the terminal.
+#[tokio::test]
+async fn repick_with_response_body_keeps_terminal_and_response_stream_aligned() {
+    let (manager, mut receiver) = observer_manager(false).await;
+    let (mut session, result) = ExchangeSession::begin(
+        &manager,
+        request_event(
+            "repick-0".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        ),
+    )
+    .await;
+    assert!(result.error_status().is_none());
+    let mut selected = request_event(
+        "repick-1".into(),
+        "chat_completions",
+        "POST",
+        "/v1/chat/completions",
+        b"{}",
+        Default::default(),
+        false,
+    );
+    selected["phase"] = json!("backend_selected");
+    selected["attempt"] = json!(1);
+    manager
+        .selected_exchange_phase_for_candidate(session.observation_id(), selected, false)
+        .await;
+    let observer = session.observer();
+    assert!(observer.try_chunk(0, b"response"));
+    observer.finish(commit_wire_bytes(b"response"));
+    let terminal = session.final_terminal_event("completed").await;
+    assert_eq!(terminal["exchange_id"], "repick-0");
+    assert_eq!(terminal["attempt_history"][0]["exchange_id"], "repick-1");
+    assert_eq!(
+        terminal["observer_response_delivery"]["delayed-observer"],
+        true
+    );
+    assert_eq!(receiver.recv().await.unwrap(), b"response");
+    manager.shutdown().await;
+}
+
 #[test]
 fn only_a_deny_without_a_required_failure_is_a_candidate_deny() {
     let deny = |required_failure, deny_status| PhaseResult {

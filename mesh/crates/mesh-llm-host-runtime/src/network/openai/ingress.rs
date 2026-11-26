@@ -36,8 +36,8 @@ mod request_tier_tests;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
-    RemoteDeliveredFacts, client_nonce_source, local_route_delivered_by_peer,
-    mint_and_publish_effective_raw_proxy, publish_local_route_terminal, remote_delivered_terminal,
+    RemoteDeliveredFacts, client_nonce_source, derive_and_publish_effective_raw_proxy,
+    local_route_delivered_by_peer, publish_local_route_terminal, remote_delivered_terminal,
     request_client_nonce,
 };
 #[cfg(test)]
@@ -851,7 +851,7 @@ async fn try_route_plugin_model(
     {
         Ok(Some(endpoint)) => {
             let exchange_id =
-                mint_and_publish_effective_raw_proxy(plugin_manager, model_name).await;
+                derive_and_publish_effective_raw_proxy(plugin_manager, request, model_name).await;
             let outcome = route_to_plugin_endpoint(
                 ctx,
                 plugin_manager,
@@ -887,6 +887,7 @@ async fn try_route_plugin_model(
                     request_digest: request_digest.as_deref(),
                     requested_by_node_id: ctx.requested_by_node_id.as_deref(), // named on a failed exchange only; no provenance block on this path
                     client_nonce: None,
+                    selected_attempt: request.selected_attempt(),
                 },
             )
             .await;
@@ -1066,7 +1067,7 @@ async fn route_prepared_request(
         // together. Tokenize requests are not chat exchanges, so they are not
         // announced. `plugin_manager` is `None` when no plugin is loaded, and
         // even with one loaded nothing may declare `openai.exchange.v1` — in
-        // either case there is no subscriber, so skip minting an exchange id
+        // either case there is no subscriber, so skip deriving an exchange id
         // and, below, the body digest and served-model provenance lookup
         // that only exist to build an event nobody would receive.
         let channel = ctx.exchange_events_channel();
@@ -1077,7 +1078,7 @@ async fn route_prepared_request(
         let announce = (!request.is_tokenize_request() && has_subscriber)
             .then_some(channel)
             .flatten()
-            .map(|channel| (channel, uuid::Uuid::new_v4().to_string()));
+            .map(|channel| (channel, request.exchange_id()));
         // Digest the REAL request body up front, while the parsed body is still
         // in hand and before `route_model_request` streams it to the backend —
         // this is the one binding a downstream capsule needs to tie its
@@ -1158,6 +1159,7 @@ async fn route_prepared_request(
                     client_nonce: client_nonce
                         .as_ref()
                         .map(|(nonce, source)| (nonce.as_str(), *source)),
+                    selected_attempt: request.selected_attempt(),
                 },
             )
             .await;
@@ -1556,6 +1558,7 @@ async fn try_handle_virtual_model_intercept(
         request.response_adapter,
         route_observer,
         request.exchange_observation_id.as_deref(),
+        request.exchange_id(),
         request.request_id.as_uuid().to_string(),
     )
     .await
@@ -1890,3 +1893,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ingress_tests/telemetry_rejection.rs"]
 mod telemetry_rejection;
+
+#[cfg(test)]
+#[path = "ingress_tests/exchange_id_join.rs"]
+mod exchange_id_join;

@@ -69,7 +69,7 @@ impl StageOpenAiBackend {
         else {
             return Ok(None);
         };
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = skippy_inference_api::http_exchange::dispatch_exchange_id();
         let mut guard =
             super::completion_exchange::CompletionTerminalGuard::new(hooks.clone(), id.clone());
         if let Err(error) = hooks.admit_effective_completion(request, &id).await {

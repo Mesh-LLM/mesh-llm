@@ -223,8 +223,18 @@ impl PluginManager {
         };
         let tier = {
             let state = state.lock().unwrap();
-            event["exchange_id"] = json!(state.exchange_id);
+            // A dispatch names its own exchange (a model re-pick is a new
+            // exchange of the same session); only an event that carries no id
+            // takes the session's.
+            if event["exchange_id"].as_str().is_none_or(str::is_empty) {
+                event["exchange_id"] = json!(state.exchange_id);
+            }
             event["endpoint"] = json!(state.endpoint);
+            // `request_id` names the client's request on every callback of the
+            // exchange; a typed backend only knows its own dispatch id.
+            if !state.request_id.is_empty() {
+                event["request_id"] = json!(state.request_id);
+            }
             state.tier
         };
         event["observation_id"] = json!(observation_id);
@@ -276,6 +286,7 @@ impl PluginManager {
         if state.attempt_history.len() < 16 {
             let mut attempt = serde_json::Map::new();
             for key in [
+                "exchange_id",
                 "model",
                 "provider",
                 "target",
@@ -294,6 +305,11 @@ impl PluginManager {
         } else {
             state.incomplete = true;
             state.evidence_unavailable = true;
+        }
+        // Only an admitted attempt can be the one that served: a denied one or
+        // one a required hook failed (a 503 before dispatch) never ran.
+        if result.error_status().is_none() {
+            state.served_exchange_id = event["exchange_id"].as_str().map(str::to_owned);
         }
         state.selected = Some(event);
         result
@@ -653,6 +669,13 @@ struct EmissionState {
     commitment: Option<WireBytesCommitment>,
     copies: super::exchange_streams::ResponseCopies,
     exchange_id: String,
+    /// The request id the session's lifecycle callbacks carry; every event of
+    /// the exchange, `backend_selected` included, reports this one.
+    request_id: String,
+    /// Exchange id of the latest admitted `backend_selected` dispatch: the one
+    /// that served when the exchange completed (the terminal reports it only
+    /// then). Unlike `attempt_history`, never capped.
+    served_exchange_id: Option<String>,
     endpoint: String,
     headers: Vec<(String, String)>,
     annotations: BTreeMap<String, String>,
@@ -771,6 +794,8 @@ impl ExchangeSession {
         let emission = Arc::new(Mutex::new(EmissionState {
             copies,
             exchange_id: event["exchange_id"].as_str().unwrap_or_default().into(),
+            request_id: event["request_id"].as_str().unwrap_or_default().into(),
+            served_exchange_id: None,
             endpoint: event["endpoint"].as_str().unwrap_or_default().into(),
             headers: result.headers.clone(),
             annotations: result.annotations.clone(),
@@ -890,6 +915,28 @@ impl ExchangeSession {
         event["usage"] = json!(emission.usage);
         event["elapsed_ms"] = json!(self.started.elapsed().as_millis());
         event["attempt_history"] = json!(emission.attempt_history);
+        // `exchange_id` stays the session's (response streams are keyed by it);
+        // this names the dispatch that served, which `attempt_history` may
+        // have dropped past its cap.
+        // An admitted dispatch served only if the exchange completed or a 2xx
+        // response had started reaching the client (a stream cut by the client
+        // or a timeout still served what it sent). Routing can exhaust its
+        // candidates after admission, and that error body serves nothing.
+        // Every selection, failed ones included, stays on `attempt_history`.
+        let execution_outcome = exchange_terminal_outcome::resolve(&emission, outcome);
+        let partly_served = emission
+            .status
+            .is_some_and(|status| (200..300).contains(&status))
+            && emission
+                .commitment
+                .as_ref()
+                .is_some_and(|commitment| commitment.byte_count > 0);
+        event["served_exchange_id"] = json!(
+            emission
+                .served_exchange_id
+                .as_deref()
+                .filter(|_| execution_outcome == "completed" || partly_served)
+        );
         event["any_response_bytes_emitted"] = json!(
             emission
                 .commitment
@@ -898,6 +945,10 @@ impl ExchangeSession {
         );
         event["response_wire_commitment"] = json!(emission.commitment);
         if let Some(selected) = &emission.selected {
+            // `exchange_id` is deliberately not copied: the response side
+            // streams were opened under the session's id, and observers key
+            // their response receipts by the terminal's `exchange_id`. The
+            // served dispatch's id stays on `attempt_history`.
             for key in [
                 "effective_request_wire_digest",
                 "effective_request_encoding",

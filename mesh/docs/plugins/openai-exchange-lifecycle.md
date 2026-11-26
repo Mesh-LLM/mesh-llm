@@ -115,10 +115,19 @@ of the same exchange. IDs asserted by a peer provide correlation; they are not
 proof of a global execution claim.
 
 Rust authors can call `OpenAiExchangeEvent::parse(&event)` inside the existing
-raw JSON callback. The typed view preserves `observation_id` and the optional
+raw JSON callback. The typed view preserves `request_id` (the request's own id,
+kept apart from the node-internal `exchange_id`), `served_exchange_id` (on
+`exchange_finished`, the exchange id of the dispatch that served, which differs
+from `exchange_id` after a model re-pick; `null` when no dispatch served the
+exchange, that is when it neither completed nor began a 2xx response),
+`observation_id` and the optional
 boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
 field means unknown, rather than false. The old `evidence_completeness` string
 field is retained for SDK source compatibility but is not emitted by v1 hosts.
+
+On the typed frontend the `X-Exchange-Id` response header and the request log
+carry the same `exchange_id` as these events, so a receipt keyed by the
+channel's id finds the matching request.
 The raw payload remains available for additive fields outside the typed view.
 
 Final client cancellation, timeout, or transport failure takes precedence over
@@ -192,6 +201,17 @@ On those two paths an absent `failure_class` means the exchange completed. The
 nothing; the lifecycle service's `exchange_finished` callbacks do not carry
 it. Other phases never carry it, so existing consumers read what they read
 before.
+
+### Which attempt served (`served_attempt`)
+
+A same-model peer failover tries several peers under one `exchange_id`: each
+attempt's `backend_selected` callback carries its own `attempt` number (and the
+peer's `target_peer_id`), but they share the exchange id. A served `raw_proxy`
+or `remote_mesh` terminal therefore carries an additive `served_attempt`, the
+`attempt` of the `backend_selected` that served it, so a plugin can tell the
+served attempt from a failed earlier one. It is absent when nothing was served
+or no attempt was recorded. Joining a payment leg to an attempt also needs the
+payer's own events to name their peer; that is the payer plugin's to emit.
 
 ### Client-marked pairs (`twin_bracket_id`)
 

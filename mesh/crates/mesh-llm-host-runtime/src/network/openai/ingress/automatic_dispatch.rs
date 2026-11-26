@@ -62,6 +62,12 @@ pub(super) async fn dispatch(
         };
         tracing::info!(previous = ?model, next = %next, repick = repicks + 1, "automatic route spilling to another model");
         proxy::rewrite_model_field(request, &next);
+        request.automatic_repick = repicks as u32 + 1;
+        // The new dispatch is its own exchange: an attempt number from the
+        // previous model must not name its (possibly plugin-served) terminal.
+        request
+            .selected_attempt
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         *model = Some(next);
     }
     unreachable!("the bounded retry loop returns on its final iteration")

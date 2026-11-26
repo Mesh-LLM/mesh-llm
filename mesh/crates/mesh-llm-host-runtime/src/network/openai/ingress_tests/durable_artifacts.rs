@@ -279,6 +279,7 @@ async fn publish_raw_proxy_terminal_states_the_failure_class() {
                 request_digest: None,
                 requested_by_node_id: Some("abcd"),
                 client_nonce: None,
+                selected_attempt: None,
             },
         )
         .await;
@@ -396,6 +397,7 @@ async fn publish_raw_proxy_terminal_names_the_tunnel_requester_on_a_host_served_
             request_digest: None,
             requested_by_node_id: Some(&requester),
             client_nonce: None,
+            selected_attempt: None,
         },
     )
     .await;
@@ -468,6 +470,7 @@ async fn publish_raw_proxy_terminal_on_the_plugin_served_path_never_carries_a_re
             request_digest: None,
             requested_by_node_id: Some(&requester),
             client_nonce: None,
+            selected_attempt: None,
         },
     )
     .await;

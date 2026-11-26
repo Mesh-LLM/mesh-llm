@@ -27,6 +27,10 @@ struct Recorder {
     terminals: Mutex<Vec<WireBytesCommitment>>,
     deny: bool,
     response_headers: Vec<(String, String)>,
+    /// The exchange id this host names at admission.
+    exchange_id: Option<String>,
+    /// [`crate::http_exchange::dispatch_exchange_id`] as each dispatch saw it.
+    dispatched: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -42,6 +46,7 @@ impl HttpExchangePolicy for Arc<Recorder> {
         self.original.lock().unwrap().push(body.to_vec());
         HttpExchangeAdmission {
             observation_id: None,
+            exchange_id: self.exchange_id.clone(),
             observer: Some(self.clone()),
             response_headers: self.response_headers.clone(),
             denial: self.deny.then(|| {
@@ -75,6 +80,11 @@ struct Backend {
 impl Backend {
     fn count_call(&self, model: &str) -> InferenceResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.recorder
+            .dispatched
+            .lock()
+            .unwrap()
+            .push(crate::http_exchange::dispatch_exchange_id());
         match model {
             "error" => Err(InferenceError::backend("failed backend")),
             "timeout" => Err(InferenceError::timeout("backend deadline")),
@@ -292,4 +302,39 @@ async fn dropped_pending_stream_has_one_incomplete_terminal() {
         terminals[0].incomplete,
         Some(WireBytesIncomplete::Cancelled)
     );
+}
+
+/// A dispatch inside an exchange the host named takes that id on every
+/// endpoint; without one, each dispatch gets a fresh id.
+#[tokio::test]
+async fn dispatch_takes_the_exchange_id_the_host_named() {
+    for path in ["/v1/chat/completions", "/v1/completions", "/v1/responses"] {
+        for stream in [false, true] {
+            for named in [Some("host-named-exchange"), None] {
+                let backend = Arc::new(Backend {
+                    recorder: Arc::new(Recorder {
+                        exchange_id: named.map(str::to_owned),
+                        ..Recorder::default()
+                    }),
+                    calls: AtomicUsize::new(0),
+                });
+                let response = crate::router(backend.clone())
+                    .oneshot(request(path, &request_body(path, stream, "tiny")))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+                let dispatched = backend.recorder.dispatched.lock().unwrap().clone();
+                assert_eq!(dispatched.len(), 1, "{path} stream={stream}");
+                match named {
+                    Some(id) => assert_eq!(dispatched[0], id, "{path} stream={stream}"),
+                    None => assert!(
+                        uuid::Uuid::parse_str(&dispatched[0]).is_ok(),
+                        "{path} stream={stream}: {}",
+                        dispatched[0]
+                    ),
+                }
+            }
+        }
+    }
 }
