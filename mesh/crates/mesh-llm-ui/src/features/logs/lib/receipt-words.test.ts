@@ -49,10 +49,23 @@ describe('tokenWords', () => {
 })
 
 describe('selfReportedLine', () => {
-  it('says not available for a check that did not load and counts retries from attempts', () => {
-    expect(selfReportedLine({ errorsRecorded: undefined, attemptCount: 0 })).toContain(
-      'errors recorded: not available; retries: 0'
+  const loaded = { failureEvents: 0, failedAttempts: 0, errorFiles: 0, attemptCount: 1, historyPartial: false }
+
+  it('counts each record type on its own, so one failure is not summed into several errors', () => {
+    expect(selfReportedLine({ ...loaded, failureEvents: 2, failedAttempts: 1, attemptCount: 3 })).toContain(
+      'failure events: 2; failed attempts: 1; error files kept: none; retries: 2'
     )
-    expect(selfReportedLine({ errorsRecorded: 1200, attemptCount: 3 })).toContain('errors recorded: 1,200; retries: 2')
+  })
+
+  it('says not available for a check that did not load', () => {
+    expect(selfReportedLine({ ...loaded, failureEvents: undefined, attemptCount: undefined })).toContain(
+      'failure events: not available; failed attempts: none; error files kept: none; retries: not available'
+    )
+  })
+
+  it('qualifies every count when only the first page of records loaded', () => {
+    expect(selfReportedLine({ ...loaded, failureEvents: 1200, historyPartial: true })).toContain(
+      'failure events: at least 1,200; failed attempts: none in the loaded records; error files kept: none in the loaded records; retries: none in the loaded records'
+    )
   })
 })

@@ -14,6 +14,9 @@ export type LogRequestDiagnosticEvidence = {
   readonly attemptCount: number | undefined
   readonly diagnosticMarkerCount: number | undefined
   readonly failedAttemptCount: number | undefined
+  readonly failureEventCount: number | undefined
+  readonly errorFileCount: number | undefined
+  readonly historyPartial: boolean
   readonly evidenceComplete: boolean
   readonly hasErrorEvidence: boolean
 }
@@ -38,7 +41,7 @@ const CONTENT_STATES = [
 
 const outcomeDetail = {
   active: 'The request has not reached a terminal outcome. Retained diagnostics may still change.',
-  completed: 'The request completed, but retained evidence is still loading or unavailable.',
+  completed: 'The request completed, but retained evidence is still loading, unavailable, or only partly loaded.',
   failed: 'Review the ordered failure markers, retry targets, terminal status, and error artifacts below.',
   rejected: 'The request was rejected before normal execution completed.',
   cancelled: 'The caller cancelled this request before normal completion.',
@@ -195,11 +198,11 @@ export function LogRequestDiagnosticSummary({ request, evidence, successful }: L
           <p className="mt-1 break-words type-caption text-fg-dim">{summaryDetail}</p>
           <p className="mt-1 break-words type-caption text-fg-dim" data-testid="diagnostic-self-report">
             {selfReportedLine({
+              failureEvents: evidence.failureEventCount,
+              failedAttempts: evidence.failedAttemptCount,
+              errorFiles: evidence.errorFileCount,
               attemptCount: evidence.attemptCount,
-              errorsRecorded:
-                evidence.diagnosticMarkerCount === undefined || evidence.failedAttemptCount === undefined
-                  ? undefined
-                  : evidence.diagnosticMarkerCount + evidence.failedAttemptCount
+              historyPartial: evidence.historyPartial
             })}
           </p>
         </div>

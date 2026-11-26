@@ -28,6 +28,8 @@ export type LogRequestDiagnosticsProps = {
   readonly attemptsError: boolean
   readonly artifactsLoading: boolean
   readonly artifactsError: boolean
+  /** True when any evidence query has a continuation cursor, so later records were not loaded. */
+  readonly historyPartial?: boolean
 }
 
 const interruptedEventKinds: readonly LogEventKind[] = ['rejected', 'cancelled', 'dropped']
@@ -81,7 +83,8 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
   const eventsReady = !props.eventsLoading && !props.eventsError
   const attemptsReady = !props.attemptsLoading && !props.attemptsError
   const artifactsReady = !props.artifactsLoading && !props.artifactsError
-  const evidenceComplete = eventsReady && attemptsReady && artifactsReady
+  const historyPartial = props.historyPartial ?? false
+  const evidenceComplete = eventsReady && attemptsReady && artifactsReady && !historyPartial
   const failedAttempts = (props.attempts ?? []).filter(
     (attempt) => attempt.statusCode !== undefined && attempt.statusCode >= 400
   )
@@ -95,6 +98,9 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
     artifacts: artifactsReady ? (props.artifacts ?? []) : undefined,
     attemptCount: attemptsReady ? (props.attempts ?? []).length : undefined,
     failedAttemptCount: attemptsReady ? failedAttempts.length : undefined,
+    failureEventCount: eventsReady ? diagnosticEvents.length : undefined,
+    errorFileCount: artifactsReady ? errorArtifacts.length : undefined,
+    historyPartial,
     diagnosticMarkerCount: eventsReady && artifactsReady ? diagnosticEvents.length + errorArtifacts.length : undefined,
     evidenceComplete,
     hasErrorEvidence

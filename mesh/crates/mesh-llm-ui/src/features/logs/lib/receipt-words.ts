@@ -28,18 +28,35 @@ export function tokenWords(token: string): string {
 }
 
 export type SelfReportedChecks = {
-  readonly errorsRecorded: number | undefined
+  readonly failureEvents: number | undefined
+  readonly failedAttempts: number | undefined
+  readonly errorFiles: number | undefined
   readonly attemptCount: number | undefined
+  /** True when the inspector loaded only the first page of this request's records. */
+  readonly historyPartial: boolean
 }
 
-/** R1: who reported, what it checked with each result, and that this view did not re-check. */
-export function selfReportedLine({ errorsRecorded, attemptCount }: SelfReportedChecks): string {
-  const errors =
-    errorsRecorded === undefined ? 'not available' : errorsRecorded === 0 ? 'none' : groupThousands(errorsRecorded)
-  const retries = attemptCount === undefined ? 'not available' : groupThousands(Math.max(attemptCount - 1, 0))
+function checkResult(count: number | undefined, historyPartial: boolean): string {
+  if (count === undefined) return 'not available'
+  if (historyPartial) return count === 0 ? 'none in the loaded records' : `at least ${groupThousands(count)}`
+  return count === 0 ? 'none' : groupThousands(count)
+}
+
+/**
+ * R1: who reported, what it checked with each result, and that this view did not re-check. Each
+ * record type is counted on its own, since one failure can leave both an event and a failed attempt.
+ */
+export function selfReportedLine(checks: SelfReportedChecks): string {
+  const retries = checks.attemptCount === undefined ? undefined : Math.max(checks.attemptCount - 1, 0)
+  const results = [
+    `failure events: ${checkResult(checks.failureEvents, checks.historyPartial)}`,
+    `failed attempts: ${checkResult(checks.failedAttempts, checks.historyPartial)}`,
+    `error files kept: ${checkResult(checks.errorFiles, checks.historyPartial)}`,
+    `retries: ${checkResult(retries, checks.historyPartial)}`
+  ]
   return receiptWord('verify.self_reported', {
     verifier: "this node's own request log",
-    checks: `errors recorded: ${errors}; retries: ${retries}`
+    checks: results.join('; ')
   })
 }
 

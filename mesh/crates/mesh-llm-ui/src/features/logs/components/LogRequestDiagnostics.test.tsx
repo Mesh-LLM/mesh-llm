@@ -288,7 +288,7 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
     renderDiagnostics({ request: request(), attempts: [attempt(1), attempt(2)] })
 
     expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent(
-      "Reported by this node's own request log: errors recorded: 2; retries: 1. This view shows that report; it did not re-check anything itself."
+      "Reported by this node's own request log: failure events: none; failed attempts: 2; error files kept: none; retries: 1. This view shows that report; it did not re-check anything itself."
     )
   })
 
@@ -351,9 +351,43 @@ describe('LogRequestDiagnostics receipt presentation rules', () => {
     expect(terminal).toHaveAttribute('datetime', '2026-08-04T12:00:04Z')
   })
 
-  it('R1: counts a failed attempt among the errors the log recorded', () => {
+  it('R1: counts a failed attempt under its own record type', () => {
     renderDiagnostics({ request: request(), attempts: [attempt(1)] })
 
-    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent('errors recorded: 1; retries: 0')
+    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent(
+      'failure events: none; failed attempts: 1; error files kept: none; retries: none'
+    )
+  })
+
+  it('R7: never says "None reported." when later records were not loaded, and keeps the loaded rows', () => {
+    render(
+      <LogRequestDiagnostics
+        artifacts={[]}
+        artifactsError={false}
+        artifactsLoading={false}
+        attempts={[attempt(1)]}
+        attemptsError={false}
+        attemptsLoading={false}
+        events={[]}
+        eventsError={false}
+        eventsLoading={false}
+        historyPartial
+        request={request({ statusCode: 200 })}
+        requestError={false}
+        requestLoading={false}
+      />
+    )
+
+    expect(screen.queryByText('None reported.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No errors' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Diagnostics incomplete' })).toBeInTheDocument()
+    expect(screen.getByText('HTTP 502', { exact: true })).toBeInTheDocument()
+    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent('failed attempts: at least 1')
+  })
+
+  it('R3: separates the words from the recorded code in the text, not only by margin', () => {
+    renderDiagnostics({ request: request({ outcome: 'failed' }) })
+
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Failed failed').length).toBeGreaterThan(0)
   })
 })

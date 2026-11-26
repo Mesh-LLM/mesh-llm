@@ -10,10 +10,8 @@ type LogTokenWordsProps = {
 export function LogTokenWords({ words, token, className }: LogTokenWordsProps) {
   return (
     <>
-      {words}
-      <code className={cn('ml-1 font-mono text-[length:var(--density-type-caption)] opacity-70', className)}>
-        {token}
-      </code>
+      {words}{' '}
+      <code className={cn('font-mono text-[length:var(--density-type-caption)] opacity-70', className)}>{token}</code>
     </>
   )
 }

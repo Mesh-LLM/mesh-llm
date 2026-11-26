@@ -211,6 +211,9 @@ describe('LogRequestDetails', () => {
     expect(
       screen.getByText('This request exceeds the bounded diagnostic limit. The records shown below are incomplete.')
     ).toHaveAttribute('role', 'status')
+    expect(screen.queryByText('None reported.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No errors' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent('none in the loaded records')
   })
 
   it.each([
