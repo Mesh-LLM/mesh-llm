@@ -38,7 +38,7 @@ on:
         default: ''
         type: string
       force_hosted:
-        description: Force GitHub-hosted placement for runner-contract changes.
+        description: Effective hosted override from the caller (planner hosted_runner_required or release force_hosted_runners); wins over use_depot and every repository Depot gate.
         required: false
         default: false
         type: boolean

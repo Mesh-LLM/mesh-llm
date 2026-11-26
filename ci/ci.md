@@ -1546,6 +1546,30 @@ PR exception deadline, cache permission or provider allowlist changes here.
 The Linux CPU runtime cache producer remains hosted even when other eligible
 Linux jobs select Depot. Live qualification belongs to #2789.
 
+The hosted override wins at every nested depth. Each call of a reusable
+workflow that selects runners passes the parent's effective `force_hosted`,
+`use_depot` and `original_event_name` for each of those inputs the target
+declares, and only those; most slices declare `force_hosted` but not
+`use_depot`. The Linux lane now forwards `use_depot`
+to static ABI and the Kotlin native SDK input as well as hosts and runtimes,
+and native SDK forwards both to its static ABI producer. Release applies
+`force_hosted_runners` as its selector's `force_hosted`, so a manual
+`use_depot=true` is ignored under it, and forwards the same value and
+`use_depot` to the native SDK and Swift producers instead of a hardcoded
+`false`. Release native runtime legs prepare Linux automation with
+`hosted-bare`, which requires a GitHub-hosted runner, so they run on their
+matrix's hosted label and no dispatch can route them to Depot. Rolling
+previews dispatch release with `force_hosted_runners=true`. The rollback that
+holds across nested workflows is `DEPOT_RUNNERS_ENABLED=false`, or a release
+dispatch with `force_hosted_runners=true`. The variable only turns off Depot
+placement: a dispatch that passes `use_depot=true` keeps its opt-in, and the
+self-hosted CUDA leg keeps its labels while `USE_SELF_HOSTED=true`, so a fully
+GitHub-hosted release needs `force_hosted_runners=true`. Pull-request jobs
+have separate Depot paths, so roll those back as well: set
+`DEPOT_PR_RUNNERS_ENABLED=false` (or delete it) and delete
+`DEPOT_PR_CANARY_REF`. Fork, non-main-ref and PR-origin dispatch denial is
+unchanged.
+
 Exact hosted executable and Linux CPU packaged-runtime key expressions are
 projections of the typed `ci-ops cache-inputs` inventory. The normal contract
 gate checks freshness. Hosted version 2 keys bind the actual hosted image as

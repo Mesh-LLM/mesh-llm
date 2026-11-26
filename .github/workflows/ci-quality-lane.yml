@@ -40,7 +40,7 @@ on:
         default: "[]"
         type: string
       use_depot:
-        description: Opt into the guarded main-only Depot canary.
+        description: Manual trusted-main Depot opt-in forwarded by the caller; ignored when force_hosted is true and denied for forks, non-main refs and PR-origin dispatches.
         required: false
         default: false
         type: boolean
