@@ -116,6 +116,24 @@ mod tests {
         }
     }
 
+    /// A fresh install with no bundle has nothing to fall back on when the
+    /// catalog cannot be fetched (a 404 for `native-runtimes.json`, say), so
+    /// the failure carries the fetch error callers classify it by.
+    #[test]
+    fn an_unreachable_catalog_without_a_bundle_is_a_fetch_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut options = test_manifest_options();
+        // Port 9 on loopback refuses the connection at once.
+        options.manifest_url = Some("http://127.0.0.1:9/native-runtimes.json".to_string());
+        let error = runtime
+            .block_on(load_release_manifest_from_explicit_sources(options))
+            .unwrap_err();
+        assert!(error.downcast_ref::<NativeRuntimeFetchError>().is_some());
+    }
+
     #[test]
     fn explicit_sources_ignore_product_environment() {
         const CHILD: &str = "SKIPPY_TEST_EXPLICIT_BUNDLE";

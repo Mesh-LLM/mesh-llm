@@ -60,10 +60,13 @@ async fn check_serving_ports(
             let holder =
                 find_mesh_node_holding(port, flag == "--console", options.console, runs_mesh_llm)
                     .await;
-            anyhow::bail!(
-                "{}",
-                port_in_use_message(port, label, flag, holder.as_ref())
+            // Typed as the bind error it stands in for, so failure
+            // reporting reads it as a port in use; it displays the message.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                port_in_use_message(port, label, flag, holder.as_ref()),
             )
+            .into());
         }
     }
     Ok(())
@@ -327,10 +330,15 @@ mod tests {
             console: 0,
             ..RuntimeOptions::default()
         };
-        let message = ensure_serving_ports_free(&options)
+        let error = ensure_serving_ports_free(&options)
             .await
-            .expect_err("a held API port must stop startup")
-            .to_string();
+            .expect_err("a held API port must stop startup");
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::AddrInUse)
+        }));
+        let message = error.to_string();
         assert!(message.contains(&format!("port {port} for the OpenAI-compatible API")));
         assert!(message.contains("another program"));
         assert!(message.contains("--port"));

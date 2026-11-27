@@ -111,8 +111,17 @@ impl FailureKind {
     }
 
     pub fn classify(error: &anyhow::Error) -> Self {
+        // A resolution that could not enumerate its candidates (an unreadable
+        // cache, say) carries the real cause below it, so that cause decides.
+        let resolution = find::<skippy_runtime_install::NativeRuntimeResolutionError>(error);
+        if let Some(resolution) = resolution
+            && resolution.enumeration_failed
+            && let Some(kind) = Self::from_io_and_config(error)
+        {
+            return kind;
+        }
         if carries::<skippy_ffi::NativeRuntimeLoadError>(error)
-            || carries::<skippy_runtime_install::NativeRuntimeResolutionError>(error)
+            || resolution.is_some()
             || carries::<skippy_runtime_install::NativeRuntimeFetchError>(error)
         {
             return Self::RuntimeUnavailable;
@@ -122,19 +131,24 @@ impl FailureKind {
         if carries::<skippy_model_hf::ModelDownloadError>(error) {
             return Self::ModelDownload;
         }
+        Self::from_io_and_config(error).unwrap_or(Self::Other)
+    }
+
+    /// The io kinds and the config parser anywhere in the chain.
+    fn from_io_and_config(error: &anyhow::Error) -> Option<Self> {
         for cause in error.chain() {
             if let Some(io) = cause.downcast_ref::<std::io::Error>() {
                 match io.kind() {
-                    std::io::ErrorKind::AddrInUse => return Self::PortInUse,
-                    std::io::ErrorKind::PermissionDenied => return Self::PermissionDenied,
+                    std::io::ErrorKind::AddrInUse => return Some(Self::PortInUse),
+                    std::io::ErrorKind::PermissionDenied => return Some(Self::PermissionDenied),
                     _ => {}
                 }
             }
             if cause.is::<toml::de::Error>() {
-                return Self::ConfigInvalid;
+                return Some(Self::ConfigInvalid);
             }
         }
-        Self::Other
+        None
     }
 }
 
@@ -144,7 +158,17 @@ fn carries<T>(error: &anyhow::Error) -> bool
 where
     T: std::error::Error + Send + Sync + 'static,
 {
-    error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
+    find::<T>(error).is_some()
+}
+
+/// The `T` that `error` carries, wherever [`carries`] would find it.
+fn find<T>(error: &anyhow::Error) -> Option<&T>
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    error
+        .downcast_ref::<T>()
+        .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<T>()))
 }
 
 /// Record the outcome of a one-shot command.
@@ -569,6 +593,28 @@ mod tests {
         };
         let error = anyhow::anyhow!("no compatible native runtime").context(explanation);
         assert_eq!(classify(error.context("setup")), "runtime_unavailable");
+    }
+
+    #[test]
+    fn failure_kind_reads_the_cause_of_a_resolution_that_could_not_enumerate() {
+        // An unreadable runtime cache: the resolver keeps the io error below
+        // its explanation and marks the enumeration as failed.
+        let explanation = || skippy_runtime_install::NativeRuntimeResolutionError {
+            summary: "native runtime candidates could not be enumerated".into(),
+            selection: skippy_runtime_install::RuntimeSelection::Recommended,
+            catalogs: Default::default(),
+            candidates: Vec::new(),
+            set_aside: 0,
+            enumeration_failed: true,
+        };
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = anyhow::Error::new(denied)
+            .context("read native runtime cache")
+            .context(explanation());
+        assert_eq!(classify(error), "permission_denied");
+        // With no io cause it is still a runtime the node could not get.
+        let error = anyhow::anyhow!("cache index is corrupt").context(explanation());
+        assert_eq!(classify(error), "runtime_unavailable");
     }
 
     #[test]

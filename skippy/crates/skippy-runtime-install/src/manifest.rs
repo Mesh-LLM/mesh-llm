@@ -196,7 +196,14 @@ async fn merge_release_manifest_sources(
             Err(err) if !options.bundle_dirs.is_empty() => {
                 sources.remote_error = Some(format!("{err:#}"));
             }
-            Err(err) => return Err(err),
+            // With no bundle to fall back on, the catalog is the runtime this
+            // node cannot get, and callers classify it by this type.
+            Err(err) => {
+                return Err(err.context(crate::NativeRuntimeFetchError(format!(
+                    "fetch native runtime catalog {}",
+                    url_without_query(&url)
+                ))));
+            }
         }
     }
     sources.manifest_artifacts = artifacts.len();

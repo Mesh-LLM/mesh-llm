@@ -80,7 +80,7 @@ number, model name or message is sent:
 | `permission_denied` | The operating system refused access to a file, port or directory |
 | `runtime_unavailable` | No compatible native runtime could be found, or it would not load |
 | `model_download` | Downloading a model from Hugging Face failed |
-| `config_invalid` | The config file is not valid TOML for the config schema |
+| `config_invalid` | The config file is not valid TOML for the config schema. Consent is read from that same file, so this is only reported when `MESH_LLM_ANALYTICS` turns reporting on |
 | `other` | Anything else, including config values that parse but fail validation |
 
 `hardware_profile` is sent once per `serve` process, after the native runtime
