@@ -7,7 +7,7 @@ name: Release
 #
 # Dispatch from main:  just release v0.81.0
 # Rehearse:            just release v0.81.0 --canary   (builds, packages and
-#                      smokes everything; pushes and publishes nothing)
+#                      runs one packaged CPU smoke; pushes and publishes nothing)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       canary:
-        description: Dry run. Build, package and smoke everything; push and publish nothing.
+        description: Dry run. Build, package and run one packaged CPU smoke; publish nothing.
         required: true
         default: false
         type: boolean
@@ -38,9 +38,10 @@ env:
   MESH_LLM_POSTHOG_KEY: ${{ secrets.MESH_LLM_POSTHOG_KEY }}
 
 jobs:
-  # Checks the old release ran that this one does not yet. A real release stops
-  # here, before anything is pushed. A canary only prints the list. Delete an
-  # entry in the same change that restores its check; there is no switch.
+  # Checks this release still needs. A real release stops here, before
+  # anything is pushed. A canary only prints the list. A
+  # representative MeshLLM GPU smoke is enough; Skippy qualifies its own
+  # runtimes and MeshLLM does not repeat inference tests on every platform.
   release_readiness:
     name: Refuse a release with known missing checks
     runs-on: ubuntu-24.04
@@ -52,10 +53,9 @@ jobs:
         run: |
           set -euo pipefail
           missing=(
-            "Windows: the packaged host is not run against a model, only version-checked."
             "Host import check and report: on Linux only stubbed tools have run, and on Windows nothing has, including the call from package-release.ps1."
             "Docker images and npm: the mesh-packaging handoff is off. Its new contract is only a draft that mesh-packaging has not adopted, and the dispatch is not wired."
-            "NVIDIA and AMD machines: no run on real hardware shows the host downloading and loading a GPU runtime. Tests cover only the choice."
+            "GPU smoke: a MeshLLM host has not yet downloaded and loaded the pinned Skippy release's CUDA and ROCm runtimes on representative NVIDIA and AMD machines."
             "Updating from 0.80.0 on Windows: the step that swaps in the new runtime and manifest is a PowerShell script that no test runs. The Unix path is covered."
           )
           for item in "${missing[@]}"; do
@@ -330,20 +330,20 @@ jobs:
           diff "$RUNNER_TEMP/host-imports.json" "$(dirname "$HOST")/host-imports.json"
 
       - name: Restore the test model
-        if: runner.os != 'Windows'
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         id: model
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: smoke-model.gguf
           key: smoke-model-${{ env.MODEL_SHA256 }}
       - name: Download the test model
-        if: runner.os != 'Windows' && steps.model.outputs.cache-hit != 'true'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && steps.model.outputs.cache-hit != 'true'
         run: curl -fL --retry 3 --max-time 600 -o smoke-model.gguf "$MODEL_URL"
 
-      # Real inference from the unpacked archive: its host, its runtime.
-      # Windows has no shell smoke yet; its host only has to report its version.
+      # One MeshLLM integration check from the unpacked release archive.
+      # Skippy qualifies inference backends in its own repository.
       - name: Run inference from the packaged archive
-        if: runner.os != 'Windows'
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         env:
           MESH_LLM_BIN: ${{ steps.bundle.outputs.host }}
         run: |

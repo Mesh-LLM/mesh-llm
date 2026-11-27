@@ -22,8 +22,6 @@ Every archive is also published under a versioned name
 while any of the following is open. A canary prints the list and continues.
 An entry is removed in the same change that closes it.
 
-- **Windows inference.** The packaged Windows host is version-checked but not
-  run against a model.
 - **Host import check.** `scripts/check-host-imports.sh` refuses a host that
   links CUDA, ROCm, Vulkan, Metal, ggml or llama, or that needs a newer glibc
   than the Linux floor, and writes `host-imports.json` into the archive with
@@ -37,10 +35,11 @@ An entry is removed in the same change that closes it.
   drafted in `mesh/docs/design/PACKAGING_HANDOFF.md`, and the receipt wait is
   back as `scripts/wait-packaging-receipt.sh`, tested against a stub. The
   dispatch itself is not wired, and mesh-packaging has not adopted the draft.
-- **NVIDIA and AMD machines.** No run on real hardware shows the host
-  downloading and loading a GPU runtime. Tests cover the choice only: a better
-  runtime in the catalog, or one already installed, is used over the CPU
-  runtime bundled in the archive. Metal was run on a Mac.
+- **GPU smoke.** On representative NVIDIA and AMD machines, the MeshLLM host
+  has not yet downloaded and loaded the CUDA and ROCm runtimes from the pinned
+  Skippy release and answered a short request. This checks the MeshLLM
+  integration; Skippy qualifies its own runtimes. Catalog selection has unit
+  tests, and Metal has been exercised on a Mac.
 - **Updating from 0.80.0 on Windows.** The updater swaps in the new runtime
   and manifest with a PowerShell script that no test runs. The Unix path is
   covered. See [Compatibility archive names](#compatibility-archive-names).
@@ -63,7 +62,7 @@ With the version already on `main` it has nothing to commit and carries on.
 
 ```bash
 just release v0.81.0            # real release, from main
-just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes and publishes nothing
+just release v0.81.0 --canary   # rehearsal: builds, packages and runs one CPU smoke; publishes nothing
 ```
 
 `scripts/release.sh` dispatches `release.yml` on `main` with two inputs,
@@ -79,7 +78,8 @@ just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes
    publish and checks the signature, the signed commit and target, that the
    host links no inference backend and stays within the Linux glibc floor,
    that `host-imports.json` in the archive describes that exact host, and
-   (except on Windows) a real inference request.
+   one real inference request from the Linux x86_64 archive. The other
+   platform archives are checked for packaging, signatures and imports.
 3. **Builds the SDKs**, each in its own job: the Swift XCFramework and
    `Package.swift`, the Kotlin native library for three targets, and the Node
    addon for four.

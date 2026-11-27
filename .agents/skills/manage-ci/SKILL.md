@@ -26,7 +26,9 @@ skill and the inventory in the same change.
   one real inference smoke on Linux with Skippy's CPU runtime.
 - `release.yml` is started by hand (`just release vX.Y.Z`). It builds, signs,
   checks and publishes one host archive per platform and the Swift, Kotlin and
-  Node SDK artifacts.
+  Node SDK artifacts. It runs one packaged-host CPU inference smoke on Linux
+  x86_64; Skippy qualifies its runtimes, so MeshLLM does not repeat inference
+  on every release platform.
 - The remaining workflows deploy the website and the Fly console, check the
   client Dockerfile, assign pull requests and close stale ones.
 

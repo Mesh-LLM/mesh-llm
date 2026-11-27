@@ -56,6 +56,10 @@ request cancels its own earlier run.
 The publish job calls `scripts/create-compatibility-aliases.sh` for the
 0.80.0 CUDA and ROCm archive names. The Vulkan alias is withheld until a
 matching Skippy runtime is published.
+The build matrix runs one packaged-host CPU inference smoke on Linux x86_64.
+The other platforms validate their archives without repeating inference.
+Representative CUDA and ROCm host smokes remain a release-readiness item;
+Skippy owns runtime backend qualification.
 
 Runs of this workflow do not cancel each other. See `RELEASE.md` for the steps
 and for what is not yet checked. Apart from local runs of its scripts, this
