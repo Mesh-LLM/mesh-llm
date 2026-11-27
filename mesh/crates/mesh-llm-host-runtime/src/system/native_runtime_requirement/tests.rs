@@ -307,10 +307,13 @@ fn unknown_backend_selection_remains_explicit_and_cannot_fallback() {
 async fn unavailable_manifest_transport_is_recoverable_but_invalid_url_is_not() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    drop(listener);
+    let server = std::thread::spawn(move || {
+        let (connection, _) = listener.accept().unwrap();
+        drop(connection);
+    });
     let client = reqwest::Client::builder()
         .no_proxy()
-        .timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
     let connection = client
@@ -318,12 +321,12 @@ async fn unavailable_manifest_transport_is_recoverable_but_invalid_url_is_not() 
         .send()
         .await
         .unwrap_err();
-    // The request deadline can expire before the OS reports connection refusal.
+    server.join().unwrap();
+    let connection_error: anyhow::Error = connection.into();
     assert!(
-        connection.is_connect() || connection.is_timeout(),
-        "unexpected unavailable-manifest error: {connection:?}"
+        is_runtime_availability_error(&connection_error),
+        "unexpected unavailable-manifest error: {connection_error:?}"
     );
-    assert!(is_runtime_availability_error(&connection.into()));
     let invalid_url = client.get("http://[").build().unwrap_err();
     assert!(!is_runtime_availability_error(&invalid_url.into()));
 }

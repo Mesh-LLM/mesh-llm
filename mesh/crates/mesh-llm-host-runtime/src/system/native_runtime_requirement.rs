@@ -164,7 +164,7 @@ fn is_runtime_availability_error(error: &anyhow::Error) -> bool {
         .is_some_and(|error| !error.enumeration_failed)
         || error
             .downcast_ref::<reqwest::Error>()
-            .is_some_and(|error| error.is_connect() || error.is_timeout())
+            .is_some_and(|error| error.is_request() || error.is_connect() || error.is_timeout())
 }
 
 #[cfg(feature = "dynamic-native-runtime")]
