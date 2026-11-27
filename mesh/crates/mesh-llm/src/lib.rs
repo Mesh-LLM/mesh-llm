@@ -158,6 +158,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
                 Ok(_) => mesh_llm_events::CliCommandOutcome::Completed,
                 Err(_) => mesh_llm_events::CliCommandOutcome::Failed,
             },
+            command_dispatch.as_ref().err(),
         );
         if logging_initialized {
             let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
@@ -193,7 +194,8 @@ async fn emit_early_cli_process_event(
         install_cli_operational_audit_bridge();
     }
     mesh_llm_commands::operational_logging::emit_cli_process_event(family, outcome);
-    mesh_llm_commands::usage_reporting::record_cli_command(family, outcome);
+    // A parse failure carries no error chain to classify.
+    mesh_llm_commands::usage_reporting::record_cli_command(family, outcome, None);
     if logging_initialized {
         let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
     }

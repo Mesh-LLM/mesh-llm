@@ -17,7 +17,7 @@ pub(super) async fn run(
         let probe_shutdown = hardware_profile
             .finish_within(Duration::from_secs(10))
             .await;
-        session.finish(false);
+        session.finish(Err(&error));
         usage_reporting::shutdown().await;
         report_probe_shutdown(probe_shutdown);
         return Err(error);
@@ -32,7 +32,7 @@ pub(super) async fn run(
     let outcome =
         mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await;
     let probe_shutdown = hardware_profile.shutdown().await;
-    session.finish(outcome.is_ok());
+    session.finish(outcome.as_ref().map(|_| ()));
     usage_reporting::shutdown().await;
     report_probe_shutdown(probe_shutdown);
     outcome

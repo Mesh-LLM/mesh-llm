@@ -35,8 +35,8 @@ pub use legacy_import::{
 pub use import::{NativeRuntimeImportOutcome, NativeRuntimeImportStatus, import_runtime_copy};
 
 pub use install::{
-    NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime,
-    install_native_runtime_explicit,
+    NativeRuntimeFetchError, NativeRuntimeResolutionError, RejectedCandidate,
+    install_native_runtime, install_native_runtime_explicit,
 };
 pub use manifest::{
     NativeRuntimeCatalogSources, load_release_manifest,
@@ -114,6 +114,24 @@ mod tests {
             sha256: Some("a".repeat(64)),
             signature: signature.map(str::to_string),
         }
+    }
+
+    /// A fresh install with no bundle has nothing to fall back on when the
+    /// catalog cannot be fetched (a 404 for `native-runtimes.json`, say), so
+    /// the failure carries the fetch error callers classify it by.
+    #[test]
+    fn an_unreachable_catalog_without_a_bundle_is_a_fetch_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut options = test_manifest_options();
+        // Port 9 on loopback refuses the connection at once.
+        options.manifest_url = Some("http://127.0.0.1:9/native-runtimes.json".to_string());
+        let error = runtime
+            .block_on(load_release_manifest_from_explicit_sources(options))
+            .unwrap_err();
+        assert!(error.downcast_ref::<NativeRuntimeFetchError>().is_some());
     }
 
     #[test]

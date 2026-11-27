@@ -78,17 +78,118 @@ pub fn init_for_unparsed(raw_args: &[OsString], config_path: Option<&Path>) {
     mesh_llm_analytics::init(crate::analytics::config_preference(config_path));
 }
 
+/// Why a `serve` session or a one-shot command failed, from a fixed list.
+///
+/// Classified from typed errors, never from text, so no path, model name, or
+/// message rides along. The typed contexts the runtime installer and the model
+/// downloaders attach come first: a model download that failed on a permission
+/// error is `model_download`. Then the io kinds and the config parser anywhere
+/// in the chain. A failure with no recognised cause is `other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The port `serve` binds is already held, typically by another node.
+    PortInUse,
+    PermissionDenied,
+    /// No compatible native runtime could be resolved, or it would not load.
+    RuntimeUnavailable,
+    ModelDownload,
+    /// The config file is not valid TOML for the config schema.
+    ConfigInvalid,
+    Other,
+}
+
+impl FailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PortInUse => "port_in_use",
+            Self::PermissionDenied => "permission_denied",
+            Self::RuntimeUnavailable => "runtime_unavailable",
+            Self::ModelDownload => "model_download",
+            Self::ConfigInvalid => "config_invalid",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn classify(error: &anyhow::Error) -> Self {
+        // A resolution that could not enumerate its candidates (an unreadable
+        // cache, say) carries the real cause below it, so that cause decides.
+        let resolution = find::<skippy_runtime_install::NativeRuntimeResolutionError>(error);
+        if let Some(resolution) = resolution
+            && resolution.enumeration_failed
+            && let Some(kind) = Self::from_io_and_config(error)
+        {
+            return kind;
+        }
+        if carries::<skippy_ffi::NativeRuntimeLoadError>(error)
+            || resolution.is_some()
+            || carries::<skippy_runtime_install::NativeRuntimeFetchError>(error)
+        {
+            return Self::RuntimeUnavailable;
+        }
+        // Only a failure where model files are downloaded: a Hub error from a
+        // metadata lookup (`models show`) is not a download failure.
+        if carries::<skippy_model_hf::ModelDownloadError>(error) {
+            return Self::ModelDownload;
+        }
+        Self::from_io_and_config(error).unwrap_or(Self::Other)
+    }
+
+    /// The io kinds and the config parser anywhere in the chain.
+    fn from_io_and_config(error: &anyhow::Error) -> Option<Self> {
+        for cause in error.chain() {
+            if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                match io.kind() {
+                    std::io::ErrorKind::AddrInUse => return Some(Self::PortInUse),
+                    std::io::ErrorKind::PermissionDenied => return Some(Self::PermissionDenied),
+                    _ => {}
+                }
+            }
+            if cause.is::<toml::de::Error>() {
+                return Some(Self::ConfigInvalid);
+            }
+        }
+        None
+    }
+}
+
+/// Whether `error` carries a `T`, as its root, as a source in its chain, or as
+/// context attached with `anyhow::Context`, which only `downcast_ref` finds.
+fn carries<T>(error: &anyhow::Error) -> bool
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    find::<T>(error).is_some()
+}
+
+/// The `T` that `error` carries, wherever [`carries`] would find it.
+fn find<T>(error: &anyhow::Error) -> Option<&T>
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    error
+        .downcast_ref::<T>()
+        .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<T>()))
+}
+
 /// Record the outcome of a one-shot command.
 ///
-/// Only the family and the outcome are reported. Both are closed enums, so no
-/// argument, path, model name, or error text can ride along.
-pub fn record_cli_command(family: CliCommandFamily, outcome: CliCommandOutcome) {
-    mesh_llm_analytics::capture(
-        Event::CliCommand,
-        Properties::new()
-            .with("family", family.as_str())
-            .with("outcome", outcome.as_str()),
-    );
+/// The family, the outcome and, for a failed command, its [`FailureKind`] are
+/// reported. All three are closed enums, so no argument, path, model name, or
+/// error text can ride along.
+pub fn record_cli_command(
+    family: CliCommandFamily,
+    outcome: CliCommandOutcome,
+    error: Option<&anyhow::Error>,
+) {
+    let mut properties = Properties::new()
+        .with("family", family.as_str())
+        .with("outcome", outcome.as_str());
+    if outcome == CliCommandOutcome::Failed
+        && let Some(error) = error
+    {
+        properties = properties.with("failure", FailureKind::classify(error).as_str());
+    }
+    mesh_llm_analytics::capture(Event::CliCommand, properties);
 }
 
 /// A `serve` session being measured from start to shutdown.
@@ -110,20 +211,22 @@ impl ServeSession {
         }
     }
 
-    /// Record the session ending, bucketing how long it lasted.
+    /// Record the session ending, bucketing how long it lasted, and for a
+    /// failed session its [`FailureKind`].
     ///
     /// Session length is the signal that separates a node someone actually
     /// runs from one that crashed or was tried once.
-    pub fn finish(self, succeeded: bool) {
-        mesh_llm_analytics::capture(
-            Event::ServeStopped,
-            Properties::new()
-                .with(
-                    "session_length",
-                    mesh_llm_analytics::bucket_duration_secs(self.started.elapsed().as_secs()),
-                )
-                .with("succeeded", succeeded),
-        );
+    pub fn finish(self, outcome: Result<(), &anyhow::Error>) {
+        let mut properties = Properties::new()
+            .with(
+                "session_length",
+                mesh_llm_analytics::bucket_duration_secs(self.started.elapsed().as_secs()),
+            )
+            .with("succeeded", outcome.is_ok());
+        if let Err(error) = outcome {
+            properties = properties.with("failure", FailureKind::classify(error).as_str());
+        }
+        mesh_llm_analytics::capture(Event::ServeStopped, properties);
     }
 }
 
@@ -412,6 +515,130 @@ pub async fn shutdown() {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    fn classify(error: anyhow::Error) -> &'static str {
+        FailureKind::classify(&error).as_str()
+    }
+
+    #[test]
+    fn failure_kind_reads_io_kinds_under_context() {
+        let held = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert_eq!(
+            classify(anyhow::Error::new(held).context("bind API port 9337")),
+            "port_in_use"
+        );
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            classify(anyhow::Error::new(denied).context("write config")),
+            "permission_denied"
+        );
+        let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(classify(anyhow::Error::new(other)), "other");
+    }
+
+    #[test]
+    fn failure_kind_recognises_runtime_download_and_config_errors() {
+        let runtime = skippy_ffi::NativeRuntimeLoadError::Load("missing symbol".into());
+        assert_eq!(
+            classify(anyhow::Error::from(runtime).context("load native runtime")),
+            "runtime_unavailable"
+        );
+        assert_eq!(
+            classify(
+                anyhow::Error::from(hf_hub::HFError::CacheNotEnabled)
+                    .context(skippy_model_hf::ModelDownloadError)
+            ),
+            "model_download"
+        );
+        let toml = toml::from_str::<toml::Value>("not = = toml").unwrap_err();
+        assert_eq!(
+            classify(anyhow::Error::from(toml).context("Invalid config")),
+            "config_invalid"
+        );
+    }
+
+    #[test]
+    fn failure_kind_ignores_error_text() {
+        // Only types count: a message that names a port or a runtime is other.
+        assert_eq!(
+            classify(anyhow::anyhow!(
+                "address already in use: native runtime load failed"
+            )),
+            "other"
+        );
+    }
+
+    #[test]
+    fn failure_kind_keeps_a_download_that_failed_on_io_a_download_failure() {
+        // HFError::Io wraps the io error transparently, so the chain shows the
+        // Hugging Face error, not a permission error.
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = anyhow::Error::from(hf_hub::HFError::from(denied))
+            .context(skippy_model_hf::ModelDownloadError);
+        assert_eq!(classify(error), "model_download");
+    }
+
+    #[test]
+    fn failure_kind_reads_the_resolution_error_the_installer_attaches_as_context() {
+        // install_native_runtime returns the resolver's error with the
+        // explanation as its outermost context, which the source chain does
+        // not show as a NativeRuntimeResolutionError.
+        let explanation = skippy_runtime_install::NativeRuntimeResolutionError {
+            summary: "no native runtime candidate qualifies".into(),
+            selection: skippy_runtime_install::RuntimeSelection::Recommended,
+            catalogs: Default::default(),
+            candidates: Vec::new(),
+            set_aside: 0,
+            enumeration_failed: false,
+        };
+        let error = anyhow::anyhow!("no compatible native runtime").context(explanation);
+        assert_eq!(classify(error.context("setup")), "runtime_unavailable");
+    }
+
+    #[test]
+    fn failure_kind_reads_the_cause_of_a_resolution_that_could_not_enumerate() {
+        // An unreadable runtime cache: the resolver keeps the io error below
+        // its explanation and marks the enumeration as failed.
+        let explanation = || skippy_runtime_install::NativeRuntimeResolutionError {
+            summary: "native runtime candidates could not be enumerated".into(),
+            selection: skippy_runtime_install::RuntimeSelection::Recommended,
+            catalogs: Default::default(),
+            candidates: Vec::new(),
+            set_aside: 0,
+            enumeration_failed: true,
+        };
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = anyhow::Error::new(denied)
+            .context("read native runtime cache")
+            .context(explanation());
+        assert_eq!(classify(error), "permission_denied");
+        // With no io cause it is still a runtime the node could not get.
+        let error = anyhow::anyhow!("cache index is corrupt").context(explanation());
+        assert_eq!(classify(error), "runtime_unavailable");
+    }
+
+    #[test]
+    fn failure_kind_reads_a_runtime_archive_that_could_not_be_fetched() {
+        // download_runtime_archive attaches NativeRuntimeFetchError to the
+        // HTTP failure, a 404 for a selected runtime's archive included.
+        let error = anyhow::anyhow!("HTTP status client error (404 Not Found)").context(
+            skippy_runtime_install::NativeRuntimeFetchError(
+                "native runtime request failed for https://example.invalid/runtime.tar.gz".into(),
+            ),
+        );
+        assert_eq!(
+            classify(error.context("install runtime")),
+            "runtime_unavailable"
+        );
+    }
+
+    #[test]
+    fn failure_kind_leaves_a_hub_metadata_lookup_out_of_model_downloads() {
+        // `models show` gets a Hub error for repository metadata without
+        // reaching a file download.
+        let lookup = anyhow::Error::from(hf_hub::HFError::CacheNotEnabled).context("show model");
+        assert_eq!(classify(lookup), "other");
+    }
 
     #[test]
     fn serve_properties_describe_shape_without_naming_anything() {
