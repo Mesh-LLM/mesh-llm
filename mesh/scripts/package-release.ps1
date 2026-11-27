@@ -350,6 +350,16 @@ function Write-ProductManifest {
     if ($runtime.backend.kind -ne $expectedKind) {
         throw "native runtime backend is $($runtime.backend.kind), expected $expectedKind for $Backend"
     }
+    if ($runtime.platform.os -ne "windows" -or $runtime.platform.arch -ne "x86_64" -or
+        $runtime.platform.target -ne "x86_64-pc-windows-msvc") {
+        throw "native runtime platform does not match Windows x86_64 host target"
+    }
+    if ($expectedKind -eq "cuda" -and $env:MESH_CUDA_VERSION) {
+        $requestedMajor = $env:MESH_CUDA_VERSION.Split('.')[0]
+        if ([string]$runtime.backend.cuda.toolkit_major -ne $requestedMajor) {
+            throw "native runtime CUDA toolkit does not match requested major $requestedMajor"
+        }
+    }
     if ($runtime.skippy_abi -ne $contract.skippy_abi) {
         throw "native runtime ABI $($runtime.skippy_abi) does not match host-required $($contract.skippy_abi)"
     }

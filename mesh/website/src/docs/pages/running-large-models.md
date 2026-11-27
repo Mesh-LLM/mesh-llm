@@ -57,7 +57,7 @@ flowchart LR
   Ready -.-> Middle
 ```
 
-The [architecture hub](/docs/pages/architecture/) explains how Mesh routes requests into Skippy. See the [model package specification](/docs/pages/model-package-spec/) for the manifest schema, artifact checksums, and stage-selection rules. For package publishing and validation, see [Layer package repositories](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/LAYER_PACKAGE_REPOS.md).
+The [architecture hub](/docs/pages/architecture/) explains how Mesh routes requests into Skippy. See the [model package specification](/docs/pages/model-package-spec/) for the manifest schema, artifact checksums, and stage-selection rules. For package publishing and validation, see [Layer package repositories](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md).
 
 Named discovery publishes mesh discovery information to Nostr. It is public even
 when the name is only shared with your team. For restricted membership, configure

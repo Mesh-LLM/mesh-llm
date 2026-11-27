@@ -14,9 +14,9 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Pin an API request to a provider, inspect prices, or exclude peers | [PROVIDER_SELECTION.md](PROVIDER_SELECTION.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
 | Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Python](sdk/python.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
-| Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) |
-| Embedding, rerank, encoder-decoder, OCR, and audio models | [NON_CHAT_MODELS.md](../../skippy/docs/NON_CHAT_MODELS.md) |
-| Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](../../skippy/docs/LAYER_PACKAGE_REPOS.md) |
+| Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md) |
+| Embedding, rerank, encoder-decoder, OCR, and audio models | [NON_CHAT_MODELS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/NON_CHAT_MODELS.md) |
+| Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md) |
 | Goose, Claude Code, OpenCode, Pi, curl, blackboard | [AGENTS.md](AGENTS.md) |
 | Command-by-command CLI reference | [CLI.md](CLI.md) |
 | Local request ledger, retention, artifacts, and maintenance | [LOGGING.md](LOGGING.md) |
@@ -26,24 +26,23 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 
 | Doc | What it covers |
 |---|---|
-| [skippy/FAMILY_STATUS.md](../../skippy/docs/FAMILY_STATUS.md) | Certified family and split status |
-| [skippy/NEW_MODEL_ONBOARDING.md](../../skippy/docs/NEW_MODEL_ONBOARDING.md) | New-model split/certification intake checklist |
-| [skippy/FAMILY_CERTIFY.md](../../skippy/docs/FAMILY_CERTIFY.md) | Certification workflow for new families |
-| [skippy/TOPOLOGY_PLANNER.md](../../skippy/docs/TOPOLOGY_PLANNER.md) | Stage topology planning behavior |
-| [skippy/CONFIGURATION.md](../../skippy/docs/CONFIGURATION.md) | Authoritative operator matrix for Skippy config keys and rejection boundaries |
-| [skippy/PROMPT_CACHE.md](../../skippy/docs/PROMPT_CACHE.md) | OpenAI prompt-prefix cache behavior, defaults, telemetry, and benchmark flow |
-| [skippy/KV_CACHE_DISK.md](../../skippy/docs/KV_CACHE_DISK.md) | Operator guide for the node-local disk prompt cache (L3): config, modes, status, prune/clear, corruption handling |
-| [skippy/PIPELINED_VERIFY_WINDOW.md](../../skippy/docs/PIPELINED_VERIFY_WINDOW.md) | Native MTP, anchored N-gram extension, VerifyWindow protocol, pipeline behavior, and telemetry |
-| [skippy/SUFFIX_NGRAM_PROPOSER.md](../../skippy/docs/SUFFIX_NGRAM_PROPOSER.md) | Long exact-suffix proposer design, invariants, telemetry, and benchmark contract |
-| [skippy/DATA_FLOW.md](../../skippy/docs/DATA_FLOW.md) | Stage data flow and transport details |
-| [skippy/LLAMA_PARITY.md](../../skippy/docs/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
-| [specs/layer-package-repos.md](../../skippy/docs/specs/layer-package-repos.md) | Manifest schema and package artifact rules |
+| [skippy/FAMILY_STATUS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_STATUS.md) | Certified family and split status |
+| [skippy/NEW_MODEL_ONBOARDING.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/NEW_MODEL_ONBOARDING.md) | New-model split/certification intake checklist |
+| [skippy/FAMILY_QUALIFICATION.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_QUALIFICATION.md) | Family qualification workflow |
+| [skippy/TOPOLOGY_PLANNER.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/TOPOLOGY_PLANNER.md) | Stage topology planning behavior |
+| [skippy/CONFIGURATION.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/CONFIGURATION.md) | Authoritative operator matrix for Skippy config keys and rejection boundaries |
+| [skippy/PROMPT_CACHE.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/PROMPT_CACHE.md) | OpenAI prompt-prefix cache behavior, defaults, telemetry, and benchmark flow |
+| [skippy/PIPELINED_VERIFY_WINDOW.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/PIPELINED_VERIFY_WINDOW.md) | Native MTP, anchored N-gram extension, VerifyWindow protocol, pipeline behavior, and telemetry |
+| [skippy/SUFFIX_NGRAM_PROPOSER.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SUFFIX_NGRAM_PROPOSER.md) | Long exact-suffix proposer design, invariants, telemetry, and benchmark contract |
+| [skippy/DATA_FLOW.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/DATA_FLOW.md) | Stage data flow and transport details |
+| [skippy/LLAMA_PARITY.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LLAMA_PARITY.md) | Remaining llama.cpp parity queue |
+| [specs/layer-package-repos.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md) | Manifest schema and package artifact rules |
 | [specs/mesh-setup-installer.md](specs/mesh-setup-installer.md) | Bootstrap installer and `mesh-llm setup` ownership boundary |
 | [specs/private-routing.md](specs/private-routing.md) | `@private`/`@incognito` requests that stay on your own nodes, and how to list them |
 | [specs/request-tiers.md](specs/request-tiers.md) | Serving local and owned requests before mesh requests: tiers, admission order, KV eviction and cache isolation |
-| [SKIPPY.md](../../skippy/docs/SKIPPY.md) | Skippy integration readiness and parity notes |
+| [Skippy README](https://github.com/Mesh-LLM/skippy/blob/main/README.md) | Runtime ownership, build, and release entry point |
 
-Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serving workflows.
+Use [SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 
 ## Other references
 
@@ -52,14 +51,14 @@ Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serv
 | [BENCHMARKS.md](BENCHMARKS.md) | Historical benchmark numbers from before the engine moved to Skippy |
 | [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
-| [design/NATIVE_RUNTIMES.md](../../skippy/docs/design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
+| [design/NATIVE_RUNTIMES.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
 | [design/EMITTER_HOOKS.md](design/EMITTER_HOOKS.md) | Inventory of hook, callback, and emitter surfaces plus readiness ownership. |
 | [plugins/](plugins/) | Plugin architecture, web UI projection contract, exemplars, and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
 | [specs/inference-audit-conformance.md](specs/inference-audit-conformance.md) | Draft bar for re-checkable behavioural audits: reference identity, scoring setup, thresholds, verdicts, audit corpus, records |
-| [design/OPENAI_GUARDRAILS.md](../../skippy/docs/design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
+| [design/OPENAI_GUARDRAILS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
 
 Per-crate docs stay with their crates. The main binary crate overview lives at
 [../crates/mesh-llm/README.md](../crates/mesh-llm/README.md), and the web
@@ -76,7 +75,7 @@ Shared routing target ownership lives at
 
 Developers migrating from backend-linked release commands should use the
 host/runtime/product commands in
-[design/NATIVE_RUNTIMES.md](../../skippy/docs/design/NATIVE_RUNTIMES.md#development-loop-boundary).
+[design/NATIVE_RUNTIMES.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/NATIVE_RUNTIMES.md#development-loop-boundary).
 Installed and portable products keep their selected runtime beside the neutral
 host or in the documented package-owned directory, with the user cache only as
 a fallback.

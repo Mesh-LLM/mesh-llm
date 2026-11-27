@@ -49,7 +49,20 @@ bundle output="/tmp/mesh-llm-bundle.tar.gz": release-build
     staging_dir="$(mktemp -d)"
     trap 'rm -rf "$staging_dir"' EXIT
     version="v$("{{ mesh_bin }}" --version | awk '{print $NF}')"
-    scripts/package-release.sh "$version" "$staging_dir"
+    runtime_dir="${MESH_LLM_NATIVE_RUNTIME_DIR:-}"
+    if [[ -z "$runtime_dir" ]]; then
+        case "$(uname -s)" in
+            Darwin) backend=metal ;;
+            Linux) backend=cpu ;;
+            *) echo "just bundle supports macOS and Linux" >&2; exit 1 ;;
+        esac
+        scripts/build-skippy-runtime.sh --profile release --backend "$backend"
+        shopt -s nullglob
+        manifests=(target/release/native-runtimes/*/manifest.json)
+        [[ "${#manifests[@]}" == 1 ]] || { echo "expected one packaged $backend runtime" >&2; exit 1; }
+        runtime_dir="$(dirname "${manifests[0]}")"
+    fi
+    MESH_LLM_NATIVE_RUNTIME_DIR="$runtime_dir" scripts/package-release.sh "$version" "$staging_dir"
     stable_archive=""
     for candidate in "$staging_dir"/mesh-llm-*.tar.gz; do
         [[ -f "$candidate" ]] || continue
@@ -68,5 +81,6 @@ bundle output="/tmp/mesh-llm-bundle.tar.gz": release-build
     fi
     mkdir -p "$(dirname "{{ output }}")"
     cp "$stable_archive" "{{ output }}"
-    cp "$stable_archive.sha256" "{{ output }}.sha256"
+    archive_sha="$({ shasum -a 256 "{{ output }}" 2>/dev/null || sha256sum "{{ output }}"; } | cut -d ' ' -f 1)"
+    printf '%s  %s\n' "$archive_sha" "$(basename "{{ output }}")" > "{{ output }}.sha256"
     echo "Bundle: {{ output }} ($(du -sh "{{ output }}" | cut -f1))"

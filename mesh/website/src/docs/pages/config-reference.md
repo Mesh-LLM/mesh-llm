@@ -494,7 +494,7 @@ deployment environment and must never be persisted in `config.toml`.
 
 ## Internal status matrix
 
-[`skippy/docs/CONFIGURATION.md`](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CONFIGURATION.md)
+[`skippy/docs/CONFIGURATION.md`](https://github.com/Mesh-LLM/skippy/blob/main/docs/CONFIGURATION.md)
 is the internal, per-field status inventory this reference is generated
 against: owner module, translation target, supported serving modes, and test
 evidence for every key path above. Keep both in sync; a compile-time test in

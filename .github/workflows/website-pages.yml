@@ -16,6 +16,7 @@ on:
       - "mesh/crates/**"
       - "scripts/build-crate-docs.sh"
       - "scripts/publish-crates.sh"
+      - "scripts/published-crates.sh"
       - ".github/workflows/website-pages.yml"
 
 permissions:

@@ -78,6 +78,14 @@ if [[ "$1" == "--ref" ]]; then
 fi
 
 source_dir="$(cd "$1" && pwd -P)"
+cargo_source_dir="$source_dir"
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        # Cargo is a native Windows executable and does not apply Git Bash's
+        # /c/... path translation to paths read from TOML.
+        cargo_source_dir="$(cygpath -m "$source_dir")"
+        ;;
+esac
 case "$source_dir" in
     "$REPO_ROOT"/.deps/* | "$REPO_ROOT"/target/*) ;;
     "$REPO_ROOT"/*)
@@ -98,7 +106,7 @@ set_skippy_versions "$source_version"
     echo "[patch.crates-io]"
     for manifest in "$source_dir"/crates/*/Cargo.toml; do
         name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$manifest" | head -1)"
-        echo "$name = { path = \"$(dirname "$manifest")\" }"
+        echo "$name = { path = \"$cargo_source_dir/crates/$name\" }"
     done
 } >"$OVERRIDE"
 "$REPO_ROOT/scripts/verify-skippy-source.sh" "$source_dir"

@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -328,15 +329,6 @@ registry_dep_pairs="$(
         | .dependencies[] | select(.kind != "dev" and .path != null)
         | $dirs[.path] // empty | select(. != $name) | "\($name) \(.)"'
 )"
-# Publishable in Cargo terms but not released to crates.io.
-not_released=(mesh-llm mesh-llm-ffi mesh-llm-nodejs mesh-llm-test-harness)
-publishable="$(
-    printf '%s' "$publication_metadata" |
-        jq -r --args '.packages[] | select(.publish != []) | .name | select(IN($ARGS.positional[]) | not)' \
-            "${not_released[@]}"
-)"
-[[ -n "$publishable" ]] || { echo "cargo metadata returned no publishable crates" >&2; exit 1; }
-
 unpublished_registry_deps() {
     local crate="$1"
     printf '%s\n' "$registry_dep_pairs" | awk -v crate="$crate" '$1 == crate { print $2 }'
@@ -355,18 +347,10 @@ should_skip_initial_dry_run() {
     return 1
 }
 
-# Dependencies before dependents.
 publish_crates=()
 while IFS= read -r crate; do
     [[ -n "$crate" ]] && publish_crates+=("$crate")
-done < <(
-    {
-        printf '%s\n' "$publishable" | awk '{ print $1, $1 }'
-        printf '%s\n' "$registry_dep_pairs" |
-            awk 'NR == FNR { keep[$1] = 1; next } NF == 2 && ($1 in keep) && ($2 in keep) { print $2, $1 }' \
-                <(printf '%s\n' "$publishable") -
-    } | tsort
-)
+done < <("$SCRIPT_DIR/published-crates.sh")
 
 for index in "${!publish_crates[@]}"; do
     crate="${publish_crates[$index]}"

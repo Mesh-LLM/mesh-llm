@@ -94,4 +94,26 @@ grep -q 'skippy-runtime = { version = "=0.80.3"' "$fixture/Cargo.toml"
 [[ "$(cat "$fixture/Cargo.lock")" == 'version = 4' ]]
 "$fixture/scripts/skippy-source.sh" --pinned >/dev/null
 [[ "$(cat "$fixture/Cargo.lock")" == 'version = 4' ]]
+mkdir -p "$work/windows-stubs"
+cat >"$work/windows-stubs/uname" <<'EOF'
+#!/bin/sh
+echo MINGW64_NT-10.0
+EOF
+cat >"$work/windows-stubs/cygpath" <<'EOF'
+#!/bin/sh
+echo C:/mesh/.deps/skippy
+EOF
+cat >"$work/windows-stubs/cargo" <<'EOF'
+#!/bin/sh
+cat <<'JSON'
+{"packages":[
+  {"name":"skippy-ffi","source":null,"manifest_path":"C:\\mesh\\.deps\\skippy\\crates\\skippy-ffi\\Cargo.toml"},
+  {"name":"skippy-runtime","source":null,"manifest_path":"C:\\mesh\\.deps\\skippy\\crates\\skippy-runtime\\Cargo.toml"}
+]}
+JSON
+EOF
+chmod +x "$work/windows-stubs/"*
+PATH="$work/windows-stubs:$PATH" "$fixture/scripts/skippy-source.sh" "$checkout" >/dev/null
+grep -Fq 'skippy-ffi = { path = "C:/mesh/.deps/skippy/crates/skippy-ffi" }' "$fixture/.cargo/skippy-local.toml"
+"$fixture/scripts/skippy-source.sh" --pinned >/dev/null
 echo 'skippy source: ok'

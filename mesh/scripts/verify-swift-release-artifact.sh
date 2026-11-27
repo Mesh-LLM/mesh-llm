@@ -81,11 +81,25 @@ plutil -lint "$XCFRAMEWORK_PATH/Info.plist" >/dev/null
 # Every slice listed in Info.plist must exist and be a valid Mach-O library.
 SLICES="$(plutil -extract AvailableLibraries json -o - "$XCFRAMEWORK_PATH/Info.plist" | jq -r '.[] | "\(.LibraryIdentifier)/\(.LibraryPath)"')"
 [[ -n "$SLICES" ]] || { echo "XCFramework lists no libraries" >&2; exit 1; }
+if [[ "$EXPECTED_MODE" == full || "$EXPECTED_MODE" == host-only ]]; then
+  expected='["macos/"]'
+  if [[ "$EXPECTED_MODE" == full ]]; then
+    expected='["ios/", "ios/maccatalyst", "ios/simulator", "macos/"]'
+  fi
+  plutil -extract AvailableLibraries json -o - "$XCFRAMEWORK_PATH/Info.plist" |
+    jq -e --argjson expected "$expected" '
+      ([.[] | "\(.SupportedPlatform)/\(.SupportedPlatformVariant // "")"] | sort) == ($expected | sort) and
+      all(.[]; .SupportedArchitectures == ["arm64"])
+    ' >/dev/null || { echo "XCFramework platform slices or architectures do not match $EXPECTED_MODE" >&2; exit 1; }
+fi
 while IFS= read -r rel; do
   library="$XCFRAMEWORK_PATH/$rel"
   [[ -e "$library" ]] || { echo "missing XCFramework slice: $rel" >&2; exit 1; }
   [[ -d "$library" ]] && library="$library/$(basename "${library%.framework}")"
   lipo -info "$library" >/dev/null
+  if [[ "$EXPECTED_MODE" == full || "$EXPECTED_MODE" == host-only ]]; then
+    [[ "$(lipo -archs "$library")" == arm64 ]] || { echo "XCFramework slice is not arm64: $rel" >&2; exit 1; }
+  fi
 done <<<"$SLICES"
 
 CONSUMER_DIR="$TMP_ROOT/consumer"

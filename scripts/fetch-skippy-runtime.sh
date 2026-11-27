@@ -61,7 +61,9 @@ package="$(jq -r --arg os "$os" --arg arch "$arch" --arg kind "$backend" --arg t
 [[ -n "$package" ]] || none "Skippy v$version has no $backend$toolkit package for $os $arch"
 IFS=$'\t' read -r package_url package_sha min_glibc <<<"$package"
 if [[ -n "$min_glibc" ]]; then
-    glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | cut -d ' ' -f 2)"
+    glibc_probe="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+    glibc="${glibc_probe##* }"
+    [[ "$glibc_probe" == glibc\ * ]] || glibc=""
     [[ -n "$glibc" && "$(printf '%s\n' "$min_glibc" "$glibc" | sort -V | head -1)" == "$min_glibc" ]] ||
         none "the package needs glibc $min_glibc; this machine has ${glibc:-none}"
 fi

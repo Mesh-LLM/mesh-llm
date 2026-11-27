@@ -8,7 +8,7 @@ runners.
 
 | File | Starts on | What it does |
 |---|---|---|
-| `ci.yml` | pull request (opened, synchronize, reopened, edited), push to `main`, manual with optional `skippy_ref` | Lint, Rust tests, console checks, CPU inference smoke |
+| `ci.yml` | pull request (opened, synchronize, reopened, edited), push to `main`, manual with optional `skippy_ref` | Lint, Rust tests, console and public website checks, CPU inference smoke |
 | `release.yml` | manual with `version` and `canary` | Builds, signs, checks and publishes a release |
 | `website-pages.yml` | push to `main` touching the website, installers, crates or build files; manual | Builds the website and deploys it to GitHub Pages |
 | `fly-deploy-console.yml` | manual with optional `ref` | Deploys the console app to Fly |
@@ -23,6 +23,7 @@ runners.
 | Lint | `ubuntu-24.04` | `just lint` |
 | Test | `ubuntu-24.04`, `macos-15`, `windows-2022` | `just test-rust --locked --no-fail-fast` |
 | Console | `ubuntu-24.04` | `just test-ui` |
+| Public website | `ubuntu-24.04` | `scripts/ci-website.sh` |
 | Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/fetch-skippy-runtime.sh` (pinned release) or `scripts/ci-skippy-runtime.sh` (named ref), `just mesh`, `just smoke`, `just test-with-runtime` |
 
 `just lint` is `cargo fmt --all -- --check`, Clippy on the workspace with
@@ -36,6 +37,7 @@ cache is sccache's GitHub backend.
 
 The workflow has `contents: read` and uses no secret or variable. A pull
 request cancels its own earlier run.
+`PR / Website` requires the public website build and data checks.
 
 ## `release.yml` jobs
 
@@ -50,6 +52,10 @@ request cancels its own earlier run.
 | `node_sdk` | `macos-15`, `ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022` | Node SDK addons |
 | `publish` | `ubuntu-24.04` | Publishes the GitHub release (`contents: write`); skipped for a canary |
 | `dispatch_packaging_release` | `ubuntu-24.04` | Fails on purpose; runs only if `MESH_PACKAGING_DISPATCH` is `true` and the release is not a prerelease |
+
+The publish job calls `scripts/create-compatibility-aliases.sh` for the
+0.80.0 CUDA and ROCm archive names. The Vulkan alias is withheld until a
+matching Skippy runtime is published.
 
 Runs of this workflow do not cancel each other. See `RELEASE.md` for the steps
 and for what is not yet checked. Apart from local runs of its scripts, this

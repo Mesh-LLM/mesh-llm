@@ -86,7 +86,7 @@ pub mod console {
 #[cfg(feature = "serving")]
 pub mod native_runtime {
     pub use mesh_llm_embedded_runtime::native_runtime::{
-        CURRENT_MESH_VERSION, current_runtime_release, default_manifest_url,
+        CURRENT_MESH_VERSION, current_manifest_url, current_runtime_release, default_manifest_url,
         default_native_runtime_cache, default_release_manifest_url, discover_local_native_runtimes,
         discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
         install_native_runtime, load_release_manifest, load_release_manifest_with_sources,

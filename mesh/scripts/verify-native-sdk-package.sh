@@ -33,12 +33,15 @@ for input in "$@"; do
         artifact_dir="${entries[0]}"
     fi
     manifest="$artifact_dir/manifest.json"
-    jq -e '.schema_version and .artifact_id and .sdk_version and .target_triple and .library and .uniffi_library and .library_sha256' "$manifest" >/dev/null ||
+    jq -e '.schema_version == 1 and .artifact_id and .sdk_version and .target_triple and .library and .uniffi_library and .library_sha256 and
+        (.features | type == "array" and all(.[]; type == "string"))' "$manifest" >/dev/null ||
         { echo "invalid native SDK manifest: $manifest" >&2; exit 1; }
     for rel in $(jq -r '.library, .uniffi_library' "$manifest"); do
         [[ "$rel" != /* && "/$rel/" != *"/../"* && -f "$artifact_dir/$rel" ]] || { echo "manifest library missing or unsafe: $rel" >&2; exit 1; }
     done
-    actual="$(shasum -a 256 "$artifact_dir/$(jq -r .library "$manifest")" 2>/dev/null || sha256sum "$artifact_dir/$(jq -r .library "$manifest")")"
-    [[ "${actual%% *}" == "$(jq -r .library_sha256 "$manifest")" ]] || { echo "library_sha256 mismatch: $manifest" >&2; exit 1; }
+    for rel in $(jq -r '.library, .uniffi_library' "$manifest"); do
+        actual="$(shasum -a 256 "$artifact_dir/$rel" 2>/dev/null || sha256sum "$artifact_dir/$rel")"
+        [[ "${actual%% *}" == "$(jq -r .library_sha256 "$manifest")" ]] || { echo "library_sha256 mismatch for $rel: $manifest" >&2; exit 1; }
+    done
     echo "verified native SDK artifact: $artifact_dir"
 done

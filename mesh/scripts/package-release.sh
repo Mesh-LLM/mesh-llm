@@ -310,7 +310,8 @@ file_sha256() {
 # host and runtime, refusing a runtime whose backend or ABI the host can't use.
 write_product_manifest() {
     local bundle_dir="$1" host="$2" runtime="$3" version="${4#v}" backend="$5"
-    local contract runtime_manifest="$runtime/manifest.json" expected_kind
+    local contract runtime_manifest="$runtime/manifest.json" expected_kind expected_os expected_arch
+    local host_sha runtime_sha manifest_sha cuda_major
     case "$backend" in
         cuda|cuda-blackwell) expected_kind=cuda ;;
         rocm|hip) expected_kind=rocm ;;
@@ -323,14 +324,29 @@ write_product_manifest() {
         { echo "native runtime manifest requires schema_version 2: $runtime_manifest" >&2; exit 1; }
     jq -e --arg k "$expected_kind" '.runtime.backend.kind == $k' "$runtime_manifest" >/dev/null ||
         { echo "native runtime backend is $(jq -c .runtime.backend.kind "$runtime_manifest"), expected $expected_kind for $backend" >&2; exit 1; }
+    IFS=/ read -r expected_os expected_arch <<<"$(normalized_release_platform)"
+    jq -e --arg os "$expected_os" --arg arch "$expected_arch" --arg target "$HOST_TARGET_TRIPLE" \
+        '.runtime.platform.os == $os and .runtime.platform.arch == $arch and .runtime.platform.target == $target' \
+        "$runtime_manifest" >/dev/null ||
+        { echo "native runtime platform does not match host target $HOST_TARGET_TRIPLE" >&2; exit 1; }
+    cuda_major="${MESH_CUDA_VERSION:-}"
+    cuda_major="${cuda_major%%.*}"
+    if [[ "$expected_kind" == cuda && -n "${MESH_CUDA_VERSION:-}" ]]; then
+        jq -e --arg major "$cuda_major" '(.runtime.backend.cuda.toolkit_major | tostring) == $major' \
+            "$runtime_manifest" >/dev/null ||
+            { echo "native runtime CUDA toolkit does not match requested major $cuda_major" >&2; exit 1; }
+    fi
     jq -e --argjson c "$contract" '.runtime.skippy_abi == $c.skippy_abi' "$runtime_manifest" >/dev/null ||
         { echo "native runtime ABI $(jq -c .runtime.skippy_abi "$runtime_manifest") does not match host-required $(jq -c .skippy_abi <<<"$contract")" >&2; exit 1; }
+    host_sha="$(file_sha256 "$host")" || exit 1
+    runtime_sha="$(tree_sha256 "$runtime")" || exit 1
+    manifest_sha="$(file_sha256 "$runtime_manifest")" || exit 1
     jq -n \
         --arg version "$version" --arg backend "$backend" --argjson contract "$contract" \
         --slurpfile runtime "$runtime_manifest" \
-        --arg host_path "${host#"$bundle_dir/"}" --arg host_sha "$(file_sha256 "$host")" \
-        --arg runtime_path "${runtime#"$bundle_dir/"}" --arg runtime_sha "$(tree_sha256 "$runtime")" \
-        --arg manifest_sha "$(file_sha256 "$runtime_manifest")" \
+        --arg host_path "${host#"$bundle_dir/"}" --arg host_sha "$host_sha" \
+        --arg runtime_path "${runtime#"$bundle_dir/"}" --arg runtime_sha "$runtime_sha" \
+        --arg manifest_sha "$manifest_sha" \
         '{schema_version: 2, contract: "mesh-llm-product-v2", mesh_version: $version, backend: $backend,
           host: {path: $host_path, sha256: $host_sha, required_skippy_abi: $contract.skippy_abi},
           runtime: {id: $runtime[0].runtime.id, release_version: $runtime[0].runtime.release_version,

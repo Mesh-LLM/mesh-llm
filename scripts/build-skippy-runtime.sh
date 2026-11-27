@@ -88,6 +88,25 @@ if [[ -z "$backend" ]]; then
     esac
 fi
 [[ "$backend" != hip ]] || backend=rocm
+cuda_toolkit=""
+if [[ "$backend" == cuda ]]; then
+    cuda_toolkit="$(nvcc --version 2>/dev/null | sed -n 's/.*release \([0-9]*\)\..*/\1/p' | head -1 || true)"
+fi
+
+source_runtime_is_usable() {
+    local stamp="$1" expected_kind="$2" expected_version="$3" manifest found=0
+    [[ "$(cat "$out/.built-from" 2>/dev/null || true)" == "$stamp" ]] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    for manifest in "$out"/*/manifest.json; do
+        [[ -f "$manifest" ]] || continue
+        jq -e --arg kind "$expected_kind" --arg version "$expected_version" \
+            '.schema_version == 2 and .runtime.backend.kind == $kind and .runtime.release_version == $version and
+             (.runtime.skippy_abi | type == "string")' \
+            "$manifest" >/dev/null || return 1
+        found=1
+    done
+    ((found == 1))
+}
 
 source_state="$("$REPO_ROOT/scripts/skippy-source.sh")"
 if [[ "$source_state" == local\ * ]]; then
@@ -95,8 +114,14 @@ if [[ "$source_state" == local\ * ]]; then
     stamp=""
 else
     read -r _ url rev <<<"$source_state"
+    read -r _ _ pin_version <<<"$("$REPO_ROOT/scripts/skippy-pin.sh")"
+    source_stamp="$rev $backend $cuda_toolkit $cuda_arch $rocm_arch"
+    if source_runtime_is_usable "$source_stamp" "$backend" "$pin_version"; then
+        echo "Skippy runtime: $out ($backend, already built from ${rev:0:9})"
+        exit 0
+    fi
     if [[ -z "$from_source$cuda_arch$rocm_arch" ]]; then
-        stamp="release $rev $backend"
+        stamp="release $rev $backend $cuda_toolkit"
         if [[ "$(cat "$out/.built-from" 2>/dev/null || true)" == "$stamp" ]]; then
             echo "Skippy runtime: $out ($backend, already downloaded for ${rev:0:9})"
             exit 0
@@ -111,7 +136,7 @@ else
         echo "Building it from source instead." >&2
     fi
     checkout="$REPO_ROOT/.deps/skippy"
-    stamp="$rev $backend $cuda_arch $rocm_arch"
+    stamp="$source_stamp"
     if [[ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)" != "$rev" ]]; then
         mkdir -p "$checkout"
         [[ -d "$checkout/.git" ]] || git -C "$checkout" init -q
@@ -120,7 +145,7 @@ else
     fi
 fi
 
-if [[ -n "$stamp" && "$(cat "$out/.built-from" 2>/dev/null || true)" == "$stamp" ]]; then
+if [[ -n "$stamp" ]] && source_runtime_is_usable "$stamp" "$backend" "$pin_version"; then
     echo "Skippy runtime: $out ($backend, already built from ${rev:0:9})"
     exit 0
 fi

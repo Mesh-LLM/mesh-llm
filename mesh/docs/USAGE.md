@@ -81,7 +81,7 @@ To pin an inference request to a specific mesh provider, use the HTTP API's
 fail-closed behavior, and paid-provider requirements.
 
 Mesh workflow details live in [MESHES.md](MESHES.md). Big-model split serving
-lives in [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md).
+lives in [SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md).
 
 If you run `mesh-llm` with no arguments, it prints `--help` and exits. It does not start the console or bind ports until you choose a mode.
 Bare `mesh-llm serve` loads startup models from `[[models]]` in `~/.mesh-llm/config.toml`.
@@ -1154,7 +1154,7 @@ verify_window_pipeline_depth = 2
 Suffix can also run without MTP by setting `strategy = "ngram-suffix"` and
 omitting the extension controls. Layer packages may declare `ngram-suffix` as
 a request-local proposer and standalone strategy. See
-[Suffix N-gram Proposer](../../skippy/docs/SUFFIX_NGRAM_PROPOSER.md) for the lookup
+[Suffix N-gram Proposer](https://github.com/Mesh-LLM/skippy/blob/main/docs/SUFFIX_NGRAM_PROPOSER.md) for the lookup
 contract, telemetry, and benchmark requirements.
 
 ### DFlash block drafts
@@ -1302,12 +1302,12 @@ input-grounded output and can be a net loss on freeform prose, so measure the
 target workload rather than assuming an uplift.
 
 For package-authoring rules, see
-[Layer Package Repositories](../../skippy/docs/specs/layer-package-repos.md#generation-defaults).
+[Layer Package Repositories](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md#generation-defaults).
 For the wire shape of the `generation.speculative_decoding` manifest field, see
-[Skippy Model Package v2 Schema](../../skippy/docs/design/SKIPPY_PACKAGE_V2_SCHEMA.md#generation).
+[Skippy Model Package v2 Schema](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/SKIPPY_PACKAGE_V2_SCHEMA.md#generation).
 For strategy diagrams, CLI overrides, and the VerifyWindow telemetry used to
 evaluate a configuration, see
-[Pipelined VerifyWindow Decode](../../skippy/docs/PIPELINED_VERIFY_WINDOW.md).
+[Pipelined VerifyWindow Decode](https://github.com/Mesh-LLM/skippy/blob/main/docs/PIPELINED_VERIFY_WINDOW.md).
 
 ## Lemonade integration
 

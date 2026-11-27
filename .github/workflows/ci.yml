@@ -69,6 +69,20 @@ jobs:
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - run: just test-ui
 
+  website:
+    name: Public website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+      - run: scripts/ci-website.sh
+
   # Real inference through MeshLLM on Skippy's CPU runtime.
   #
   # By default this uses the Skippy crates.io release pinned in Cargo.toml. To test a
@@ -189,7 +203,7 @@ jobs:
   required:
     name: PR / ${{ matrix.lane }}
     if: ${{ always() && github.event_name == 'pull_request' }}
-    needs: [lint, test, ui, smoke]
+    needs: [lint, test, ui, website, smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     strategy:
@@ -199,5 +213,5 @@ jobs:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "lint, test, ui, smoke: $RESULTS"
-          [[ "$RESULTS" == "success success success success" ]]
+          echo "lint, test, ui, website, smoke: $RESULTS"
+          [[ "$RESULTS" == "success success success success success" ]]

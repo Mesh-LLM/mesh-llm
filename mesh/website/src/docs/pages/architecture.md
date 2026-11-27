@@ -189,9 +189,9 @@ Start with [Mesh workflows](/docs/pages/private-meshes/) for operators, [Running
 - [Mesh workflows](/docs/pages/private-meshes/) — discovery, join tokens, admission policy, and client-only deployment shapes.
 - [Skippy split serving](/docs/pages/running-large-models/) — package refs, stage planning, readiness, caches, and diagnostics.
 - [Model package specification](/docs/pages/model-package-spec/) — `model-package.json` schema, artifact integrity, stage selection, and compatibility rules.
-- [Skippy integration notes](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/SKIPPY.md) — execution/runtime ownership and migration boundaries.
-- [Layer package repositories](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/LAYER_PACKAGE_REPOS.md) — durable package layout and validation.
-- [Native runtime artifacts](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/design/NATIVE_RUNTIMES.md) — platform/backend packaging and ABI compatibility.
+- [Skippy repository](https://github.com/Mesh-LLM/skippy/blob/main/README.md) — runtime source, build, and releases.
+- [Layer package repositories](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md) — durable package layout and validation.
+- [Native runtime artifacts](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/NATIVE_RUNTIMES.md) — platform/backend packaging and ABI compatibility.
 - [Protocol compatibility](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/design/message_protocol.md) — ALPN lanes, framed protobuf messages, and mixed-version rules.
 - [Plugin architecture](/docs/pages/plugin-architecture/) — host projections, plugin processes, capabilities, and side streams.
 - [SDK embedding](/docs/pages/sdk/) — embed a client or serving node in Rust, Node.js, JVM/Android, or Swift.

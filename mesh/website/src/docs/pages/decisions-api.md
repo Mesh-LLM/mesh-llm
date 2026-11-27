@@ -98,7 +98,7 @@ multi-token candidate likelihoods; ordered score arrays correspond to the
 original choices. Questions remain independent and retain request order even
 when scheduled concurrently. These probabilities are relative candidate mass,
 not calibrated truth. Laya and DiffusionGemma responses retain their existing
-shape. See the [causal decision guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CAUSAL_DECISIONS.md)
+shape. See the [causal decision guide](https://github.com/Mesh-LLM/skippy/blob/main/docs/CAUSAL_DECISIONS.md)
 for exact scoring, accounting and compatibility rules.
 
 Prefer single-token labels with descriptions explaining their meaning; check

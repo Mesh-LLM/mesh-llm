@@ -8,11 +8,19 @@ lint:
     shellcheck scripts/*.sh scripts/tests/*.sh mesh/scripts/*.sh
     scripts/tests/skippy-pin-test.sh
     scripts/tests/skippy-source-test.sh
+    scripts/tests/build-skippy-runtime-test.sh
+    scripts/tests/fetch-skippy-runtime-test.sh
     scripts/tests/ci-resolve-skippy-test.sh
     scripts/tests/ci-skippy-runtime-test.sh
     scripts/tests/install-asset-test.sh
     scripts/tests/check-host-imports-test.sh
     scripts/tests/wait-packaging-receipt-test.sh
+    scripts/tests/package-runtime-platform-test.sh
+    scripts/tests/native-sdk-package-test.sh
+    scripts/tests/build-ui-staleness-test.sh
+    scripts/tests/published-crates-test.sh
+    scripts/tests/ci-website-test.sh
+    scripts/tests/create-compatibility-aliases-test.sh
 
 # Rust tests for the whole workspace.
 test-rust *ARGS:

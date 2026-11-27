@@ -3,7 +3,7 @@
 The workflows are plain. Keep them that way.
 
 - `ci.yml` runs on every pull request and on main: lint, Rust tests on Linux,
-  macOS and Windows, the console checks, and one real inference smoke on
+  macOS and Windows, console and public website checks, and one real inference smoke on
   Skippy's CPU runtime.
 - `release.yml` builds, packages, signs and publishes a release.
 - Each job calls a `just` recipe or a script under `scripts/`. Put logic there,

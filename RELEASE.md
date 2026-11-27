@@ -97,9 +97,11 @@ rolling preview.
 ## Compatibility archive names
 
 For one transition release only, the Linux and Windows host archives are also
-published under the GPU archive names that 0.80.0 used (`-cuda-12`, `-cuda-13`,
-`-rocm`, `-vulkan`). A 0.80.0 install on a GPU machine asks for those names
-when it updates.
+published under the CUDA and ROCm archive names that 0.80.0 used (`-cuda-12`,
+`-cuda-13`, `-rocm`). A 0.80.0 install on one of those GPU machines asks for
+those names when it updates. The Vulkan alias is withheld because Skippy
+v0.80.3 publishes no Vulkan runtime; Vulkan users must update manually after
+building or obtaining a compatible runtime.
 
 Each one is a byte-for-byte copy of the plain host archive. It is not a GPU
 build: it bundles the CPU runtime and says so in its manifest. After the
@@ -108,7 +110,7 @@ online. A machine that runs offline or with downloads turned off needs a
 matching GPU runtime installed first (`mesh-llm runtime install`), otherwise it
 runs on CPU. The update does not keep the old GPU runtime.
 
-Remove the step `Offer the host archive under the 0.80.0 GPU archive names`
+Remove the step `Offer supported 0.80.0 GPU archive names`
 from `release.yml` after that release.
 
 ## Prerequisites

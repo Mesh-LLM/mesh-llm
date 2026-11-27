@@ -168,9 +168,18 @@ pub fn default_release_manifest_url(skippy_release: &str) -> String {
     format!("{SKIPPY_RELEASES_URL}/download/v{skippy_release}/native-runtimes.json")
 }
 
+/// Compatibility helper for callers that pass build and runtime versions.
+/// Skippy publishes an exact runtime release even for a Mesh SHA build.
+pub fn default_manifest_url(_build_version: &str, release_version: &str) -> String {
+    default_release_manifest_url(release_version)
+}
+
 /// The runtime manifest this build downloads from by default.
-pub fn default_manifest_url() -> String {
-    mesh_native_runtime_catalog().manifest_url(current_runtime_release())
+pub fn current_manifest_url() -> String {
+    default_manifest_url(
+        mesh_llm_build_info::BUILD_VERSION,
+        current_runtime_release(),
+    )
 }
 
 /// Options for the required Skippy release and Mesh publication channel.
@@ -223,15 +232,19 @@ mod tests {
     #[test]
     fn runtimes_download_from_the_pinned_skippy_release() {
         assert_eq!(
-            default_manifest_url(),
+            current_manifest_url(),
             format!(
                 "https://github.com/Mesh-LLM/skippy/releases/download/v{}/native-runtimes.json",
                 current_runtime_release()
             )
         );
         assert_eq!(
-            default_manifest_url(),
+            current_manifest_url(),
             default_release_manifest_url(current_runtime_release())
+        );
+        assert_eq!(
+            default_manifest_url("0.80.0+gabc", current_runtime_release()),
+            current_manifest_url()
         );
     }
 

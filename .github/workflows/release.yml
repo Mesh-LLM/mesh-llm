@@ -543,33 +543,11 @@ jobs:
             test -s "$file.sha256" || { echo "$file has no checksum" >&2; exit 1; }
             sha256sum -c "$file.sha256"
           done
-      # ONE TRANSITION RELEASE ONLY. A 0.80.0 install on a GPU machine asks
-      # for the archive name of its GPU flavor, and its updater predates the
-      # plain-host fallback. Each name 0.80.0 published is therefore offered
-      # again as a byte-for-byte copy of the plain host archive. It is the same
-      # product: its manifest still says CPU, and the host downloads the GPU
-      # runtime from Skippy when it is online. Nothing GPU-specific is built.
-      - name: Offer the host archive under the 0.80.0 GPU archive names
-        run: |
-          set -euo pipefail
-          cd release-artifacts
-          alias_of() { # alias_of <host archive> <legacy name>...
-            local host="$1" name; shift
-            for name in "$@"; do
-              test ! -e "$name"
-              cp "$host" "$name"
-              printf '%s  %s\n' "$(sha256sum "$name" | cut -d' ' -f1)" "$name" > "$name.sha256"
-              cmp "$host" "$name"
-              [[ "$(cut -d' ' -f1 "$name.sha256")" == "$(cut -d' ' -f1 "$host.sha256")" ]] ||
-                { echo "$name is not the archive checked as $host" >&2; exit 1; }
-            done
-          }
-          linux=mesh-llm-x86_64-unknown-linux-gnu
-          arm=mesh-llm-aarch64-unknown-linux-gnu
-          windows=mesh-llm-x86_64-pc-windows-msvc
-          alias_of "$linux.tar.gz" "$linux"-{cuda-12,cuda-13,rocm,vulkan}.tar.gz
-          alias_of "$arm.tar.gz" "$arm"-{cuda-12,cuda-13}.tar.gz
-          alias_of "$windows.zip" "$windows"-{cuda-12,cuda-13,rocm,vulkan}.zip
+      # One transition release: Vulkan aliases are withheld until Skippy
+      # publishes a matching runtime. The CUDA and ROCm runtimes exist in the
+      # pinned v0.80.3 Skippy catalog.
+      - name: Offer supported 0.80.0 GPU archive names
+        run: scripts/create-compatibility-aliases.sh release-artifacts
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sdk-swift

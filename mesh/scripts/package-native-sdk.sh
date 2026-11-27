@@ -271,6 +271,7 @@ jq -n \
       mesh_version: $version, target_triple: $target, platform: $platform, os: $os, arch: $arch,
       backend: $backend, flavor: $flavor, cargo_profile: $profile, library: $library,
       library_paths: [$library], uniffi_library: $uniffi, library_sha256: $sha,
+      features: ["mesh-inference", "model-management", "local-serving", "chat", "responses"],
       url: null, sha256: null, signature: null, requirements: []}' \
     >"$stage_dir/manifest.json"
 
