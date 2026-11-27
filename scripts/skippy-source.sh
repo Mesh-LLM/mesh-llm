@@ -78,6 +78,13 @@ if [[ "$1" == "--ref" ]]; then
 fi
 
 source_dir="$(cd "$1" && pwd -P)"
+case "$source_dir" in
+    "$REPO_ROOT"/.deps/* | "$REPO_ROOT"/target/*) ;;
+    "$REPO_ROOT"/*)
+        echo "put an in-repository Skippy checkout under .deps/ or target/ so Cargo uses Skippy's own workspace version" >&2
+        exit 1
+        ;;
+esac
 [[ -f "$source_dir/crates/skippy-ffi/Cargo.toml" ]] || {
     echo "$source_dir is not a Skippy checkout (crates/skippy-ffi/Cargo.toml is missing)" >&2
     exit 1
@@ -94,4 +101,5 @@ set_skippy_versions "$source_version"
         echo "$name = { path = \"$(dirname "$manifest")\" }"
     done
 } >"$OVERRIDE"
+"$REPO_ROOT/scripts/verify-skippy-source.sh" "$source_dir"
 echo "building against $source_dir ($(git -C "$source_dir" rev-parse HEAD))"

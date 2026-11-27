@@ -47,6 +47,9 @@ default-members = [
     "mesh/crates/mesh-llm",
     "mesh/crates/mesh-llm-plugin",
 ]
+# Skippy source checkouts live under .deps and use their own workspace.package
+# version. Without this exclusion Cargo can inherit MeshLLM's version for them.
+exclude = [".deps", "target"]
 resolver = "2"
 
 [workspace.package]
