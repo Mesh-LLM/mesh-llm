@@ -136,6 +136,10 @@ pub struct PeerAnnouncement {
     pub inference_admission_state: Option<proto_node::InferenceAdmissionState>,
     /// Optional self-reported log head; carried opaquely and never verified here.
     pub claimed_log_head: Option<ClaimedLogHead>,
+    /// Cumulative completion tokens since last restart (from gossip).
+    pub cumulative_completion_tokens: Option<u64>,
+    /// Cumulative prompt tokens since last restart (from gossip).
+    pub cumulative_prompt_tokens: Option<u64>,
 }
 
 /// A peer's latest self-reported claim about the head of its append-only log
@@ -383,6 +387,10 @@ pub struct PeerInfo {
     pub persistent_lane_marker_supported: bool,
     pub refuses_peer_model_downloads: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
+    /// Cumulative completion tokens since last restart (from gossip).
+    pub cumulative_completion_tokens: Option<u64>,
+    /// Cumulative prompt tokens since last restart (from gossip).
+    pub cumulative_prompt_tokens: Option<u64>,
     pub cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
     pub display_rtt: Option<DirectLatencyObservation>,
@@ -452,6 +460,8 @@ impl PeerInfo {
             persistent_lane_marker_supported: ann.persistent_lane_marker_supported,
             refuses_peer_model_downloads: ann.refuses_peer_model_downloads,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
+            cumulative_completion_tokens: ann.cumulative_completion_tokens,
+            cumulative_prompt_tokens: ann.cumulative_prompt_tokens,
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,
             selected_path: None,

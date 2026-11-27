@@ -192,6 +192,7 @@ pub struct LocalModelInterest {
 pub struct MeshApi {
     pub(super) inner: Arc<Mutex<ApiInner>>,
     pub(super) capture_node: mesh::Node,
+    pub(super) policy_store: std::sync::Arc<crate::policy::PolicyStore>,
 }
 
 pub(super) struct ApiInner {

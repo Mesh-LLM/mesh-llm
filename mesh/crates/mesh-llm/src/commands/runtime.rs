@@ -108,47 +108,149 @@ pub(crate) async fn dispatch_runtime_command(
             endpoint,
             model,
             profile,
+            fleet,
+            fleet_role_filter,
+            fleet_node_filter,
+            dry_run,
             port,
             json,
-        }) => run_control_load_model(endpoint, model, profile.as_deref(), *port, *json).await,
+        }) => {
+            if *fleet {
+                run_control_fleet(
+                    "load-model",
+                    Some(model.as_str()),
+                    None,
+                    profile.as_deref(),
+                    fleet_role_filter,
+                    fleet_node_filter,
+                    *dry_run,
+                    *port,
+                    *json,
+                )
+                .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
+            } else {
+                run_control_load_model(
+                    endpoint.as_deref().unwrap_or(""),
+                    model,
+                    profile.as_deref(),
+                    *port,
+                    *json,
+                )
+                .await
+            }
+        }
         Some(RuntimeCommand::UnloadModel {
             endpoint,
             model,
             instance_id,
+            fleet,
+            fleet_role_filter,
+            fleet_node_filter,
+            dry_run,
             port,
             json,
         }) => {
-            run_control_unload_model(
-                endpoint,
-                model.as_deref(),
-                instance_id.as_deref(),
-                *port,
-                *json,
-            )
-            .await
+            if *fleet {
+                run_control_fleet(
+                    "unload-model",
+                    model.as_deref(),
+                    instance_id.as_deref(),
+                    None,
+                    fleet_role_filter,
+                    fleet_node_filter,
+                    *dry_run,
+                    *port,
+                    *json,
+                )
+                .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
+            } else {
+                run_control_unload_model(
+                    endpoint.as_deref().unwrap_or(""),
+                    model.as_deref(),
+                    instance_id.as_deref(),
+                    *port,
+                    *json,
+                )
+                .await
+            }
         }
         Some(RuntimeCommand::EnsureModel {
             endpoint,
             model,
             profile,
+            fleet,
+            fleet_role_filter,
+            fleet_node_filter,
+            dry_run,
             port,
             json,
-        }) => run_control_ensure_model(endpoint, model, profile.as_deref(), *port, *json).await,
+        }) => {
+            if *fleet {
+                run_control_fleet(
+                    "ensure-model",
+                    Some(model.as_str()),
+                    None,
+                    profile.as_deref(),
+                    fleet_role_filter,
+                    fleet_node_filter,
+                    *dry_run,
+                    *port,
+                    *json,
+                )
+                .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
+            } else {
+                run_control_ensure_model(
+                    endpoint.as_deref().unwrap_or(""),
+                    model,
+                    profile.as_deref(),
+                    *port,
+                    *json,
+                )
+                .await
+            }
+        }
         Some(RuntimeCommand::DrainModel {
             endpoint,
             model,
             instance_id,
+            fleet,
+            fleet_role_filter,
+            fleet_node_filter,
+            dry_run,
             port,
             json,
         }) => {
-            run_control_drain_model(
-                endpoint,
-                model.as_deref(),
-                instance_id.as_deref(),
-                *port,
-                *json,
-            )
-            .await
+            if *fleet {
+                run_control_fleet(
+                    "drain-model",
+                    model.as_deref(),
+                    instance_id.as_deref(),
+                    None,
+                    fleet_role_filter,
+                    fleet_node_filter,
+                    *dry_run,
+                    *port,
+                    *json,
+                )
+                .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
+            } else {
+                run_control_drain_model(
+                    endpoint.as_deref().unwrap_or(""),
+                    model.as_deref(),
+                    instance_id.as_deref(),
+                    *port,
+                    *json,
+                )
+                .await
+            }
         }
         Some(RuntimeCommand::RefreshInventory {
             endpoint,
@@ -342,6 +444,39 @@ pub(crate) async fn run_control_drain_model(
     )
     .await?;
     print_control_response("Drain model (owner-control)", &body, json_output)
+}
+
+/// Fan out a lifecycle command to all matching fleet peers.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_control_fleet(
+    command: &str,
+    model: Option<&str>,
+    instance_id: Option<&str>,
+    profile: Option<&str>,
+    role_filter: &[String],
+    node_filter: &[String],
+    dry_run: bool,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let mut body = json!({ "command": command, "dry_run": dry_run });
+    if let Some(m) = model {
+        body["model"] = json!(m);
+    }
+    if let Some(id) = instance_id {
+        body["instance_id"] = json!(id);
+    }
+    if let Some(p) = profile {
+        body["profile"] = json!(p);
+    }
+    if !role_filter.is_empty() {
+        body["role_filter"] = json!(role_filter);
+    }
+    if !node_filter.is_empty() {
+        body["node_filter"] = json!(node_filter);
+    }
+    let response = post_runtime_payload(port, "/api/runtime/control/fleet", &body).await?;
+    print_control_response("Fleet control", &response, json_output)
 }
 
 pub(crate) async fn run_control_apply_config(

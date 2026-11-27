@@ -51,6 +51,8 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     }
 }
 
@@ -283,6 +285,7 @@ async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_gen_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -429,6 +432,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_gen);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -449,6 +453,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_id);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -594,6 +599,8 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     let proto_pa = local_ann_to_proto_ann(&local_ann);
@@ -867,6 +874,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &invalid_sender_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -888,6 +896,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let err = decode_gossip_payload(
         ControlProtocol::ProtoV1,
@@ -907,6 +916,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
             role: NodeRole::Worker as i32,
             ..Default::default()
         }],
+        signed_mesh_policy: None,
     };
     let encoded = encode_control_frame(STREAM_GOSSIP, &bad_endpoint_frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
@@ -1013,6 +1023,8 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
@@ -1115,6 +1127,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
 
     apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee), NOW);
@@ -1189,6 +1203,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     };
     apply_transitive_ann(
         &mut existing,

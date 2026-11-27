@@ -39,6 +39,8 @@ pub(crate) struct LocalAnnouncementData {
     gpu_compute_tflops_fp32: Option<String>,
     gpu_compute_tflops_fp16: Option<String>,
     inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
+    /// Cumulative completion tokens from the routing metrics, for gossip.
+    cumulative_completion_tokens: Option<u64>,
 }
 
 pub fn backfill_legacy_descriptors(ann: &mut PeerAnnouncement) {
@@ -177,6 +179,13 @@ impl Node {
             )
             .await,
             inference_admission_state: activity_advertisement.admission_state,
+            cumulative_completion_tokens: {
+                let snapshot = self
+                    .routing_metrics
+                    .status_snapshot(0);
+                let v = snapshot.cumulative_completion_tokens;
+                if v > 0 { Some(v) } else { None }
+            },
         }
     }
 
@@ -315,6 +324,8 @@ impl Node {
             persistent_lane_marker_supported: true,
             refuses_peer_model_downloads: !self.peer_stage_source_fetch.allows_fetch(),
             advertised_model_throughput: data.advertised_model_throughput,
+            cumulative_completion_tokens: data.cumulative_completion_tokens,
+            cumulative_prompt_tokens: None,
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

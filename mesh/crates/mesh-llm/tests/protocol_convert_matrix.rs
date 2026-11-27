@@ -123,6 +123,7 @@ fn valid_gossip_frame() -> GossipFrame {
     GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0xAB; 32],
         peers: vec![PeerAnnouncement {
@@ -254,6 +255,7 @@ fn gossip_frame_with_wrong_generation_is_rejected() {
     let bad_frame = GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: 0,
         sender_id: vec![0u8; 32],
         peers: vec![],

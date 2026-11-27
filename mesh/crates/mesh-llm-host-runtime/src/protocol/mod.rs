@@ -101,6 +101,8 @@ pub(crate) struct OutboundGossip {
     pub(crate) announcements: Vec<PeerAnnouncement>,
     pub(crate) signed_records: Vec<crate::proto::node::SignedNodeRecord>,
     pub(crate) signed_cache_affinity: Vec<crate::proto::node::SignedCacheAffinity>,
+    /// Fleet M2M: signed mesh policy to propagate to peers (Phase 2.3).
+    pub(crate) signed_mesh_policy: Option<crate::proto::node::SignedMeshPolicy>,
 }
 
 mod gossip_budget;
@@ -112,6 +114,8 @@ pub(crate) struct InboundGossip {
     pub(crate) announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
     pub(crate) signed_records: Vec<crate::proto::node::SignedNodeRecord>,
     pub(crate) signed_cache_affinity: Vec<crate::proto::node::SignedCacheAffinity>,
+    /// Fleet M2M: signed mesh policy received from a peer (Phase 2.3).
+    pub(crate) signed_mesh_policy: Option<crate::proto::node::SignedMeshPolicy>,
 }
 
 pub(crate) async fn write_gossip_payload(
@@ -135,6 +139,7 @@ pub(crate) async fn write_gossip_payload(
     );
     frame.signed_records = outbound.signed_records.clone();
     frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
+    frame.signed_mesh_policy = outbound.signed_mesh_policy.clone();
     write_len_prefixed(send, &encoder.encode(frame, remote)?).await?;
     Ok(())
 }
@@ -229,6 +234,7 @@ pub(crate) fn decode_gossip_frame(
             .collect::<Vec<_>>(),
         signed_records: frame.signed_records,
         signed_cache_affinity: frame.signed_cache_affinity,
+        signed_mesh_policy: frame.signed_mesh_policy,
     })
 }
 

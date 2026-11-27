@@ -303,6 +303,7 @@ fn make_valid_gossip_frame() -> GossipFrame {
     GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {

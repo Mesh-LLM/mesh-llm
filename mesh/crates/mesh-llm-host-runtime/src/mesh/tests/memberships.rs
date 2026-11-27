@@ -89,6 +89,7 @@ async fn gossip_verification_work_is_isolated_between_memberships() -> Result<()
         announcements: Vec::new(),
         signed_records: records,
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
     };
 
     // Invalid records still consume the authenticated sender's work quota.

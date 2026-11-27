@@ -59,6 +59,8 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         persistent_lane_marker_supported: false,
         refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,

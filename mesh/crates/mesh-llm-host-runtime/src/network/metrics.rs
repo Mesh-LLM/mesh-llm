@@ -131,6 +131,8 @@ pub struct RoutingMetricsStatusSnapshot {
     pub avg_tokens_per_second: Option<f64>,
     pub completion_tokens_observed: u64,
     pub throughput_samples: u64,
+    /// Monotonically increasing total of completion tokens since process start.
+    pub cumulative_completion_tokens: u64,
     /// Current-node routing pressure and lightweight utilization proxies.
     pub local_node: LocalNodePressureSnapshot,
     /// Current-node service mix for requests fronted by this node.
@@ -154,6 +156,7 @@ impl Default for RoutingMetricsStatusSnapshot {
             avg_tokens_per_second: None,
             completion_tokens_observed: 0,
             throughput_samples: 0,
+            cumulative_completion_tokens: 0,
             local_node: LocalNodePressureSnapshot::default(),
             pressure: RoutingPressureSnapshot::default(),
         }
@@ -685,6 +688,9 @@ struct GlobalMetrics {
     queue_wait_ms_total: AtomicU64,
     attempt_ms_total: AtomicU64,
     completion_tokens_observed: AtomicU64,
+    /// Monotonically increasing total of all completion tokens seen since
+    /// process start; never reset, never trimmed by TTL windows.
+    cumulative_completion_tokens: AtomicU64,
     throughput_tps_milli_sum: AtomicU64,
     throughput_samples: AtomicU64,
     locally_served_request_count: AtomicU64,
@@ -732,6 +738,10 @@ impl GlobalMetrics {
                 if let Some(tokens) = completion_tokens {
                     self.completion_tokens_observed
                         .fetch_add(tokens, Ordering::Relaxed);
+                    if matches!(target_kind, TargetKind::Local) {
+                        self.cumulative_completion_tokens
+                            .fetch_add(tokens, Ordering::Relaxed);
+                    }
                     if let Some(tps_milli) = tokens_per_second_milli(tokens, attempt_time) {
                         self.throughput_tps_milli_sum
                             .fetch_add(tps_milli, Ordering::Relaxed);
@@ -863,6 +873,7 @@ impl GlobalMetrics {
             avg_tokens_per_second,
             completion_tokens_observed,
             throughput_samples,
+            cumulative_completion_tokens: load_u64(&self.cumulative_completion_tokens),
             local_node,
             pressure,
         }

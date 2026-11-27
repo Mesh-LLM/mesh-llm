@@ -440,6 +440,8 @@ impl Node {
             peer_stage_source_fetch: self.peer_stage_source_fetch,
             runtime_intents: self.runtime_intents.clone(),
             runtime_instance_lifecycles: self.runtime_instance_lifecycles.clone(),
+            policy_store: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            policy_applicator: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         // The mesh ID is set before the first peer can offer its own.
         if let Err(error) = node

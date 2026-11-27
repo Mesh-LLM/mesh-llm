@@ -69,6 +69,9 @@ pub(super) fn is_static_summary_token(token: &str) -> bool {
             | "rotate-owner"
             | "trust"
             | "add"
+            | "policy"
+            | "set"
+            | "get"
     )
 }
 
@@ -207,5 +210,6 @@ pub(super) fn is_redacted_marker(token: &str) -> bool {
             | "--reason"
             | "--cert-id"
             | "--label"
+            | "payload"
     )
 }

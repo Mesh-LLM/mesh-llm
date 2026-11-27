@@ -21,6 +21,7 @@ async fn invalid_self_signature_is_not_mistaken_for_a_legacy_downgrade() {
             announcements: Vec::new(),
             signed_records: vec![record.clone()],
             signed_cache_affinity: vec![cache.clone()],
+            signed_mesh_policy: None,
         },
     )
     .await;
@@ -33,6 +34,7 @@ async fn invalid_self_signature_is_not_mistaken_for_a_legacy_downgrade() {
             announcements: Vec::new(),
             signed_records: vec![record],
             signed_cache_affinity: vec![cache],
+            signed_mesh_policy: None,
         },
     )
     .await;

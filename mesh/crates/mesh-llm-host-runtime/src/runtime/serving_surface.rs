@@ -897,6 +897,10 @@ pub(super) struct RunAutoConsoleStateContext<'a> {
     pub(super) model_name: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) api_port: u16,
+    /// The management/console port that hosts `/api/runtime/*` routes. The
+    /// `PolicyApplicator` must call these routes, so it needs this port rather
+    /// than the OpenAI inference port (`api_port`).
+    pub(super) console_port: Option<u16>,
     pub(super) plugin_manager: &'a plugin::PluginManager,
     pub(super) affinity_router: &'a affinity::AffinityRouter,
     pub(super) control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
@@ -970,6 +974,67 @@ async fn apply_owner_control_token(
     }
 }
 
+/// Wire the `PolicyStore` and `PolicyApplicator` from `console_state` into the
+/// `node` so that inbound gossip processing and outbound gossip injection both
+/// use the same store that the management API exposes via its routes. Called
+/// after `MeshApi::new` creates the store and after `apply_owner_control_token`
+/// sets the token (the applicator needs it to call owner-control endpoints).
+async fn wire_policy_store_into_node(
+    console_state: &api::MeshApi,
+    node: &mesh::Node,
+    console_port: Option<u16>,
+) {
+    let store = console_state.policy_store();
+    let token = console_state
+        .owner_control_token()
+        .await
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_default();
+    // The PolicyApplicator calls `/api/runtime/*` management routes, which are
+    // served on the console port (3131 by default), NOT on the OpenAI inference
+    // port (9337). Use 0 when the console is disabled so the applicator is
+    // wired but harmless.
+    let management_port = console_port.unwrap_or(0);
+    // Resolve a state directory for all node types: prefer the scoped identity
+    // dir (set for explicit-identity nodes) and fall back to the default
+    // identity_state_dir so ordinary `Node::start` nodes also persist policy.
+    let state_dir = node
+        .identity_state_dir
+        .clone()
+        .or_else(|| crate::mesh::identity_state_dir().ok());
+    // Build the authorized-owner list from the node's own verified owner ID.
+    // Only the node's owner (and any additionally-trusted owners from mesh
+    // membership config) may inject policy. An empty list means no policy
+    // is accepted until the owner identity is verified.
+    let authorized_owner_ids: Vec<String> = node
+        .local_verified_owner_id()
+        .await
+        .into_iter()
+        .collect();
+    let applicator = crate::policy::applicator::PolicyApplicator::new(
+        store.clone(),
+        management_port,
+        token,
+        state_dir.clone(),
+        authorized_owner_ids,
+    );
+    node.set_policy_store(store.clone(), applicator.clone());
+    // Phase 3.2: load persisted policy from disk and re-apply it so the fleet
+    // intent survives a restart without waiting for the next gossip round.
+    if let Some(ref dir) = state_dir {
+        store.restore_owner_gens(dir).await;
+        match crate::policy::PolicyStore::load_from_disk(dir).await {
+            Ok(Some(signed)) => {
+                applicator.apply_if_newer(signed).await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!("fleet policy: could not load persisted policy: {error:#}");
+            }
+        }
+    }
+}
+
 pub(super) async fn setup_run_auto_console_state(
     ctx: RunAutoConsoleStateContext<'_>,
 ) -> Result<Option<api::MeshApi>> {
@@ -998,6 +1063,10 @@ pub(super) async fn setup_run_auto_console_state(
     console_state.set_primary_backend("skippy".into()).await;
     console_state.set_update_check(ctx.update_check).await;
     apply_owner_control_token(&console_state, ctx.owner_key_path.as_deref()).await;
+    // Wire the shared PolicyStore and PolicyApplicator into the Node so that
+    // inbound gossip and outbound gossip both use the same store that the
+    // management API reads and writes.
+    wire_policy_store_into_node(&console_state, ctx.node, ctx.console_port).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;
@@ -1266,6 +1335,11 @@ pub(super) async fn setup_run_auto_serving_surface(
     );
     let (ready_console_url, ready_console_port) =
         run_auto_ready_console_endpoint(&console_listener);
+    // Patch the actual OS-assigned port into the PolicyApplicator so that
+    // `--console 0` (ephemeral port) doesn't leave the applicator stuck on 0.
+    if let (Some(actual_port), Some(state)) = (ready_console_port, ctx.console_state) {
+        state.policy_applicator_set_port(actual_port).await;
+    }
     emit_run_auto_builtin_endpoint_ready(ctx.options, &api_ready_url, ready_console_url.as_ref());
     let api_proxy_handle = spawn_run_auto_api_proxy(
         ctx.options,

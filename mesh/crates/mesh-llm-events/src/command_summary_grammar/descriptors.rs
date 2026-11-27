@@ -6,6 +6,8 @@ mod kv_cache;
 mod models;
 #[path = "descriptors/plugins_benchmark.rs"]
 mod plugins_benchmark;
+#[path = "descriptors/policy.rs"]
+mod policy;
 #[path = "descriptors/runtime.rs"]
 mod runtime;
 #[path = "descriptors/top_level.rs"]
@@ -72,4 +74,5 @@ pub(super) const DESCRIPTOR_GROUPS: &[&[Descriptor]] = &[
     runtime::DESCRIPTORS,
     kv_cache::DESCRIPTORS,
     auth::DESCRIPTORS,
+    policy::DESCRIPTORS,
 ];

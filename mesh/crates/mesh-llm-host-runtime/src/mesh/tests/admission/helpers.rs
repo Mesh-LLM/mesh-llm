@@ -51,6 +51,8 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
         refuses_peer_model_downloads: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
         cache_affinity: None,
 
         display_rtt: None,
@@ -449,5 +451,7 @@ pub(super) fn requirement_peer_announcement(
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
     }
 }

@@ -166,6 +166,9 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             },
             assembly,
         ),
+        Command::Policy { command } => {
+            administration::format_policy(command, assembly);
+        }
         Command::ExternalPlugin(args) => {
             assembly.command.push_str(" external-plugin");
             assembly.redact("argv", !args.is_empty());

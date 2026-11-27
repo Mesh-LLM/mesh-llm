@@ -44,10 +44,20 @@ impl Node {
             // plugin keys. Third-party descriptions travel only as signed bytes.
             announcements.retain(|ann| ann.addr.id == self.id());
         }
+        // Include signed mesh policy if the node has one, so peers receive and
+        // apply the owner's fleet intent via gossip (Phase 2.3).
+        let signed_mesh_policy = self
+            .policy_store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|store| store.current_sync())
+            .map(|s| s.signed);
         OutboundGossip {
             announcements,
             signed_records,
             signed_cache_affinity,
+            signed_mesh_policy,
         }
     }
 
@@ -62,6 +72,7 @@ impl Node {
             announcements,
             signed_records,
             signed_cache_affinity,
+            signed_mesh_policy: None,
         }
     }
 

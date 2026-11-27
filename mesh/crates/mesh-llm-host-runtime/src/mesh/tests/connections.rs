@@ -512,6 +512,8 @@ async fn make_configured_test_node(
         unsaved_owner_attestation: Arc::default(),
         local_endpoints: super::node::LocalEndpoints::default(),
         is_membership: false,
+        policy_store: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        policy_applicator: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
     configure(&mut node);
 

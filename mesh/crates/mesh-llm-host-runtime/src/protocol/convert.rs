@@ -1033,6 +1033,8 @@ pub(crate) fn local_ann_to_proto_ann(
         // (`attach_own_plugin_keys`); never relayed.
         plugin_keys: Vec::new(),
         plugin_key_withdrawals: Vec::new(),
+        cumulative_completion_tokens: ann.cumulative_completion_tokens,
+        cumulative_prompt_tokens: ann.cumulative_prompt_tokens,
     }
 }
 
@@ -1085,6 +1087,7 @@ pub(crate) fn build_gossip_frame(
     crate::proto::node::GossipFrame {
         signed_records: Vec::new(),
         signed_cache_affinity: Vec::new(),
+        signed_mesh_policy: None,
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
@@ -1321,6 +1324,8 @@ pub(crate) fn proto_ann_to_local(
             .claimed_log_head
             .as_ref()
             .and_then(proto_claimed_log_head_to_local),
+        cumulative_completion_tokens: pa.cumulative_completion_tokens,
+        cumulative_prompt_tokens: pa.cumulative_prompt_tokens,
     };
     served_descriptors::restore_served_descriptors(pa, &mut ann)?;
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);

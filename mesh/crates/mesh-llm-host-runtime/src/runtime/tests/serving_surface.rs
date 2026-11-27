@@ -188,6 +188,7 @@ async fn build_run_auto_console_state(
             model_name: "",
             model_path: Path::new(""),
             api_port: 3131,
+            console_port: Some(3131),
             plugin_manager: &plugin_manager,
             affinity_router: &affinity_router,
             control_tx: &control_tx,

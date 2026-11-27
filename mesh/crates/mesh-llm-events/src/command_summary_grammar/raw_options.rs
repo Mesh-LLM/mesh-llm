@@ -120,5 +120,11 @@ fn matches_port_prefix(prefix: &[&str]) -> bool {
             | ["mesh-llm", "kv-cache", "clear", "--yes"]
             | ["mesh-llm", "kv-cache", "clear", "--json"]
             | ["mesh-llm", "kv-cache", "clear", "--yes", "--json"]
+            | ["mesh-llm", "policy", "set"]
+            | ["mesh-llm", "policy", "set", "--json"]
+            | ["mesh-llm", "policy", "get"]
+            | ["mesh-llm", "policy", "get", "--json"]
+            | ["mesh-llm", "policy", "clear"]
+            | ["mesh-llm", "policy", "clear", "--json"]
     )
 }

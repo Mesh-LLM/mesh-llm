@@ -63,6 +63,8 @@ pub(in crate::network::openai) fn duplicate_peer(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![],
+        cumulative_completion_tokens: None,
+        cumulative_prompt_tokens: None,
         cache_affinity: None,
         display_rtt: None,
         selected_path: None,

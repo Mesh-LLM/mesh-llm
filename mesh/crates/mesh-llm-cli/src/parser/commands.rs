@@ -769,9 +769,74 @@ pub enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage the fleet mesh policy (fleet M2M signed config gossip).
+    #[command(name = "policy", hide = true)]
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
     /// Run a CLI command contributed by a configured plugin.
     #[command(external_subcommand)]
     ExternalPlugin(Vec<OsString>),
+}
+
+/// Fleet mesh-policy commands.
+#[derive(Subcommand, Debug)]
+pub enum PolicyCommand {
+    /// Push a signed mesh policy to the local node.
+    ///
+    /// Auto-sign mode: provide --ensure-models / --drain-models and the node's
+    /// owner keypair is loaded from the default keystore to sign the policy.
+    ///
+    /// Pre-signed mode: provide --payload and --signature (advanced / external signer).
+    Set {
+        /// Models to ensure are serving (comma-separated). Auto-sign mode.
+        #[arg(long, value_delimiter = ',', conflicts_with = "payload")]
+        ensure_models: Vec<String>,
+        /// Models to drain (comma-separated). Auto-sign mode.
+        #[arg(long, value_delimiter = ',', conflicts_with = "payload")]
+        drain_models: Vec<String>,
+        /// How long (in seconds) until the policy expires. Auto-sign mode.
+        #[arg(long, conflicts_with = "payload")]
+        expires_in_secs: Option<u64>,
+        /// Monotonic generation counter for the policy. Auto-sign mode (default: 1).
+        #[arg(long, conflicts_with = "payload")]
+        policy_gen: Option<u32>,
+        /// Base64-encoded signed policy payload bytes. Pre-signed mode.
+        #[arg(long, conflicts_with_all = ["ensure_models", "drain_models"])]
+        payload: Option<String>,
+        /// Base64-encoded Ed25519 signature over the payload. Pre-signed mode.
+        #[arg(long, requires = "payload")]
+        signature: Option<String>,
+        /// Path to the owner keystore file. Auto-sign mode (defaults to the
+        /// standard keystore location). Respects MESH_LLM_OWNER_PASSPHRASE.
+        #[arg(long, conflicts_with = "payload")]
+        owner_key: Option<std::path::PathBuf>,
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the current mesh policy on the local node.
+    Get {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear the current mesh policy from the local node.
+    Clear {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Anonymous usage reporting controls.

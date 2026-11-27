@@ -18,16 +18,22 @@ workspace = true
 [dependencies]
 skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.80.0" }
 anyhow.workspace = true
+base64 = "0.23"
 clap.workspace = true
+hex = "0.4"
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.80.0" }
 mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.80.0" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.80.0" }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.80.0", default-features = false }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.80.0", features = ["host-io"] }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.80.0" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.80.0" }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.80.0" }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.80.0", features = ["skippy-devices"] }
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.80.0" }
+prost = "0.14"
 reqwest = { version = "0.13", features = ["json"] }
+rpassword = "7.5"
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["full"] }

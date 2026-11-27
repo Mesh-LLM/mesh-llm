@@ -376,6 +376,7 @@ mod tests {
                 hop: None,
             }],
             signed_cache_affinity: Vec::new(),
+            signed_mesh_policy: None,
         };
         let workers = node
             .gossip_verification

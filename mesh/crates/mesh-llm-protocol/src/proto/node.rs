@@ -30,6 +30,10 @@ pub struct GossipFrame {
     /// reading PeerAnnouncement.cache_affinity in compatibility meshes.
     #[prost(message, repeated, tag = "5")]
     pub signed_cache_affinity: ::prost::alloc::vec::Vec<SignedCacheAffinity>,
+    /// Fleet policy signed by owner keypair; gossiped to all nodes. Additive —
+    /// older nodes ignore this field. See SignedMeshPolicy.
+    #[prost(message, optional, tag = "6")]
+    pub signed_mesh_policy: ::core::option::Option<SignedMeshPolicy>,
 }
 /// A node's self-description, signed with its endpoint key. Relays store and
 /// forward `signed` and `signature` unchanged; they never re-encode them.
@@ -64,6 +68,67 @@ pub struct SignedCacheAffinity {
     /// exactly 64 bytes
     #[prost(bytes = "vec", tag = "2")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+/// A fleet-wide model lifecycle and config policy, signed by the owner keypair.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedMeshPolicy {
+    #[prost(bytes = "vec", tag = "1")]
+    pub policy_payload_bytes: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MeshPolicyPayload {
+    #[prost(uint64, tag = "1")]
+    pub issued_at_unix_ms: u64,
+    #[prost(uint64, tag = "2")]
+    pub expires_at_unix_ms: u64,
+    #[prost(string, tag = "3")]
+    pub owner_id: ::prost::alloc::string::String,
+    /// Hex-encoded 32-byte Ed25519 public key.
+    #[prost(string, tag = "4")]
+    pub owner_sign_public_key: ::prost::alloc::string::String,
+    /// Monotonic generation counter.
+    #[prost(uint32, tag = "5")]
+    pub policy_gen: u32,
+    #[prost(message, repeated, tag = "6")]
+    pub model_intents: ::prost::alloc::vec::Vec<MeshModelIntent>,
+    /// Optional mesh ID this policy targets. When non-empty, nodes that
+    /// belong to a different mesh reject the policy. Empty means the check
+    /// is skipped (backward-compatible with older senders).
+    #[prost(string, tag = "7")]
+    pub mesh_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MeshModelIntent {
+    #[prost(string, tag = "1")]
+    pub canonical_model_ref: ::prost::alloc::string::String,
+    #[prost(enumeration = "MeshModelIntentAction", tag = "2")]
+    pub action: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MeshModelIntentAction {
+    Unspecified = 0,
+    Ensure = 1,
+    Drain = 2,
+}
+impl MeshModelIntentAction {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MESH_MODEL_INTENT_ACTION_UNSPECIFIED",
+            Self::Ensure => "MESH_MODEL_INTENT_ACTION_ENSURE",
+            Self::Drain => "MESH_MODEL_INTENT_ACTION_DRAIN",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MESH_MODEL_INTENT_ACTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "MESH_MODEL_INTENT_ACTION_ENSURE" => Some(Self::Ensure),
+            "MESH_MODEL_INTENT_ACTION_DRAIN" => Some(Self::Drain),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HopObservation {
@@ -140,6 +205,12 @@ pub struct NodeRecord {
     /// node accepts peer model downloads.
     #[prost(bool, optional, tag = "26")]
     pub refuses_peer_model_downloads: ::core::option::Option<bool>,
+    /// Cumulative completion tokens this node has generated since last restart.
+    #[prost(uint64, optional, tag = "27")]
+    pub cumulative_completion_tokens: ::core::option::Option<u64>,
+    /// Cumulative prompt tokens processed since last restart.
+    #[prost(uint64, optional, tag = "28")]
+    pub cumulative_prompt_tokens: ::core::option::Option<u64>,
 }
 /// Decode-only projection of the old LightningOffer wire message. Prices,
 /// invoice settings and payment protocol details are intentionally not read.
@@ -318,6 +389,12 @@ pub struct PeerAnnouncement {
     /// peer model downloads, which is the legacy behavior.
     #[prost(bool, optional, tag = "55")]
     pub refuses_peer_model_downloads: ::core::option::Option<bool>,
+    /// Mirrors NodeRecord.cumulative_completion_tokens for gossip-path aggregation.
+    #[prost(uint64, optional, tag = "56")]
+    pub cumulative_completion_tokens: ::core::option::Option<u64>,
+    /// Mirrors NodeRecord.cumulative_prompt_tokens for gossip-path aggregation.
+    #[prost(uint64, optional, tag = "57")]
+    pub cumulative_prompt_tokens: ::core::option::Option<u64>,
 }
 /// A public key a plugin on this node signs with, bound to this node by the
 /// node's own key, so a peer's plugin can check what that plugin signed without

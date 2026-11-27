@@ -340,6 +340,8 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         persistent_lane_marker_supported: peer.persistent_lane_marker_supported,
         refuses_peer_model_downloads: peer.refuses_peer_model_downloads,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
+        cumulative_completion_tokens: peer.cumulative_completion_tokens,
+        cumulative_prompt_tokens: peer.cumulative_prompt_tokens,
         cache_affinity: peer.cache_affinity.clone(),
         latency_ms: latency.latency_ms,
         latency_source: Some(match latency.source {
@@ -428,6 +430,12 @@ pub fn update_existing_direct_peer(
     existing.persistent_lane_marker_supported = ann.persistent_lane_marker_supported;
     existing.refuses_peer_model_downloads = ann.refuses_peer_model_downloads;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    if ann.cumulative_completion_tokens.is_some() {
+        existing.cumulative_completion_tokens = ann.cumulative_completion_tokens;
+    }
+    if ann.cumulative_prompt_tokens.is_some() {
+        existing.cumulative_prompt_tokens = ann.cumulative_prompt_tokens;
+    }
     crate::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),
