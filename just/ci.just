@@ -12,6 +12,7 @@ lint:
     scripts/tests/fetch-skippy-runtime-test.sh
     scripts/tests/ci-resolve-skippy-test.sh
     scripts/tests/ci-skippy-runtime-test.sh
+    python3 scripts/tests/ci-cpu-host-smoke-test.py
     scripts/tests/install-asset-test.sh
     scripts/tests/check-host-imports-test.sh
     scripts/tests/wait-packaging-receipt-test.sh

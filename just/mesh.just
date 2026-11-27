@@ -6,7 +6,7 @@ mesh profile="debug":
 
 [windows]
 mesh profile="debug":
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile "{{ profile }}" -HostOnly
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile "{{ profile }}"
 
 # Download the default model (GLM-4.7-Flash Q4_K_M, 17GB)
 download-model:

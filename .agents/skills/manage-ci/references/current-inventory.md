@@ -8,7 +8,7 @@ runners.
 
 | File | Starts on | What it does |
 |---|---|---|
-| `ci.yml` | pull request (opened, synchronize, reopened, edited), push to `main`, manual with optional `skippy_ref` | Lint, Rust tests, console and public website checks, CPU inference smoke |
+| `ci.yml` | pull request (opened, synchronize, reopened, edited), push to `main`, manual with optional `skippy_ref` | Lint, Rust tests, console and public website checks, CPU host smokes on Linux, macOS and Windows |
 | `release.yml` | manual with `version` and `canary` | Builds, signs, checks and publishes a release |
 | `website-pages.yml` | push to `main` touching the website, installers, crates or build files; manual | Builds the website and deploys it to GitHub Pages |
 | `fly-deploy-console.yml` | manual with optional `ref` | Deploys the console app to Fly |
@@ -25,6 +25,7 @@ runners.
 | Console | `ubuntu-24.04` | `just test-ui` |
 | Public website | `ubuntu-24.04` | `scripts/ci-website.sh` |
 | Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/fetch-skippy-runtime.sh` (pinned release) or `scripts/ci-skippy-runtime.sh` (named ref), `just mesh`, `just smoke`, `just test-with-runtime` |
+| CPU host smoke | `macos-15`, `windows-2022` | `just mesh`, `scripts/ci-cpu-host-smoke.py` (published CPU runtime) |
 
 `just lint` is `cargo fmt --all -- --check`, Clippy on the workspace with
 warnings denied, ShellCheck on `scripts/*.sh`, `scripts/tests/*.sh` and
@@ -34,10 +35,14 @@ The smoke job downloads the pinned release's CPU runtime, a pinned test model,
 and checks the model SHA-256. A named Skippy ref instead checks source out under
 `.deps/skippy` and builds its CPU runtime. The model is cached; the compiler
 cache is sccache's GitHub backend.
+The macOS and Windows CPU smokes always use the pinned release, including when
+the Linux smoke tests a named Skippy ref. They exercise MeshLLM's runtime
+install and serving boundary with one request.
 
 The workflow has `contents: read` and uses no secret or variable. A pull
 request cancels its own earlier run.
-`PR / Website` requires the public website build and data checks.
+All five required PR checks include the CPU host smoke matrix as well as the
+existing jobs.
 
 ## `release.yml` jobs
 
@@ -56,8 +61,9 @@ request cancels its own earlier run.
 The publish job calls `scripts/create-compatibility-aliases.sh` for the
 0.80.0 CUDA and ROCm archive names. The Vulkan alias is withheld until a
 matching Skippy runtime is published.
-The build matrix runs one packaged-host CPU inference smoke on Linux x86_64.
-The other platforms validate their archives without repeating inference.
+The build matrix runs short CPU host smokes on Linux x86_64, macOS and Windows.
+Linux arm64 validates its archive without repeating inference. The macOS and
+Windows smokes install the pinned Skippy CPU package into a private cache.
 Representative CUDA and ROCm host smokes remain a release-readiness item;
 Skippy owns runtime backend qualification.
 

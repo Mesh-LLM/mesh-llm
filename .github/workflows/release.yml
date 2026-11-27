@@ -7,7 +7,7 @@ name: Release
 #
 # Dispatch from main:  just release v0.81.0
 # Rehearse:            just release v0.81.0 --canary   (builds, packages and
-#                      runs one packaged CPU smoke; pushes and publishes nothing)
+#                      runs CPU host smokes; pushes and publishes nothing)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       canary:
-        description: Dry run. Build, package and run one packaged CPU smoke; publish nothing.
+        description: Dry run. Build, package and run CPU host smokes; publish nothing.
         required: true
         default: false
         type: boolean
@@ -189,10 +189,12 @@ jobs:
             os: macos-15
             target: aarch64-apple-darwin
             backend: metal
+            python: python3
           - name: Linux x86_64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             backend: cpu
+            python: python3
           - name: Linux aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -201,6 +203,7 @@ jobs:
             os: windows-2022
             target: x86_64-pc-windows-msvc
             backend: cpu
+            python: python
     defaults:
       run:
         shell: bash
@@ -330,15 +333,19 @@ jobs:
           diff "$RUNNER_TEMP/host-imports.json" "$(dirname "$HOST")/host-imports.json"
 
       - name: Restore the test model
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         id: model
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: smoke-model.gguf
           key: smoke-model-${{ env.MODEL_SHA256 }}
       - name: Download the test model
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && steps.model.outputs.cache-hit != 'true'
+        if: matrix.target != 'aarch64-unknown-linux-gnu' && steps.model.outputs.cache-hit != 'true'
         run: curl -fL --retry 3 --max-time 600 -o smoke-model.gguf "$MODEL_URL"
+
+      - name: Check the test model
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: echo "$MODEL_SHA256  smoke-model.gguf" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
 
       # One MeshLLM integration check from the unpacked release archive.
       # Skippy qualifies inference backends in its own repository.
@@ -348,8 +355,11 @@ jobs:
           MESH_LLM_BIN: ${{ steps.bundle.outputs.host }}
         run: |
           set -euo pipefail
-          echo "$MODEL_SHA256  smoke-model.gguf" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
           scripts/ci-smoke-test.sh unpacked/mesh-bundle/native-runtimes smoke-model.gguf
+
+      - name: Run macOS and Windows CPU host smokes
+        if: matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-pc-windows-msvc'
+        run: ${{ matrix.python }} scripts/ci-cpu-host-smoke.py ${{ steps.bundle.outputs.host }} smoke-model.gguf
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

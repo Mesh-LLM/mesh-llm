@@ -12,6 +12,6 @@ release-host-build:
 
 [windows]
 release-host-build:
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile release -HostOnly
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile release
 
 release-build: release-host-build

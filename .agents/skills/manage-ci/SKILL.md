@@ -23,12 +23,14 @@ skill and the inventory in the same change.
 
 - `ci.yml` runs on every pull request and on pushes to `main`: `just lint`,
   `just test-rust --locked --no-fail-fast` on Linux, macOS and Windows, `just test-ui`, and
-  one real inference smoke on Linux with Skippy's CPU runtime.
+  one Linux CPU inference and mesh routing smoke plus short macOS and Windows
+  CPU host smokes. The latter install Skippy's published CPU package and make
+  one request; they do not qualify the runtime backend.
 - `release.yml` is started by hand (`just release vX.Y.Z`). It builds, signs,
   checks and publishes one host archive per platform and the Swift, Kotlin and
-  Node SDK artifacts. It runs one packaged-host CPU inference smoke on Linux
-  x86_64; Skippy qualifies its runtimes, so MeshLLM does not repeat inference
-  on every release platform.
+  Node SDK artifacts. It runs short CPU host smokes on Linux x86_64, macOS and
+  Windows; Skippy qualifies its runtimes, so MeshLLM does not run a backend
+  qualification matrix.
 - The remaining workflows deploy the website and the Fly console, check the
   client Dockerfile, assign pull requests and close stale ones.
 

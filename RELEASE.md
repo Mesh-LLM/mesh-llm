@@ -62,7 +62,7 @@ With the version already on `main` it has nothing to commit and carries on.
 
 ```bash
 just release v0.81.0            # real release, from main
-just release v0.81.0 --canary   # rehearsal: builds, packages and runs one CPU smoke; publishes nothing
+just release v0.81.0 --canary   # rehearsal: builds, packages and runs CPU host smokes; publishes nothing
 ```
 
 `scripts/release.sh` dispatches `release.yml` on `main` with two inputs,
@@ -78,8 +78,10 @@ just release v0.81.0 --canary   # rehearsal: builds, packages and runs one CPU s
    publish and checks the signature, the signed commit and target, that the
    host links no inference backend and stays within the Linux glibc floor,
    that `host-imports.json` in the archive describes that exact host, and
-   one real inference request from the Linux x86_64 archive. The other
-   platform archives are checked for packaging, signatures and imports.
+   a short CPU inference request from the Linux x86_64, macOS and Windows
+   hosts. The macOS and Windows smokes install the pinned Skippy CPU package
+   into a private cache. Linux arm64 is checked for packaging, signatures
+   and imports without repeating inference.
 3. **Builds the SDKs**, each in its own job: the Swift XCFramework and
    `Package.swift`, the Kotlin native library for three targets, and the Node
    addon for four.
