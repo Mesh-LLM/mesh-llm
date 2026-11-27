@@ -29,6 +29,7 @@ MODEL_PACKAGE_TOOL=1
 ID_SUFFIX=""
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
+LLAMA_GGML_NATIVE="${LLAMA_STAGE_GGML_NATIVE:-${SKIPPY_GGML_NATIVE:-OFF}}"
 TARGET_TRIPLE="${MESH_NATIVE_RUNTIME_TARGET:-}"
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$REPO_ROOT/.deps/llama.cpp}"
 
@@ -477,11 +478,21 @@ build_model_package_tool() {
 }
 
 collect_runtime_libraries() {
-    local pattern primary_names
+    local pattern primary_names native_normalized
+    local -a find_args
     pattern="$(library_pattern)"
     primary_names="$(primary_library_names | tr '\n' ' ')"
-    find "$LLAMA_STAGE_BUILD_DIR" \( -type f -o -type l \) -name "$pattern" \
-        ! -path '*/CMakeFiles/*' \
+    native_normalized="$(printf '%s' "$LLAMA_GGML_NATIVE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]')"
+    find_args=("$LLAMA_STAGE_BUILD_DIR" \( -type f -o -type l \) -name "$pattern" ! -path '*/CMakeFiles/*')
+    if [[ "$runtime_os" == linux && "$runtime_arch" == x86_64 &&
+          "$native_normalized" != OFF && "$native_normalized" != NO &&
+          "$native_normalized" != FALSE && "$native_normalized" != N &&
+          "$native_normalized" != 0 && "$native_normalized" != IGNORE &&
+          "$native_normalized" != NOTFOUND && "$native_normalized" != *-NOTFOUND &&
+          -n "$native_normalized" ]]; then
+        find_args+=( ! -name 'libggml-cpu-*.so*' )
+    fi
+    find "${find_args[@]}" \
         | sort \
         | awk -v primary_names="$primary_names" '
             BEGIN {

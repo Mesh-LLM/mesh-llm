@@ -3,8 +3,8 @@
 //! Statically linked builds always carry the runtime, so this is inert there.
 //! Dynamic builds (Windows, where the runtime is built with MinGW and cannot be
 //! linked into an MSVC test binary) load the runtime that
-//! `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR` names, the variable the host and the CI
-//! smokes already use, with its libraries in manifest order.
+//! `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR` names, using the same verified load
+//! plan and manifest-declared CPU backend modules as product startup.
 
 #[cfg(feature = "dynamic-native-runtime")]
 mod libraries;
@@ -34,16 +34,21 @@ fn load_bundle_from_env() -> Result<(), String> {
         format!("this test calls into the native runtime; set {BUNDLE_DIR_ENV} to a runtime bundle")
     })?;
     let bundle_dir = std::path::Path::new(&bundle_dir);
-    let libraries = libraries::discover_libraries(bundle_dir);
-    if libraries.is_empty() {
-        return Err(format!(
-            "no native runtime libraries found under {}",
+    let plan = libraries::discover_load_plan(bundle_dir).map_err(|error| {
+        format!(
+            "resolve a verified native runtime from {}: {error:#}",
             bundle_dir.display()
-        ));
+        )
+    })?;
+    // SAFETY: the load plan comes from runtime-install's verified manifest
+    // selection and the loader checks the Skippy ABI before binding symbols.
+    unsafe {
+        crate::load_native_runtime_libraries_with_cpu_backend_modules(
+            &plan.libraries,
+            &plan.cpu_backend_modules,
+        )
     }
-    // SAFETY: the libraries come from one runtime bundle's own manifest, and the
-    // loader checks the Skippy ABI the library exports before binding symbols.
-    unsafe { crate::load_native_runtime_libraries(&libraries) }.map_err(|error| {
+    .map_err(|error| {
         format!(
             "load the native runtime from {}: {error}",
             bundle_dir.display()

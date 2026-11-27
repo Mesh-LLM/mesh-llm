@@ -216,7 +216,7 @@ pub use dynamic::{
 };
 
 #[cfg(feature = "dynamic-runtime")]
-pub use dynamic::load_native_runtime_libraries_with_cpu_backend_dir;
+pub use dynamic::load_native_runtime_libraries_with_cpu_backend_modules;
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{

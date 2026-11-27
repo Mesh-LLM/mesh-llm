@@ -135,15 +135,16 @@ fn run_real_native_gate(evidence_path: Option<PathBuf>) {
 
 #[cfg(feature = "dynamic-native-runtime")]
 fn load_runtime(bundle_dir: &std::path::Path) -> skippy_runtime::CapabilityReport {
-    let libraries = libraries::discover_libraries(bundle_dir);
-    assert!(
-        !libraries.is_empty(),
-        "no native runtime libraries found under {}",
-        bundle_dir.display()
-    );
+    let plan = libraries::discover_load_plan(bundle_dir)
+        .expect("resolve a compatible verified runtime load plan");
     if !skippy_runtime::native_runtime_loaded() {
-        unsafe { skippy_runtime::load_native_runtime_libraries(&libraries) }
-            .expect("load native runtime libraries for the real ABI admission test");
+        unsafe {
+            skippy_runtime::load_native_runtime_libraries_with_cpu_backend_modules(
+                &plan.libraries,
+                &plan.cpu_backend_modules,
+            )
+        }
+        .expect("load manifest-declared runtime libraries and CPU backends");
     }
     skippy_runtime::probe_capabilities()
 }

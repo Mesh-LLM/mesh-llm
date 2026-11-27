@@ -9,16 +9,17 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [features]
 default = []
-dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
+dynamic-native-runtime = ["skippy-ffi/dynamic-runtime", "dep:skippy-native-runtime"]
 # Test-only runtime loading for crates whose tests call into the native
 # runtime; enable it from [dev-dependencies] only.
-test-support = []
+test-support = ["dep:skippy-native-runtime"]
 
 [dependencies]
 crossbeam-queue.workspace = true
 anyhow.workspace = true
 hex = "0.4"
 skippy-ffi = { path = "../skippy-ffi", version = "0.78.0", default-features = false  }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.78.0", optional = true }
 skippy-cache = { path = "../skippy-cache", version = "0.78.0" }
 skippy-model = { path = "../skippy-model", version = "0.78.0" }
 skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0" }

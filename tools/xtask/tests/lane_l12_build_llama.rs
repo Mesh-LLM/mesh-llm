@@ -342,6 +342,13 @@ fn native_optimized_linux_build_does_not_force_the_portable_isa_baseline() {
     assert!(fixture.log().contains("-DGGML_NATIVE=ON"));
     assert!(!fixture.log().contains("-DGGML_BACKEND_DL=ON"));
     assert!(!fixture.log().contains("-DGGML_CPU_ALL_VARIANTS=ON"));
+    for argument in ["-DGGML_BACKEND_DL=OFF", "-DGGML_CPU_ALL_VARIANTS=OFF"] {
+        assert!(
+            fixture.log().contains(argument),
+            "missing native-mode reset {argument}"
+        );
+        assert!(fixture.stamp().contains(&format!("cmake-arg={argument}")));
+    }
     for argument in [
         "-DGGML_SSE42=ON",
         "-DGGML_AVX=ON",

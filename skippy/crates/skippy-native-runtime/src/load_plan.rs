@@ -1,10 +1,7 @@
 use crate::InstalledNativeRuntime;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NativeRuntimeLoadPlan {
@@ -12,8 +9,8 @@ pub struct NativeRuntimeLoadPlan {
     pub native_runtime_id: String,
     pub root: PathBuf,
     pub libraries: Vec<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu_backend_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_backend_modules: Vec<PathBuf>,
 }
 
 impl InstalledNativeRuntime {
@@ -36,44 +33,38 @@ impl InstalledNativeRuntime {
                 bail!("native runtime library is missing: {}", library.display());
             }
         }
-        let cpu_backend_dir = declared_cpu_backend_dir(
+        let cpu_backend_modules = declared_cpu_backend_modules(
             &self.path,
             self.manifest.runtime.files.keys().map(String::as_str),
-        )?;
+        );
+        for module in &cpu_backend_modules {
+            if !module.is_file() {
+                bail!(
+                    "native runtime CPU backend module is missing: {}",
+                    module.display()
+                );
+            }
+        }
         Ok(NativeRuntimeLoadPlan {
             release_version: self.release_version.clone(),
             native_runtime_id: self.native_runtime_id.clone(),
             root: self.path.clone(),
             libraries,
-            cpu_backend_dir,
+            cpu_backend_modules,
         })
     }
 }
 
-fn declared_cpu_backend_dir<'a>(
+fn declared_cpu_backend_modules<'a>(
     runtime_root: &Path,
     files: impl Iterator<Item = &'a str>,
-) -> Result<Option<PathBuf>> {
-    let mut directories = BTreeSet::new();
-    for file in files {
-        let path = Path::new(file);
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with("libggml-cpu-") && name.contains(".so") {
-            directories.insert(
-                path.parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf(),
-            );
-        }
-    }
-    match directories.len() {
-        0 => Ok(None),
-        1 => Ok(directories
-            .into_iter()
-            .next()
-            .map(|directory| runtime_root.join(directory))),
-        _ => bail!("native runtime CPU backend variants span multiple directories"),
-    }
+) -> Vec<PathBuf> {
+    files
+        .filter_map(|file| {
+            let path = Path::new(file);
+            let name = path.file_name()?.to_str()?;
+            (name.starts_with("libggml-cpu-") && name.contains(".so"))
+                .then(|| runtime_root.join(path))
+        })
+        .collect()
 }

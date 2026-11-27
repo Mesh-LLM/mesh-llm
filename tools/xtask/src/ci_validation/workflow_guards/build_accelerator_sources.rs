@@ -93,8 +93,8 @@ fn build_accelerator_sources_linux_x86_64_release_isa_is_explicit_and_portable()
     assert!(linux_x86_64.contains("OFF|NO|FALSE|N|0|IGNORE|NOTFOUND"));
     for argument in [
         "-DGGML_NATIVE=OFF",
-        "-DGGML_SSE42=$LLAMA_BASELINE_AVX",
-        "-DGGML_AVX=$LLAMA_BASELINE_AVX",
+        "-DGGML_SSE42=$LLAMA_BASELINE_SSE42_AVX",
+        "-DGGML_AVX=$LLAMA_BASELINE_SSE42_AVX",
         "-DGGML_AVX_VNNI=OFF",
         "-DGGML_AVX2=OFF",
         "-DGGML_BMI2=OFF",
@@ -107,6 +107,9 @@ fn build_accelerator_sources_linux_x86_64_release_isa_is_explicit_and_portable()
     ] {
         assert!(linux_x86_64.contains(argument), "missing {argument}");
     }
+    assert!(bash.contains("GGML_BACKEND_DL=OFF -DGGML_CPU_ALL_VARIANTS=OFF"));
+    let packaging = commands(&source("skippy/scripts/package-native-runtime.sh"));
+    assert!(packaging.contains("! -name 'libggml-cpu-*.so*'"));
 }
 #[test]
 fn build_accelerator_sources_windows_linker_selects_rust_or_llvm_and_preserves_exit_and_arguments()

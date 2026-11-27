@@ -129,7 +129,7 @@ pub use types::{
 #[cfg(feature = "dynamic-native-runtime")]
 pub use skippy_ffi::{
     NativeRuntimeLoadError, load_native_runtime_libraries,
-    load_native_runtime_libraries_with_cpu_backend_dir, load_native_runtime_library,
+    load_native_runtime_libraries_with_cpu_backend_modules, load_native_runtime_library,
     native_runtime_loaded,
 };
 
@@ -178,9 +178,9 @@ where
 ///
 /// Static builds resolve the native ABI at process link/load time, so this
 /// function does not dereference the supplied paths or mutate loader state.
-pub unsafe fn load_native_runtime_libraries_with_cpu_backend_dir<I, P>(
+pub unsafe fn load_native_runtime_libraries_with_cpu_backend_modules<I, P>(
     _paths: I,
-    _cpu_backend_dir: Option<&std::path::Path>,
+    _cpu_backend_modules: &[std::path::PathBuf],
 ) -> Result<(), skippy_ffi::NativeRuntimeLoadError>
 where
     I: IntoIterator<Item = P>,

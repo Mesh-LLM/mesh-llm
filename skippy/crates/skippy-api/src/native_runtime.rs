@@ -70,9 +70,9 @@ pub fn load_local_native_runtime(args: &NativeRuntimeOptions) -> Result<()> {
     // The normal reader verified the selected bundle's ABI metadata and payload hashes.
     // The dynamic loader additionally checks the ABI exported by the actual library.
     unsafe {
-        skippy_runtime::load_native_runtime_libraries_with_cpu_backend_dir(
+        skippy_runtime::load_native_runtime_libraries_with_cpu_backend_modules(
             &plan.libraries,
-            plan.cpu_backend_dir.as_deref(),
+            &plan.cpu_backend_modules,
         )
     }
     .with_context(|| {

@@ -375,6 +375,11 @@ if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
         CMAKE_ARGS+=(-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON)
       fi
       ;;
+    *)
+      # Reused build directories can retain the portable backend plugin mode.
+      # Native mode must build CPU into the runtime and ignore stale variants.
+      CMAKE_ARGS+=(-DGGML_BACKEND_DL=OFF -DGGML_CPU_ALL_VARIANTS=OFF)
+      ;;
   esac
 fi
 if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then

@@ -3,7 +3,7 @@ use libloading::Library;
 use std::{ffi::CString, os::unix::ffi::OsStrExt};
 use std::{
     ffi::{c_char, c_int, c_void},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 
 use crate::llama_draft::LlamaDraftApi;
@@ -25,6 +25,7 @@ use crate::{
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
+static LOAD_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn native_runtime_loaded() -> bool {
     SYMBOLS.get().is_some()
@@ -41,10 +42,7 @@ pub fn native_runtime_loaded() -> bool {
 pub unsafe fn load_native_runtime_library(
     path: impl AsRef<std::path::Path>,
 ) -> Result<(), NativeRuntimeLoadError> {
-    let symbols = unsafe { Symbols::load_paths(&[path.as_ref()]) }?;
-    SYMBOLS
-        .set(symbols)
-        .map_err(|_| NativeRuntimeLoadError::AlreadyLoaded)
+    unsafe { load_native_runtime_libraries_with_cpu_backend_modules([path], &[]) }
 }
 
 /// Load native runtime libraries and resolve Skippy ABI symbols from them.
@@ -64,33 +62,37 @@ where
     I: IntoIterator<Item = P>,
     P: AsRef<std::path::Path>,
 {
-    unsafe { load_native_runtime_libraries_with_cpu_backend_dir(paths, None) }
+    unsafe { load_native_runtime_libraries_with_cpu_backend_modules(paths, &[]) }
 }
 
-/// Load native runtime libraries and register CPU backend variants from their
-/// verified runtime artifact directory when one is declared by its manifest.
+/// Load runtime libraries and only the CPU backend modules listed in the
+/// verified runtime manifest.
 ///
 /// # Safety
 ///
-/// The caller must ensure every library and the optional backend directory
-/// belong to the same verified MeshLLM native runtime artifact for the running
-/// MeshLLM version and Skippy ABI.
-pub unsafe fn load_native_runtime_libraries_with_cpu_backend_dir<I, P>(
+/// The caller must ensure every library and backend module belongs to the same
+/// verified MeshLLM native runtime artifact for the running MeshLLM version
+/// and Skippy ABI.
+pub unsafe fn load_native_runtime_libraries_with_cpu_backend_modules<I, P>(
     paths: I,
-    cpu_backend_dir: Option<&std::path::Path>,
+    cpu_backend_modules: &[std::path::PathBuf],
 ) -> Result<(), NativeRuntimeLoadError>
 where
     I: IntoIterator<Item = P>,
     P: AsRef<std::path::Path>,
 {
+    let _load_guard = LOAD_LOCK.lock().map_err(|_| {
+        NativeRuntimeLoadError::Load("native runtime load lock is poisoned".to_string())
+    })?;
+    if SYMBOLS.get().is_some() {
+        return Err(NativeRuntimeLoadError::AlreadyLoaded);
+    }
     let collected = paths
         .into_iter()
         .map(|path| path.as_ref().to_path_buf())
         .collect::<Vec<_>>();
     let symbols = unsafe { Symbols::load_paths(&collected) }?;
-    if let Some(directory) = cpu_backend_dir {
-        symbols.load_cpu_backend_variants(directory)?;
-    }
+    symbols.load_cpu_backend_modules(cpu_backend_modules)?;
     SYMBOLS
         .set(symbols)
         .map_err(|_| NativeRuntimeLoadError::AlreadyLoaded)
@@ -140,40 +142,51 @@ macro_rules! dynamic_symbols {
         }
 
         impl Symbols {
-            fn load_cpu_backend_variants(
+            fn load_cpu_backend_modules(
                 &self,
-                directory: &std::path::Path,
+                modules: &[std::path::PathBuf],
             ) -> Result<(), NativeRuntimeLoadError> {
                 #[cfg(target_os = "linux")]
                 {
-                    if !directory.is_dir() {
-                        return Err(NativeRuntimeLoadError::Load(format!(
-                            "native runtime CPU backend directory is missing: {}",
-                            directory.display()
-                        )));
+                    if modules.is_empty() {
+                        return Ok(());
                     }
-                    let directory = CString::new(directory.as_os_str().as_bytes()).map_err(|_| {
-                        NativeRuntimeLoadError::Load(
-                            "native runtime CPU backend directory contains a NUL byte".to_string(),
-                        )
-                    })?;
                     let loader = self._libraries.iter().rev().find_map(|library| unsafe {
                         library
-                            .get::<unsafe extern "C" fn(*const c_char)>(
-                                b"ggml_backend_load_all_from_path\0",
+                            .get::<unsafe extern "C" fn(*const c_char) -> *mut c_void>(
+                                b"ggml_backend_load\0",
                             )
                             .ok()
                     });
                     let Some(loader) = loader else {
                         return Err(NativeRuntimeLoadError::Load(
-                            "native runtime does not export ggml_backend_load_all_from_path"
+                            "native runtime does not export ggml_backend_load"
                                 .to_string(),
                         ));
                     };
-                    unsafe { loader(directory.as_ptr()) };
+                    for module in modules {
+                        if !module.is_file() {
+                            return Err(NativeRuntimeLoadError::Load(format!(
+                                "native runtime CPU backend module is missing: {}",
+                                module.display()
+                            )));
+                        }
+                        let path = CString::new(module.as_os_str().as_bytes()).map_err(|_| {
+                            NativeRuntimeLoadError::Load(format!(
+                                "native runtime CPU backend module path contains a NUL byte: {}",
+                                module.display()
+                            ))
+                        })?;
+                        if unsafe { loader(path.as_ptr()) }.is_null() {
+                            return Err(NativeRuntimeLoadError::Load(format!(
+                                "failed to load native runtime CPU backend module: {}",
+                                module.display()
+                            )));
+                        }
+                    }
                 }
                 #[cfg(not(target_os = "linux"))]
-                let _ = directory;
+                let _ = modules;
                 Ok(())
             }
 
