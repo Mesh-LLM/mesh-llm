@@ -192,7 +192,24 @@ impl InstanceRuntime {
         fs::create_dir_all(&root).context("failed to create runtime root")?;
 
         let dir = root.join(pid.to_string());
-        fs::create_dir_all(&dir).context("failed to create runtime directory")?;
+
+        // The dead-slot cleanup of another instance may be claiming this
+        // directory, left by an earlier process with the same pid, at the
+        // moment this one starts. It renames the directory away once claimed,
+        // so a short retry creates and opens a fresh slot instead of failing
+        // the start.
+        let mut attempt = 0;
+        let lock_file = loop {
+            attempt += 1;
+            match open_slot_lock(&dir)? {
+                Some(lock_file) => break lock_file,
+                None if attempt < SLOT_CLAIM_ATTEMPTS => std::thread::sleep(SLOT_CLAIM_RETRY),
+                None => anyhow::bail!(
+                    "runtime directory for pid {pid} is already locked \
+                     (another live process owns this slot)"
+                ),
+            }
+        };
 
         // On Unix, harden permissions on the runtime directories so instance
         // metadata is only readable by the owning user.
@@ -212,23 +229,6 @@ impl InstanceRuntime {
                 }
             }
         }
-
-        // The dead-slot cleanup of another instance may be claiming this
-        // directory, left by an earlier process with the same pid, at the
-        // moment this one starts. It renames the directory away once claimed,
-        // so a short retry opens a fresh slot instead of failing the start.
-        let mut attempt = 0;
-        let lock_file = loop {
-            attempt += 1;
-            match open_slot_lock(&dir)? {
-                Some(lock_file) => break lock_file,
-                None if attempt < SLOT_CLAIM_ATTEMPTS => std::thread::sleep(SLOT_CLAIM_RETRY),
-                None => anyhow::bail!(
-                    "runtime directory for pid {pid} is already locked \
-                     (another live process owns this slot)"
-                ),
-            }
-        };
 
         Ok(Self {
             dir,
@@ -251,7 +251,22 @@ const SLOT_CLAIM_RETRY: std::time::Duration = std::time::Duration::from_millis(2
 /// Create `dir` and open its lock, or `None` when the slot is held right now:
 /// by a live process or by a dead-slot cleanup that is claiming it.
 fn open_slot_lock(dir: &Path) -> Result<Option<File>> {
-    fs::create_dir_all(dir).context("failed to create runtime directory")?;
+    match fs::create_dir_all(dir) {
+        Ok(()) => {}
+        // A cleanup renamed an old slot of this pid away between `mkdir`
+        // finding it and the check that it is a directory: retry.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(anyhow::Error::from(error)).context("failed to create runtime directory");
+        }
+    }
     let lock_path = dir.join("lock");
     // The lock file is opened only to hold a flock — we never write to it.
     // `truncate(false)` is the safe choice: existing locks must not be wiped.

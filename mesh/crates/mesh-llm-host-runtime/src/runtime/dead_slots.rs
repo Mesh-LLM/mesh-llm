@@ -126,7 +126,10 @@ fn prune_slot(root: &Path, dir: &Path, my_pid: u32, now: SystemTime, retention: 
 /// numeric directory under a custom root, such as an archive named after a
 /// year, is not ours to remove.
 fn is_instance_slot(dir: &Path) -> bool {
-    fs::symlink_metadata(dir.join("lock")).is_ok_and(|meta| meta.is_file())
+    // The slot itself first: a numeric symlink to a slot-shaped directory
+    // elsewhere is not a slot under this root.
+    fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())
+        && fs::symlink_metadata(dir.join("lock")).is_ok_and(|meta| meta.is_file())
         && holds_only_instance_files(dir)
 }
 
@@ -143,7 +146,7 @@ fn holds_only_instance_files(dir: &Path) -> bool {
             };
             match entry.file_name().to_str() {
                 Some("lock" | "owner.json" | "owner.json.tmp") => kind.is_file(),
-                Some("logs") => kind.is_dir() && holds_only_files(&entry.path()),
+                Some("logs") => kind.is_dir() && holds_only_runtime_logs(&entry.path()),
                 _ => false,
             }
         })
@@ -153,14 +156,23 @@ fn holds_only_instance_files(dir: &Path) -> bool {
 /// Whether every entry of `dir` is a regular file. An instance writes only
 /// files in `logs/`, and the freshness check reads no deeper, so a slot whose
 /// `logs/` holds a directory is not one to remove.
-fn holds_only_files(dir: &Path) -> bool {
+/// Whether `dir` holds nothing but the logs an instance writes there, the
+/// native log, as regular files: anything else, an operator's notes say, keeps
+/// the slot.
+fn holds_only_runtime_logs(dir: &Path) -> bool {
     let Ok(mut entries) = fs::read_dir(dir) else {
         return false;
     };
     entries.all(|entry| {
-        entry.is_ok_and(|entry| fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.is_file()))
+        entry.is_ok_and(|entry| {
+            entry.file_name().to_str() == Some(RUNTIME_LOG_NAME)
+                && fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.is_file())
+        })
     })
 }
+
+/// The one log an instance writes in its slot (see `tracing_writer`).
+const RUNTIME_LOG_NAME: &str = "skippy-native.log";
 
 /// A slot a cleanup renamed out of the way before removing it: a directory
 /// with the exact name the cleanup gives (`.removing-<pid>-<nanos>`) that
@@ -634,6 +646,39 @@ mod tests {
 
         prune_dead_runtime_slots(root.path(), 1, SystemTime::now(), DEAD_SLOT_RETENTION);
         assert!(renamed.join("logs").join("skippy-native.log").exists());
+    }
+
+    /// A file an operator left in `logs/` is not the instance's to remove, so
+    /// it keeps the whole slot however old.
+    #[test]
+    fn keeps_an_expired_slot_holding_a_file_no_instance_writes_in_logs() {
+        let root = tempdir().unwrap();
+        let dir = slot(root.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        fs::write(dir.join("logs").join("notes.txt"), "operator diagnostics").unwrap();
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(dir.join("logs").join("notes.txt").exists());
+    }
+
+    /// A numeric symlink under the root is not a slot, whatever it points at.
+    #[cfg(unix)]
+    #[test]
+    fn keeps_a_numeric_symlink_to_a_slot_shaped_directory() {
+        let root = tempdir().unwrap();
+        let elsewhere = tempdir().unwrap();
+        let target = slot(elsewhere.path(), DEAD_PID, Some(dead_owner(DEAD_PID)));
+        std::os::unix::fs::symlink(&target, root.path().join((DEAD_PID + 1).to_string())).unwrap();
+
+        let later = SystemTime::now() + WEEK_AND_A_DAY;
+        assert_eq!(
+            prune_dead_runtime_slots(root.path(), 1, later, DEAD_SLOT_RETENTION),
+            0
+        );
+        assert!(target.join("logs").join("skippy-native.log").exists());
     }
 
     /// Only the native log is recent: the slot, its owner record and `logs/`
