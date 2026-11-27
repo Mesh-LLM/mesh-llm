@@ -340,6 +340,74 @@ fn command_summary_redacts_spec_draft_tune_values() {
 }
 
 #[test]
+fn command_summary_records_policy_subcommands_and_redacts_payload() {
+    let set_default = parsed_summary(&[
+        "mesh-llm",
+        "policy",
+        "set",
+        "--ensure-models",
+        "private/model-a",
+    ]);
+    assert_eq!(set_default, "mesh-llm policy set payload [REDACTED]");
+
+    let set_json = parsed_summary(&[
+        "mesh-llm",
+        "policy",
+        "set",
+        "--ensure-models",
+        "private/model-a",
+        "--json",
+    ]);
+    assert_eq!(set_json, "mesh-llm policy set --json payload [REDACTED]");
+
+    let set_port = parsed_summary(&[
+        "mesh-llm",
+        "policy",
+        "set",
+        "--ensure-models",
+        "private/model-a",
+        "--port",
+        "4242",
+    ]);
+    assert_eq!(
+        set_port,
+        "mesh-llm policy set --port 4242 payload [REDACTED]"
+    );
+
+    for summary in [&set_default, &set_json, &set_port] {
+        assert!(!summary.is_empty());
+        let sanitized = CliCommandSummary::sanitize(summary)
+            .unwrap_or_else(|| panic!("policy set summary rejected by sanitizer: {summary}"));
+        assert_eq!(sanitized.as_str(), summary.as_str());
+    }
+
+    assert_eq!(
+        parsed_summary(&["mesh-llm", "policy", "get"]),
+        "mesh-llm policy get"
+    );
+    assert_eq!(
+        parsed_summary(&["mesh-llm", "policy", "get", "--json"]),
+        "mesh-llm policy get --json"
+    );
+    assert_eq!(
+        parsed_summary(&["mesh-llm", "policy", "clear"]),
+        "mesh-llm policy clear"
+    );
+    for args in [
+        vec!["mesh-llm", "policy", "get"],
+        vec!["mesh-llm", "policy", "get", "--json"],
+        vec!["mesh-llm", "policy", "clear"],
+        vec!["mesh-llm", "policy", "clear", "--json"],
+    ] {
+        let summary = parsed_summary(&args);
+        assert!(!summary.is_empty());
+        let sanitized = CliCommandSummary::sanitize(&summary)
+            .unwrap_or_else(|| panic!("policy summary rejected by sanitizer: {summary}"));
+        assert_eq!(sanitized.as_str(), summary);
+    }
+}
+
+#[test]
 fn command_summary_redacts_external_argv_without_global_cli_context() {
     assert_eq!(
         parsed_summary(&["mesh-llm", "private-plugin", "--api-key", "private-key"]),

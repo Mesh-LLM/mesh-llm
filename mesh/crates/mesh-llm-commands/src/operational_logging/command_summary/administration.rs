@@ -149,8 +149,9 @@ pub(super) fn format_policy(
 ) {
     use mesh_llm_cli::PolicyCommand;
     match command {
-        PolicyCommand::Set { port, .. } => {
+        PolicyCommand::Set { port, json, .. } => {
             assembly.command.push_str(" policy set");
+            assembly.flag("json", *json);
             assembly.port(*port, DEFAULT_LOCAL_PORT);
             assembly.redact("payload", true);
         }
