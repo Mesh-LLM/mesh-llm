@@ -151,16 +151,20 @@ mod tests {
     #[test]
     fn the_service_env_file_names_the_store() {
         let temp = tempfile::tempdir().unwrap();
+        // Absolute on the host running the test (a Windows host has no
+        // drive-less absolute paths), as it is on the service's host; single
+        // quotes keep a Windows host's backslashes literal.
+        let store = temp.path().join("srv").join("plugins");
         for platform in [SetupPlatform::Linux, SetupPlatform::MacOs] {
             let context = context(platform, temp.path());
             write_env(
                 &context,
-                "# MESH_LLM_PLUGIN_DIR=/commented\nRUST_LOG=info\nMESH_LLM_PLUGIN_DIR=\"/srv/plugins\"\n",
+                &format!(
+                    "# MESH_LLM_PLUGIN_DIR=/commented\nRUST_LOG=info\nMESH_LLM_PLUGIN_DIR='{}'\n",
+                    store.display()
+                ),
             );
-            assert_eq!(
-                service_plugin_store(&context).unwrap(),
-                Some(PathBuf::from("/srv/plugins"))
-            );
+            assert_eq!(service_plugin_store(&context).unwrap(), Some(store.clone()));
         }
     }
 
