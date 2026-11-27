@@ -59,8 +59,9 @@ existing jobs.
 | `dispatch_packaging_release` | `ubuntu-24.04` | Fails on purpose; runs only if `MESH_PACKAGING_DISPATCH` is `true` and the release is not a prerelease |
 
 The publish job calls `scripts/create-compatibility-aliases.sh` for the
-0.80.0 CUDA and ROCm archive names. The Vulkan alias is withheld until a
-matching Skippy runtime is published.
+0.80.0 CUDA and ROCm archive names. The aliases rely on GPU packages from the
+pinned Skippy release. The Vulkan alias is withheld until a matching Skippy
+runtime is published.
 The build matrix runs short CPU host smokes on Linux x86_64, macOS and Windows.
 Linux arm64 validates its archive without repeating inference. The macOS and
 Windows smokes install the pinned Skippy CPU package into a private cache.

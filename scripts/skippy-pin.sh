@@ -6,8 +6,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pin_url="https://github.com/Mesh-LLM/skippy"
-pin_rev="1be3dbe690ffc14eecf1e7c6aeee3846fc4ed207"
-pin_version="0.80.3"
+pin_rev="29c1109bf62e992f480889948da219c8adaae864"
+pin_version="0.80.4"
 if [[ ! -f "$REPO_ROOT/.cargo/skippy-local.toml" ]]; then
     manifest_version="$(sed -n 's/^skippy-ffi = .*version = "=\([0-9][0-9.]*\)".*/\1/p' "$REPO_ROOT/Cargo.toml")"
     [[ "$manifest_version" == "$pin_version" ]] || {

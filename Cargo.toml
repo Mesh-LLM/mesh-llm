@@ -73,33 +73,33 @@ mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.80.0" }
 # MeshLLM loads Skippy's native runtime at run time and never links llama.cpp:
 # the dynamic features below keep skippy-ffi from compiling it, whichever crate
 # is built.
-# Pinned to Skippy release v0.80.3. It has no request tiers (Mesh-LLM/skippy#113):
+# Pinned to Skippy release v0.80.4. It has no request tiers (Mesh-LLM/skippy#113):
 # see mesh/docs/specs/request-tiers.md.
-hf_hub = { package = "skippy-hf-hub", version = "=0.80.3", default-features = false }
-skippy-api = { version = "=0.80.3", features = ["dynamic-native-runtime"] }
-skippy-cache = { version = "=0.80.3" }
-skippy-commands = { version = "=0.80.3", features = ["dynamic-native-runtime"] }
-skippy-config = { version = "=0.80.3" }
-skippy-coordinator = { version = "=0.80.3" }
-skippy-events = { version = "=0.80.3" }
-skippy-ffi = { version = "=0.80.3", default-features = false, features = ["dynamic-runtime"] }
-skippy-gpu-bench = { version = "=0.80.3" }
-skippy-guardrails = { version = "=0.80.3" }
-skippy-hardware-profile = { version = "=0.80.3" }
-skippy-inference-api = { version = "=0.80.3" }
-skippy-model = { version = "=0.80.3" }
-skippy-model-artifact = { version = "=0.80.3" }
-skippy-model-hf = { version = "=0.80.3" }
-skippy-model-ref = { version = "=0.80.3" }
-skippy-model-resolver = { version = "=0.80.3" }
-skippy-native-runtime = { version = "=0.80.3" }
-skippy-package-format = { version = "=0.80.3" }
-skippy-protocol = { version = "=0.80.3" }
-skippy-runtime = { version = "=0.80.3", features = ["dynamic-native-runtime"] }
-skippy-runtime-install = { version = "=0.80.3" }
-skippy-serving = { version = "=0.80.3", features = ["dynamic-native-runtime"] }
-skippy-tokenizer = { version = "=0.80.3" }
-skippy-topology = { version = "=0.80.3" }
+hf_hub = { package = "skippy-hf-hub", version = "=0.80.4", default-features = false }
+skippy-api = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-cache = { version = "=0.80.4" }
+skippy-commands = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-config = { version = "=0.80.4" }
+skippy-coordinator = { version = "=0.80.4" }
+skippy-events = { version = "=0.80.4" }
+skippy-ffi = { version = "=0.80.4", default-features = false, features = ["dynamic-runtime"] }
+skippy-gpu-bench = { version = "=0.80.4" }
+skippy-guardrails = { version = "=0.80.4" }
+skippy-hardware-profile = { version = "=0.80.4" }
+skippy-inference-api = { version = "=0.80.4" }
+skippy-model = { version = "=0.80.4" }
+skippy-model-artifact = { version = "=0.80.4" }
+skippy-model-hf = { version = "=0.80.4" }
+skippy-model-ref = { version = "=0.80.4" }
+skippy-model-resolver = { version = "=0.80.4" }
+skippy-native-runtime = { version = "=0.80.4" }
+skippy-package-format = { version = "=0.80.4" }
+skippy-protocol = { version = "=0.80.4" }
+skippy-runtime = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-runtime-install = { version = "=0.80.4" }
+skippy-serving = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-tokenizer = { version = "=0.80.4" }
+skippy-topology = { version = "=0.80.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

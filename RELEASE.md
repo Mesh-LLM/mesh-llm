@@ -101,9 +101,9 @@ rolling preview.
 For one transition release only, the Linux and Windows host archives are also
 published under the CUDA and ROCm archive names that 0.80.0 used (`-cuda-12`,
 `-cuda-13`, `-rocm`). A 0.80.0 install on one of those GPU machines asks for
-those names when it updates. The Vulkan alias is withheld because Skippy
-v0.80.3 publishes no Vulkan runtime; Vulkan users must update manually after
-building or obtaining a compatible runtime.
+those names when it updates. The Vulkan alias is withheld because the pinned
+Skippy release publishes no Vulkan runtime. Vulkan users must update manually
+after building or obtaining a compatible runtime.
 
 Each one is a byte-for-byte copy of the plain host archive. It is not a GPU
 build: it bundles the CPU runtime and says so in its manifest. After the

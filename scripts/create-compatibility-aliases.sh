@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offer legacy 0.80.0 GPU archive names only where the pinned Skippy release
-# publishes a replacement runtime. Vulkan has no v0.80.3 runtime and is withheld.
+# publishes a replacement runtime. The Vulkan aliases are withheld.
 set -euo pipefail
 
 (($# == 1)) || { echo "usage: $0 <release-artifact-dir>" >&2; exit 2; }
