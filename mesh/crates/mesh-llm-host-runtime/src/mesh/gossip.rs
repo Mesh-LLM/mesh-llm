@@ -950,6 +950,21 @@ impl Node {
 
     pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
         let mut state = self.state.lock().await;
+        // A redial or recovered handshake can fail while the peer reconnects
+        // on its own. Checked under the lock that removes the peer, so the
+        // connection it installed keeps it in routing.
+        if reason.yields_to_live_connection()
+            && state
+                .connections
+                .get(&id)
+                .is_some_and(|conn| conn.close_reason().is_none())
+        {
+            tracing::info!(
+                "Keeping peer {}: it reconnected while our own attempt failed",
+                id.fmt_short()
+            );
+            return;
+        }
         // A peer that leaves stops being listed with plugin keys; what it
         // withdrew stays listed.
         self.plugin_keys.forget_peer(id);
