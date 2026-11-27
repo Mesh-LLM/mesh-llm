@@ -93,6 +93,11 @@ pub struct MeshPolicyPayload {
     pub policy_gen: u32,
     #[prost(message, repeated, tag = "6")]
     pub model_intents: ::prost::alloc::vec::Vec<MeshModelIntent>,
+    /// Optional mesh ID this policy targets. When non-empty, nodes that
+    /// belong to a different mesh reject the policy. Empty means the check
+    /// is skipped (backward-compatible with older senders).
+    #[prost(string, tag = "7")]
+    pub mesh_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MeshModelIntent {

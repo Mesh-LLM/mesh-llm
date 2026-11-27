@@ -17,6 +17,7 @@ pub(super) async fn dispatch_policy_command(command: &PolicyCommand, cli: &Cli) 
             policy_gen,
             payload,
             signature,
+            owner_key,
             port,
             json,
         } => {
@@ -27,6 +28,7 @@ pub(super) async fn dispatch_policy_command(command: &PolicyCommand, cli: &Cli) 
                 *policy_gen,
                 payload.as_deref(),
                 signature.as_deref(),
+                owner_key.as_deref(),
                 *port,
                 *json,
             )
@@ -45,6 +47,7 @@ async fn run_policy_set(
     policy_gen: Option<u32>,
     payload: Option<&str>,
     signature: Option<&str>,
+    owner_key: Option<&std::path::Path>,
     port: u16,
     json_output: bool,
 ) -> Result<()> {
@@ -60,7 +63,13 @@ async fn run_policy_set(
     } else {
         // Auto-sign mode: build the payload from the model lists, load the
         // owner keypair, sign, and base64-encode.
-        build_and_sign_policy(ensure_models, drain_models, expires_in_secs, policy_gen)?
+        build_and_sign_policy(
+            ensure_models,
+            drain_models,
+            expires_in_secs,
+            policy_gen,
+            owner_key,
+        )?
     };
 
     let body = json!({
@@ -92,15 +101,44 @@ fn build_and_sign_policy(
     drain_models: &[String],
     expires_in_secs: Option<u64>,
     policy_gen: Option<u32>,
+    owner_key: Option<&std::path::Path>,
 ) -> Result<(String, String)> {
-    use mesh_llm_identity::{OwnerKeypair, default_keystore_path, load_keystore};
+    use mesh_llm_identity::{
+        CryptoError, KeystoreInfo, OwnerKeypair, default_keystore_path, keystore_metadata,
+        load_keystore,
+    };
     use mesh_llm_protocol::proto::node::{MeshModelIntent, MeshModelIntentAction, MeshPolicyPayload};
     use prost::Message;
 
-    let keystore_path = default_keystore_path()
-        .context("Could not determine default keystore path")?;
-    let keypair: OwnerKeypair = load_keystore(&keystore_path, None)
-        .context("Failed to load owner keypair from default keystore")?;
+    let keystore_path = match owner_key {
+        Some(p) => p.to_path_buf(),
+        None => default_keystore_path().context("Could not determine default keystore path")?,
+    };
+    // Respect encrypted keystores: check MESH_LLM_OWNER_PASSPHRASE first,
+    // then prompt interactively (same unlock flow as the runtime).
+    let passphrase: Option<String> = {
+        let info: KeystoreInfo = keystore_metadata(&keystore_path)
+            .with_context(|| format!("Could not read keystore metadata from {}", keystore_path.display()))?;
+        if info.encrypted {
+            if let Ok(p) = std::env::var("MESH_LLM_OWNER_PASSPHRASE") {
+                Some(p)
+            } else if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+                let prompt = format!(
+                    "Enter owner keystore passphrase for {}: ",
+                    keystore_path.display()
+                );
+                Some(rpassword::prompt_password(&prompt)
+                    .context("Failed to read passphrase")?)
+            } else {
+                return Err(CryptoError::MissingPassphrase.into());
+            }
+        } else {
+            None
+        }
+    };
+    let keypair: OwnerKeypair =
+        load_keystore(&keystore_path, passphrase.as_deref())
+            .with_context(|| format!("Failed to load owner keypair from {}", keystore_path.display()))?;
 
     let issued = now_ms();
     let expires = expires_in_secs

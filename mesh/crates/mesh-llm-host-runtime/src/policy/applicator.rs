@@ -1,12 +1,18 @@
 use crate::policy::{PolicyStore, PolicyUpdateResult};
 use crate::proto::node::{MeshModelIntentAction, MeshPolicyPayload, SignedMeshPolicy};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
 pub(crate) struct PolicyApplicator {
     store: Arc<PolicyStore>,
-    management_port: u16,
+    /// Atomically updatable so the actual OS-assigned port can be written
+    /// after the console listener binds (fixes `--console 0` / port 0).
+    management_port: Arc<AtomicU16>,
     owner_control_token: String,
     data_dir: Option<std::path::PathBuf>,
+    /// The owner IDs authorised to inject policy into this node.
+    /// Passed to `PolicyStore::update` on every inbound gossip policy.
+    authorized_owner_ids: Vec<String>,
 }
 
 impl PolicyApplicator {
@@ -15,13 +21,21 @@ impl PolicyApplicator {
         management_port: u16,
         owner_control_token: String,
         data_dir: Option<std::path::PathBuf>,
+        authorized_owner_ids: Vec<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
-            management_port,
+            management_port: Arc::new(AtomicU16::new(management_port)),
             owner_control_token,
             data_dir,
+            authorized_owner_ids,
         })
+    }
+
+    /// Update the management port after the console listener has bound.
+    /// Called from the serving surface once the actual ephemeral port is known.
+    pub fn set_management_port(&self, port: u16) {
+        self.management_port.store(port, Ordering::Relaxed);
     }
 
     pub async fn apply_if_newer(self: &Arc<Self>, incoming: SignedMeshPolicy) {
@@ -44,7 +58,9 @@ impl PolicyApplicator {
                 }
             }
         }
-        match self.store.update(incoming).await {
+        // Pass None for node_mesh_id on the gossip path: mesh_id scoping is
+        // validated at the management-API ingestion point instead.
+        match self.store.update(incoming, &self.authorized_owner_ids, None).await {
             PolicyUpdateResult::Accepted { .. } => {
                 if let Some(state_dir) = self.data_dir.clone() {
                     let store = Arc::clone(&self.store);
@@ -88,10 +104,8 @@ impl PolicyApplicator {
     }
 
     async fn fetch_local_control_endpoint(&self, client: &reqwest::Client) -> Option<String> {
-        let url = format!(
-            "http://127.0.0.1:{}/api/runtime/control-bootstrap",
-            self.management_port
-        );
+        let port = self.management_port.load(Ordering::Relaxed);
+        let url = format!("http://127.0.0.1:{port}/api/runtime/control-bootstrap");
         let Ok(resp) = client.get(&url).send().await else {
             return None;
         };
@@ -102,7 +116,7 @@ impl PolicyApplicator {
     }
 
     async fn apply_model_intents(&self, payload: &MeshPolicyPayload) {
-        let client = match reqwest::Client::builder()
+        let client = match mesh_llm_system::local_http::local_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
         {
@@ -150,7 +164,8 @@ impl PolicyApplicator {
                 "endpoint": local_endpoint,
                 "model": intent.canonical_model_ref,
             });
-            let url = format!("http://127.0.0.1:{}{}", self.management_port, path);
+            let port = self.management_port.load(Ordering::Relaxed);
+            let url = format!("http://127.0.0.1:{port}{path}");
             let _ = client
                 .post(&url)
                 .header(
@@ -164,7 +179,8 @@ impl PolicyApplicator {
     }
 
     async fn fetch_serving_models(&self, client: &reqwest::Client) -> Vec<String> {
-        let url = format!("http://127.0.0.1:{}/api/runtime", self.management_port);
+        let port = self.management_port.load(Ordering::Relaxed);
+        let url = format!("http://127.0.0.1:{port}/api/runtime");
         let Ok(response) = client.get(&url).send().await else {
             return Vec::new();
         };

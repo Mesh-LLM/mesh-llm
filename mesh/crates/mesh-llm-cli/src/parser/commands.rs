@@ -808,6 +808,10 @@ pub enum PolicyCommand {
         /// Base64-encoded Ed25519 signature over the payload. Pre-signed mode.
         #[arg(long, requires = "payload")]
         signature: Option<String>,
+        /// Path to the owner keystore file. Auto-sign mode (defaults to the
+        /// standard keystore location). Respects MESH_LLM_OWNER_PASSPHRASE.
+        #[arg(long, conflicts_with = "payload")]
+        owner_key: Option<std::path::PathBuf>,
         /// Console/API port of the running mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,

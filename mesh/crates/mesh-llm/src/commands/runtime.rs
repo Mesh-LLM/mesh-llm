@@ -128,6 +128,8 @@ pub(crate) async fn dispatch_runtime_command(
                     *json,
                 )
                 .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
             } else {
                 run_control_load_model(
                     endpoint.as_deref().unwrap_or(""),
@@ -163,6 +165,8 @@ pub(crate) async fn dispatch_runtime_command(
                     *json,
                 )
                 .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
             } else {
                 run_control_unload_model(
                     endpoint.as_deref().unwrap_or(""),
@@ -198,6 +202,8 @@ pub(crate) async fn dispatch_runtime_command(
                     *json,
                 )
                 .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
             } else {
                 run_control_ensure_model(
                     endpoint.as_deref().unwrap_or(""),
@@ -233,6 +239,8 @@ pub(crate) async fn dispatch_runtime_command(
                     *json,
                 )
                 .await
+            } else if *dry_run {
+                anyhow::bail!("--dry-run requires --fleet; use --fleet to target multiple nodes")
             } else {
                 run_control_drain_model(
                     endpoint.as_deref().unwrap_or(""),

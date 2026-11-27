@@ -481,6 +481,21 @@ impl MeshApi {
         self.policy_store.clone()
     }
 
+    /// Patch the management port into the PolicyApplicator after the console
+    /// listener has bound (needed when the OS assigned an ephemeral port).
+    pub(crate) async fn policy_applicator_set_port(&self, port: u16) {
+        let node = self.inner.lock().await.node.clone();
+        if let Some(applicator) = node
+            .policy_applicator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .cloned()
+        {
+            applicator.set_management_port(port);
+        }
+    }
+
     pub(crate) async fn status_snapshot_string(&self) -> String {
         let status = self.status().await;
         match serde_json::to_string_pretty(&status) {

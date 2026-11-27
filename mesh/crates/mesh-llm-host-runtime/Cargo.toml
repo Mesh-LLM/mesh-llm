@@ -117,6 +117,7 @@ axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 schemars = "1"
 prost = "0.14"
+semver = "1"
 toml = "1.1"
 hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.80.0", default-features = false, features = ["blocking"] }
 tempfile = "3"

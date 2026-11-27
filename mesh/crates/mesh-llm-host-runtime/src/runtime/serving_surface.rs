@@ -1002,11 +1002,21 @@ async fn wire_policy_store_into_node(
         .identity_state_dir
         .clone()
         .or_else(|| crate::mesh::identity_state_dir().ok());
+    // Build the authorized-owner list from the node's own verified owner ID.
+    // Only the node's owner (and any additionally-trusted owners from mesh
+    // membership config) may inject policy. An empty list means no policy
+    // is accepted until the owner identity is verified.
+    let authorized_owner_ids: Vec<String> = node
+        .local_verified_owner_id()
+        .await
+        .into_iter()
+        .collect();
     let applicator = crate::policy::applicator::PolicyApplicator::new(
         store.clone(),
         management_port,
         token,
         state_dir.clone(),
+        authorized_owner_ids,
     );
     node.set_policy_store(store.clone(), applicator.clone());
     // Phase 3.2: load persisted policy from disk and re-apply it so the fleet
@@ -1325,6 +1335,11 @@ pub(super) async fn setup_run_auto_serving_surface(
     );
     let (ready_console_url, ready_console_port) =
         run_auto_ready_console_endpoint(&console_listener);
+    // Patch the actual OS-assigned port into the PolicyApplicator so that
+    // `--console 0` (ephemeral port) doesn't leave the applicator stuck on 0.
+    if let (Some(actual_port), Some(state)) = (ready_console_port, ctx.console_state) {
+        state.policy_applicator_set_port(actual_port).await;
+    }
     emit_run_auto_builtin_endpoint_ready(ctx.options, &api_ready_url, ready_console_url.as_ref());
     let api_proxy_handle = spawn_run_auto_api_proxy(
         ctx.options,

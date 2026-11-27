@@ -2020,8 +2020,29 @@ async fn handle_control_fleet(
         filtered_peers.retain(|p| !p.serving_models.iter().any(|m| m == model));
     }
     if let Some(ref version) = request.version_min {
-        filtered_peers
-            .retain(|p| p.version.as_deref().map_or(false, |v| v >= version.as_str()));
+        // Parse the minimum version as semver so "0.10.0" > "0.9.0" (string
+        // comparison would wrongly consider "0.9.0" >= "0.10.0").
+        let min_semver = version
+            .trim_start_matches(['v', 'V'])
+            .parse::<semver::Version>()
+            .ok();
+        filtered_peers.retain(|p| {
+            let Some(peer_v) = p.version.as_deref() else {
+                return false;
+            };
+            // Fall back to string comparison when semver parsing fails so
+            // malformed version strings are still handled gracefully.
+            match (
+                peer_v
+                    .trim_start_matches(['v', 'V'])
+                    .parse::<semver::Version>()
+                    .ok(),
+                min_semver.as_ref(),
+            ) {
+                (Some(pv), Some(mv)) => pv >= *mv,
+                _ => peer_v >= version.as_str(),
+            }
+        });
     }
     if let Some(ref owner) = request.owner_id {
         filtered_peers.retain(|p| {
@@ -2192,6 +2213,9 @@ struct FleetMetricsResponse {
     fleet_cumulative_completion_tokens: u64,
     fleet_cumulative_prompt_tokens: u64,
     model_totals: Vec<FleetModelThroughput>,
+    /// Describes what traffic these counters cover. Currently "http-routed":
+    /// native SDK inference (skippy direct) is not yet wired into this path.
+    token_source: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -2283,21 +2307,39 @@ async fn handle_fleet_metrics(
         let local_cumulative = global_snap.cumulative_completion_tokens;
         let mut local_total_tps = 0f64;
         let local_model_snapshots = node.routing_metrics.model_snapshots();
+        // Use local-production tps only (same basis as cumulative_completion_tokens
+        // and as the peer rows that use advertised provider throughput). Filter to
+        // per-target snapshots whose kind is "local" so forwarded and endpoint
+        // requests do not inflate this node's fleet row (P2g).
         let mut local_models: Vec<FleetModelThroughput> = local_model_snapshots
             .iter()
             .filter_map(|(model_name, snap)| {
-                let tps = snap.avg_tokens_per_second?;
-                local_total_tps += tps;
-                fleet_total_tps += tps;
+                let local_tps: f64 = snap
+                    .targets
+                    .iter()
+                    .filter(|t| t.kind == "local")
+                    .filter_map(|t| t.avg_tokens_per_second)
+                    .sum();
+                let local_samples: u64 = snap
+                    .targets
+                    .iter()
+                    .filter(|t| t.kind == "local")
+                    .map(|t| t.throughput_samples)
+                    .sum();
+                if local_tps <= 0.0 {
+                    return None;
+                }
+                local_total_tps += local_tps;
+                fleet_total_tps += local_tps;
                 let entry = model_aggregate
                     .entry(model_name.clone())
                     .or_insert((0.0, 0));
-                entry.0 += tps;
-                entry.1 += snap.throughput_samples;
+                entry.0 += local_tps;
+                entry.1 += local_samples;
                 Some(FleetModelThroughput {
                     model: model_name.clone(),
-                    avg_tokens_per_second: tps,
-                    samples: snap.throughput_samples,
+                    avg_tokens_per_second: local_tps,
+                    samples: local_samples,
                 })
             })
             .collect();
@@ -2340,6 +2382,7 @@ async fn handle_fleet_metrics(
             fleet_cumulative_completion_tokens: fleet_cumulative_completion,
             fleet_cumulative_prompt_tokens: fleet_cumulative_prompt,
             model_totals,
+            token_source: "http-routed",
         },
     )
     .await
@@ -2390,7 +2433,23 @@ async fn handle_set_mesh_policy(
         signature,
     };
     let policy_store = state.policy_store();
-    let result = policy_store.update(policy).await;
+    // Determine which owner IDs are authorised to control this node.
+    // Only the node's own verified owner identity may push policy via the
+    // management API (the gossip path uses the applicator's list instead).
+    let (authorized_owner_ids, node_mesh_id) = {
+        let inner = state.inner.lock().await;
+        let owner_id: Vec<String> = inner
+            .node
+            .local_verified_owner_id()
+            .await
+            .into_iter()
+            .collect();
+        let mesh_id = inner.node.mesh_id().await;
+        (owner_id, mesh_id)
+    };
+    let result = policy_store
+        .update(policy, &authorized_owner_ids, node_mesh_id.as_deref())
+        .await;
     let response = match &result {
         crate::policy::PolicyUpdateResult::Accepted { policy_gen } => SetMeshPolicyResponse {
             accepted: true,

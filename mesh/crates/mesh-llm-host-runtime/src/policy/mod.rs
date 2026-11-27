@@ -37,7 +37,22 @@ impl PolicyStore {
         Arc::new(Self::default())
     }
 
-    pub async fn update(&self, incoming: SignedMeshPolicy) -> PolicyUpdateResult {
+    /// Update the store with an incoming signed policy.
+    ///
+    /// `authorized_owner_ids` is the set of owner IDs that are permitted to
+    /// inject policy into this node.  Pass the node's own verified owner ID
+    /// (and any additionally trusted owners).  An empty slice rejects every
+    /// policy because no owner is authorised.
+    ///
+    /// `node_mesh_id` is this node's current mesh ID (empty string or `None`
+    /// means no check).  When the payload carries a non-empty `mesh_id`, it
+    /// must match this value or the policy is rejected.
+    pub async fn update(
+        &self,
+        incoming: SignedMeshPolicy,
+        authorized_owner_ids: &[String],
+        node_mesh_id: Option<&str>,
+    ) -> PolicyUpdateResult {
         let payload = match MeshPolicyPayload::decode(incoming.policy_payload_bytes.as_slice()) {
             Ok(p) => p,
             Err(e) => return PolicyUpdateResult::Invalid(format!("decode error: {e}")),
@@ -77,6 +92,25 @@ impl PolicyStore {
                 "owner_id does not match sha256(owner_sign_public_key)".into(),
             );
         }
+        // Reject policies from owners not on this node's trust list.
+        // This prevents any valid Ed25519 key-pair from injecting policy.
+        if !authorized_owner_ids.iter().any(|id| id == &payload.owner_id) {
+            return PolicyUpdateResult::Invalid(
+                "owner_id is not authorised to control this node".into(),
+            );
+        }
+        // Reject policies that target a different mesh (P2c).
+        // A non-empty `mesh_id` in the payload is an explicit scope guard.
+        if !payload.mesh_id.is_empty() {
+            if let Some(nid) = node_mesh_id {
+                if !nid.is_empty() && payload.mesh_id != nid {
+                    return PolicyUpdateResult::Invalid(format!(
+                        "policy mesh_id {:?} does not match this node's mesh_id {:?}",
+                        payload.mesh_id, nid,
+                    ));
+                }
+            }
+        }
         // Signature must cover the raw policy_payload_bytes.
         let sig_arr: [u8; 64] = match incoming.signature.as_slice().try_into() {
             Ok(a) => a,
@@ -112,11 +146,31 @@ impl PolicyStore {
         owner_gens_guard.insert(payload.owner_id.clone(), policy_gen);
         let mut guard = self.current.write().await;
         drop(owner_gens_guard);
-        *guard = Some(StoredPolicy {
-            signed: incoming,
-            payload,
-            received_at: std::time::Instant::now(),
-        });
+        // P2b tiebreaking: when multiple authorized owners can submit policies,
+        // avoid a "last write wins" race when their generations are equal.
+        // Use lexicographic ordering of owner_id as a stable tiebreaker so all
+        // nodes converge to the same current policy under concurrent updates.
+        let should_replace = match guard.as_ref() {
+            None => true,
+            Some(existing) => {
+                let new_gen = payload.policy_gen;
+                let old_gen = existing.payload.policy_gen;
+                if new_gen != old_gen {
+                    new_gen > old_gen
+                } else {
+                    // Same generation: lexicographically smaller owner_id wins
+                    // (deterministic tiebreaker — both nodes converge to the same winner).
+                    payload.owner_id < existing.payload.owner_id
+                }
+            }
+        };
+        if should_replace {
+            *guard = Some(StoredPolicy {
+                signed: incoming,
+                payload,
+                received_at: std::time::Instant::now(),
+            });
+        }
         PolicyUpdateResult::Accepted { policy_gen }
     }
 

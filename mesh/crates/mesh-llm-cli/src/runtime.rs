@@ -115,6 +115,12 @@ pub enum RuntimeCommand {
         json: bool,
     },
     /// Load a model on a remote node through owner-control.
+    ///
+    /// Single-node mode: provide `--endpoint` to target one node directly.
+    /// Fleet mode: use `--fleet` to fan out to all admitted mesh peers via
+    /// `POST /api/runtime/control/fleet`. Narrow the target set with
+    /// `--role Worker|Host` or `--node <id-prefix>`. Use `--dry-run` with
+    /// `--fleet` to preview targets without executing.
     LoadModel {
         /// Explicit owner-control endpoint token for the target node.
         /// Mutually exclusive with --fleet.
@@ -146,6 +152,12 @@ pub enum RuntimeCommand {
         json: bool,
     },
     /// Unload a model on a remote node through owner-control.
+    ///
+    /// Single-node mode: provide `--endpoint` to target one node directly.
+    /// Fleet mode: use `--fleet` to fan out to all admitted mesh peers via
+    /// `POST /api/runtime/control/fleet`. Narrow the target set with
+    /// `--role Worker|Host` or `--node <id-prefix>`. Use `--dry-run` with
+    /// `--fleet` to preview targets without executing.
     UnloadModel {
         /// Explicit owner-control endpoint token for the target node.
         /// Mutually exclusive with --fleet.
@@ -181,6 +193,12 @@ pub enum RuntimeCommand {
         json: bool,
     },
     /// Ensure a model is loaded on a remote node through owner-control.
+    ///
+    /// Single-node mode: provide `--endpoint` to target one node directly.
+    /// Fleet mode: use `--fleet` to fan out to all admitted mesh peers via
+    /// `POST /api/runtime/control/fleet`. Narrow the target set with
+    /// `--role Worker|Host` or `--node <id-prefix>`. Use `--dry-run` with
+    /// `--fleet` to preview targets without executing.
     EnsureModel {
         /// Explicit owner-control endpoint token for the target node.
         /// Mutually exclusive with --fleet.
@@ -212,6 +230,12 @@ pub enum RuntimeCommand {
         json: bool,
     },
     /// Drain and unload a model on a remote node through owner-control.
+    ///
+    /// Single-node mode: provide `--endpoint` to target one node directly.
+    /// Fleet mode: use `--fleet` to fan out to all admitted mesh peers via
+    /// `POST /api/runtime/control/fleet`. Narrow the target set with
+    /// `--role Worker|Host` or `--node <id-prefix>`. Use `--dry-run` with
+    /// `--fleet` to preview targets without executing.
     DrainModel {
         /// Explicit owner-control endpoint token for the target node.
         /// Mutually exclusive with --fleet.
