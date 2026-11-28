@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::test_support::{FakePrompter, RecordingActions};
 use super::{SetupEnvironment, SetupOptions, SetupPlatform, SetupStep, run_setup};
 
@@ -23,6 +24,7 @@ async fn run_setup_no_interactive_uses_guidance_step_and_hidden_star_without_pro
         vec![
             SetupStep::InstallRuntime,
             SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
             SetupStep::PrintServiceGuidance,
         ]
     );
@@ -35,6 +37,7 @@ async fn run_setup_no_interactive_uses_guidance_step_and_hidden_star_without_pro
 async fn run_setup_skip_runtime_and_no_service_runs_no_hidden_core_side_effects() {
     let options = SetupOptions {
         skip_runtime: true,
+        skip_plugin_install: true,
         no_service: true,
         yes: true,
         ..SetupOptions::default()
@@ -60,6 +63,7 @@ async fn run_setup_skip_runtime_and_no_service_runs_no_hidden_core_side_effects(
 async fn run_setup_service_failure_is_core_fatal_and_skips_github() {
     let options = SetupOptions {
         skip_runtime: true,
+        skip_plugin_install: true,
         service: true,
         ..SetupOptions::default()
     };

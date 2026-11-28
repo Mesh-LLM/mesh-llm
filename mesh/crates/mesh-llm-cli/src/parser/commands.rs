@@ -891,14 +891,18 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
-    /// Install the default plugins from this release's bundled copy (no download).
-    /// A node also does this when it starts.
-    /// Install native plugins in order, or install one local release archive.
+    /// Install native plugins in order, install one local release archive, or
+    /// install a catalog plugin set.
     Install {
         /// Plugin catalog names, GitHub owner/repo references, or GitHub URLs.
         /// Stops on the first failure; earlier installs are kept.
-        #[arg(num_args = 1.., required_unless_present = "archive", conflicts_with_all = ["archive", "name", "version"])]
+        #[arg(num_args = 1.., required_unless_present_any = ["archive", "set"], conflicts_with_all = ["archive", "name", "version", "set"])]
         reference: Vec<String>,
+        /// Install the members of a catalog plugin set, such as `recommended`, that
+        /// are not installed yet, including one you removed earlier. Members already
+        /// installed are left as they are.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["archive", "name", "version"])]
+        set: Option<String>,
         /// Install a local .tar.gz or .zip release archive. Requires --name.
         #[arg(long, value_name = "PATH", requires = "name")]
         archive: Option<PathBuf>,

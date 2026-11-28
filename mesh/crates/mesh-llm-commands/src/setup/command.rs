@@ -1,24 +1,28 @@
 use super::prompt::confirm_yes_no;
 use super::service_paths::ServiceInstallContext;
+use super::service_plugin_store::service_plugin_store;
 use super::service_runner::{CliServiceCommandRunner, ServiceCommandRunner};
 use super::summary::{
     print_runtime_install_result, print_service_install_result, print_setup_summary,
 };
 use super::{
     SetupActions, SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupOptions,
-    SetupPlan, SetupPrompter, SetupStep,
+    SetupPlan, SetupPluginStore, SetupPrompter, SetupStep,
     github::{SetupGitHubOutcome, execute_github_star_plan},
     github_runner::{GhCommandRunner, ProcessGhCommandRunner},
     plan_setup,
     service::{ServiceInstallReport, install_service},
 };
+use crate::plugin_sets::{DEFAULT_SET, SetupPluginsOutcome, install_default_set_for_setup};
 use crate::runtime_native::{
     NativeRuntimeConfigSelection, SetupNativeRuntimeOptions, SetupNativeRuntimeOutcome,
     SetupNativeRuntimePruneResult, install_and_prune_native_runtime_for_setup,
 };
 use anyhow::{Result, anyhow};
+use mesh_llm_plugin_manager::PluginInstallOptions;
 use std::future::Future;
 use std::io::Write;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 #[derive(Clone, Copy, Debug)]
@@ -70,9 +74,12 @@ pub(crate) struct CliSetupActions<'a> {
     environment: SetupEnvironment,
     configured: NativeRuntimeConfigSelection<'a>,
     pub(crate) runtime_outcome: Option<SetupNativeRuntimeOutcome>,
+    pub(crate) plugins_outcome: SetupPluginsOutcome,
     service_context: Option<ServiceInstallContext>,
     service_runner: Box<dyn ServiceCommandRunner>,
     github_runner: Box<dyn GhCommandRunner>,
+    /// Where the plugin step reads the catalog; `None` reads the environment's.
+    plugin_options: Option<PluginInstallOptions>,
     pub(crate) service_outcome: SetupServiceOutcome,
     pub(crate) github_outcome: SetupGitHubOutcome,
     verbose: bool,
@@ -106,9 +113,11 @@ impl<'a> CliSetupActions<'a> {
             environment,
             configured,
             runtime_outcome: None,
+            plugins_outcome: SetupPluginsOutcome::NotRequested,
             service_context,
             service_runner,
             github_runner,
+            plugin_options: None,
             service_outcome: SetupServiceOutcome::NotRequested,
             github_outcome: SetupGitHubOutcome::NotEvaluated,
             verbose,
@@ -123,14 +132,24 @@ impl<'a> CliSetupActions<'a> {
         service_runner: Box<dyn ServiceCommandRunner>,
         github_runner: Box<dyn GhCommandRunner>,
     ) -> Self {
-        Self::with_support(
+        let mut actions = Self::with_support(
             environment,
             configured,
             Some(service_context),
             service_runner,
             github_runner,
             false,
-        )
+        );
+        // A refused loopback port: the plugin step fails at once and tests
+        // never reach the network or a real plugin store.
+        actions.plugin_options = Some(PluginInstallOptions {
+            store_root: std::env::temp_dir().join("mesh-llm-setup-test-unused-plugins"),
+            install_root: std::env::temp_dir().join("mesh-llm-setup-test-unused-plugins/installed"),
+            catalog_url: "http://127.0.0.1:9/plugins.jsonl".to_string(),
+            target: mesh_llm_plugin_manager::PluginTarget::current()
+                .expect("tests run on a supported plugin target"),
+        });
+        actions
     }
 
     async fn install_runtime(&mut self) -> Result<()> {
@@ -187,6 +206,65 @@ impl<'a> CliSetupActions<'a> {
         Ok(())
     }
 
+    /// Install the default plugin set. Never fails setup: what went wrong is
+    /// printed with the command that retries it, and kept for the summary.
+    async fn install_plugins(&mut self, store: SetupPluginStore) -> Result<()> {
+        let (options, retry) = match self.plugin_options.clone() {
+            Some(options) => (Ok(options), RetryStore::Invoking),
+            None => match self.plugin_install_options(store) {
+                Ok((options, retry)) => (Ok(options), retry),
+                Err(error) if store == SetupPluginStore::Service => {
+                    (Err(error), RetryStore::UnknownService)
+                }
+                Err(error) => (Err(error), RetryStore::Invoking),
+            },
+        };
+        let outcome = match options {
+            Ok(options) => {
+                let mut progress = crate::plugin::CliPluginProgress::default();
+                let outcome = install_default_set_for_setup(&options, &mut progress).await;
+                progress.finish();
+                outcome
+            }
+            Err(error) => SetupPluginsOutcome::Unavailable(format!("{error:#}")),
+        };
+        print_plugins_warnings(&outcome, &retry);
+        self.plugins_outcome = outcome;
+        Ok(())
+    }
+
+    /// Install into the store the node will read: the invoking shell's, or,
+    /// when setup also installs and starts the service, the service's. Also
+    /// returns where a retry has to install.
+    fn plugin_install_options(
+        &self,
+        store: SetupPluginStore,
+    ) -> Result<(PluginInstallOptions, RetryStore)> {
+        let mut options = PluginInstallOptions::from_env()?;
+        let mut retry = RetryStore::Invoking;
+        if store == SetupPluginStore::Service {
+            let context = match self.service_context.clone() {
+                Some(context) => context,
+                None => ServiceInstallContext::detect(self.environment.platform, true)?,
+            };
+            if let Some(root) = service_plugin_store(&context)?
+                && root != options.store_root
+            {
+                options.install_root = root.join("installed");
+                options.store_root = root.clone();
+                retry = RetryStore::Service(root);
+            }
+        }
+        if self.verbose {
+            let _ = writeln!(
+                mesh_llm_events::console_err(),
+                "Plugin store: {}",
+                options.store_root.display()
+            );
+        }
+        Ok((options, retry))
+    }
+
     fn install_service(&mut self) -> Result<()> {
         let context = match self.service_context.clone() {
             Some(context) => context,
@@ -204,6 +282,87 @@ impl<'a> CliSetupActions<'a> {
             err,
             "Service not installed. Run `mesh-llm setup --service` to enable it later."
         );
+    }
+}
+
+/// Where the printed retry command has to install the set: `plugins install`
+/// uses the invoking shell's store, which is not always the one setup chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RetryStore {
+    Invoking,
+    /// The service reads this store, not the invoking shell's.
+    Service(PathBuf),
+    /// The service's store could not be determined.
+    UnknownService,
+}
+
+impl RetryStore {
+    pub(crate) fn hint(&self) -> String {
+        let opt_out = "or pass --skip-plugin-install to setup to opt out.";
+        match self {
+            Self::Invoking => {
+                format!("Retry with `mesh-llm plugins install --set {DEFAULT_SET}`, {opt_out}")
+            }
+            Self::Service(root) => format!(
+                "Retry with `MESH_LLM_PLUGIN_DIR={} mesh-llm plugins install --set {DEFAULT_SET}` to install into the store the service reads, {opt_out}",
+                shell_quote(&root.to_string_lossy())
+            ),
+            Self::UnknownService => format!(
+                "Once the service's plugin store can be read, retry with `MESH_LLM_PLUGIN_DIR=<that store> mesh-llm plugins install --set {DEFAULT_SET}`, {opt_out}"
+            ),
+        }
+    }
+}
+
+/// `value` as one POSIX shell word. The service store is only chosen on Linux
+/// and macOS, where the retry runs in a POSIX shell.
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%".contains(c))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn print_plugins_warnings(outcome: &SetupPluginsOutcome, retry: &RetryStore) {
+    let mut err = mesh_llm_events::console_err();
+    let retry = retry.hint();
+    match outcome {
+        SetupPluginsOutcome::Unavailable(reason) => {
+            let _ = writeln!(
+                err,
+                "warning: could not install the `{DEFAULT_SET}` plugin set: {reason}. {retry}"
+            );
+        }
+        SetupPluginsOutcome::Finished {
+            unavailable,
+            failed,
+            record_error,
+            ..
+        } => {
+            for (name, reason) in unavailable {
+                let _ = writeln!(
+                    err,
+                    "warning: plugin {name} is not available on this platform: {reason}"
+                );
+            }
+            for (name, reason) in failed {
+                let _ = writeln!(err, "warning: could not install plugin {name}: {reason}");
+            }
+            if !failed.is_empty() {
+                let _ = writeln!(err, "{retry}");
+            }
+            if let Some(error) = record_error {
+                let _ = writeln!(
+                    err,
+                    "warning: could not record that setup offered the `{DEFAULT_SET}` plugin set, so the next setup offers it again: {error}"
+                );
+            }
+        }
+        SetupPluginsOutcome::NotRequested | SetupPluginsOutcome::AlreadyOffered => {}
     }
 }
 
@@ -230,6 +389,7 @@ impl SetupActions for CliSetupActions<'_> {
             match step {
                 SetupStep::InstallRuntime => self.install_runtime().await,
                 SetupStep::PruneInactiveRuntimes => self.report_runtime_prune(),
+                SetupStep::InstallPlugins(store) => self.install_plugins(store).await,
                 SetupStep::InstallService => self.install_service(),
                 SetupStep::PrintServiceGuidance => {
                     self.service_outcome = SetupServiceOutcome::PrintedGuidance;

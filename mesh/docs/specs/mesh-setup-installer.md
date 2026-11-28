@@ -60,6 +60,7 @@ Supported flags:
 - `--service`: request background service setup where supported.
 - `--no-service`: skip background service setup.
 - `--skip-runtime`: skip native-runtime install and prune.
+- `--skip-plugin-install`: skip installing the catalog's `recommended` plugin set.
 - `--verbose`: print detailed setup paths, commands, log locations, and
   status. Default setup output is concise and formatted for interactive use.
 
@@ -83,6 +84,42 @@ duplicate native runtime candidate scoring or hardware detection.
 Runtime install failure is a core setup failure. Runtime prune failure after a
 successful install is reported as a warning because the installed runtime is
 usable.
+
+## Plugin Setup
+
+Unless `--skip-plugin-install` is passed, setup installs the missing members of
+the catalog plugin set named `recommended` (`plugins install --set recommended`).
+It does so with and without prompts, once per plugin store (recorded in that
+store, `MESH_LLM_PLUGIN_DIR` or by default `~/.mesh-llm/plugins`, as `offered-sets.json`: a member counts as offered once it is installed,
+already present, or has no release for this platform; a member that failed, and
+a set that could not be read, are not recorded and are tried again by the next
+setup run), after the runtime and before the service, so a node the service
+starts finds the plugins. When setup also installs the service on Linux or macOS,
+the store is the one that service reads: `MESH_LLM_PLUGIN_DIR` from its
+`service.env` (a relative value under the home directory, where the service
+starts), otherwise the default store, not the invoking shell's. systemd
+reads `$` literally while the macOS runner's bash expands it, so a value with
+variables, a leading `~`, backslashes, mixed quoting or other shell syntax is reported as a plugin warning rather
+than guessed, and the retry command names the service's store with
+`MESH_LLM_PLUGIN_DIR=`. A set
+member someone else installs while setup downloads it is kept as they
+installed it: every plugin store write (install, enable, disable, delete and
+the offer record) takes the store's write lock, and a set member is placed
+only if it is still missing under that lock. Concurrent setup runs merge
+their offer records, so neither takes back what the other recorded. Later setup runs leave plugins as they are: a plugin
+the operator removed is not reinstalled and members added to the set later are
+not installed by setup. A member of that first snapshot that the set drops before
+it was offered counts as offered. Two limits: a setup that times out records nothing, so
+a member the operator removes before the next run is installed again, and an
+unreadable record counts as none, so the next setup offers the set again. The set's membership and each
+member's pinned release and checksums come from the plugin catalog.
+
+Plugin install is optional and never fails setup: an unreachable or slow
+catalog (reads are bounded), a catalog that publishes no `recommended` set, a
+member with no release for this platform or a member that fails to install
+prints a warning with the retry command and setup finishes. A plugin that is
+already installed is left alone, including a disabled one. Each installed
+package's granted access is disclosed as it lands, as for `plugins install`.
 
 ## Service Setup
 

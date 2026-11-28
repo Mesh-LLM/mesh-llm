@@ -112,12 +112,14 @@ pub(super) fn format_plugin(command: &mesh_llm_cli::PluginCommand, assembly: &mu
     match command {
         PluginCommand::Install {
             reference,
+            set,
             archive,
             name,
             version,
         } => {
             assembly.command.push_str(" plugins install");
             assembly.redact("reference", !reference.is_empty());
+            assembly.redact("--set", set.is_some());
             assembly.redact("--archive", archive.is_some());
             assembly.redact("--name", name.is_some());
             assembly.redact("--version", version.is_some());

@@ -12,7 +12,7 @@ export const PLUGIN_DESCRIPTORS: readonly SummaryDescriptor[] = [
   descriptor(
     ['mesh-llm', 'plugins', 'install'],
     NONE,
-    ['reference', '--archive', '--name', '--version'],
+    ['reference', '--set', '--archive', '--name', '--version'],
     false,
     'none',
     PLUGIN_INSTALL_CONFLICTS

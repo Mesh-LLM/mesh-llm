@@ -89,6 +89,36 @@ fn uninstall_boolean_flags_survive_producer_sanitization() {
 }
 
 #[test]
+fn plugin_set_install_and_setup_plugin_opt_out_survive_producer_sanitization() {
+    let summaries = [
+        parsed_summary(&["mesh-llm", "plugins", "install", "--set", "private-set"]),
+        parsed_summary(&[
+            "mesh-llm",
+            "setup",
+            "--skip-runtime",
+            "--skip-plugin-install",
+        ]),
+    ];
+    assert_eq!(summaries[0], "mesh-llm plugins install --set [REDACTED]");
+    assert_eq!(
+        summaries[1],
+        "mesh-llm setup --skip-runtime --skip-plugin-install"
+    );
+    for summary in summaries {
+        let sanitized = CliCommandSummary::sanitize(&summary)
+            .unwrap_or_else(|| panic!("producer omitted valid summary: {summary}"));
+        assert_eq!(sanitized.as_str(), summary);
+    }
+    // A set install names no reference or archive.
+    for invalid in [
+        "mesh-llm plugins install reference [REDACTED] --set [REDACTED]",
+        "mesh-llm plugins install --set [REDACTED] --archive [REDACTED] --name [REDACTED]",
+    ] {
+        assert!(CliCommandSummary::sanitize(invalid).is_none(), "{invalid}");
+    }
+}
+
+#[test]
 fn command_summary_retains_static_prefix_nested_names_and_redacts_plugin_values() {
     let summary = parsed_summary(&[
         "mesh-llm",

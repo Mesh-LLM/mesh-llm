@@ -1,7 +1,7 @@
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
-    SetupOptions, SetupPlan, SetupPlatform, SetupPromptDefault, SetupPromptKind, SetupPrompter,
-    SetupRuntimePlan, SetupServicePlan,
+    SetupOptions, SetupPlan, SetupPlatform, SetupPluginsPlan, SetupPromptDefault, SetupPromptKind,
+    SetupPrompter, SetupRuntimePlan, SetupServicePlan,
 };
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -49,9 +49,16 @@ pub fn plan_setup<P: SetupPrompter>(
     } else {
         SetupRuntimePlan::InstallAndPrune
     };
+    // The default set installs in attended and unattended setup alike, with
+    // no prompt; `--skip-plugin-install` is the opt-out.
+    let plugins = if options.skip_plugin_install {
+        SetupPluginsPlan::Skip
+    } else {
+        SetupPluginsPlan::InstallDefaultSet
+    };
     let service = plan_service(options, environment, prompter);
     let github_star = plan_github_star(options, environment);
-    Ok(SetupPlan::new(runtime, service, github_star))
+    Ok(SetupPlan::new(runtime, plugins, service, github_star))
 }
 
 fn plan_service<P: SetupPrompter>(

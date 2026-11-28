@@ -1,6 +1,12 @@
 use super::{Descriptor, NONE, REDACTED_NAME, RawKind, descriptor, descriptor_with_conflicts};
 
-const PLUGIN_INSTALL_CONFLICTS: &[&[&str]] = &[&["reference", "--archive"]];
+const PLUGIN_INSTALL_CONFLICTS: &[&[&str]] = &[
+    &["reference", "--archive"],
+    &["reference", "--set"],
+    &["--set", "--archive"],
+    &["--set", "--name"],
+    &["--set", "--version"],
+];
 const TUNE_FLAGS: &[&str] = &[
     "--json",
     "--no-speculative-tune",
@@ -25,7 +31,7 @@ pub(super) const PLUGIN_DESCRIPTORS: &[Descriptor] = &[
     descriptor_with_conflicts(
         &["mesh-llm", "plugins", "install"],
         NONE,
-        &["reference", "--archive", "--name", "--version"],
+        &["reference", "--set", "--archive", "--name", "--version"],
         PLUGIN_INSTALL_CONFLICTS,
         false,
         RawKind::None,

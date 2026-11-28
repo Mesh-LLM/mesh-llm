@@ -30,6 +30,15 @@ describe('command summary grammar', () => {
     expect(isSafeCommandSummary('mesh-llm models list --json')).toBe(true)
   })
 
+  it('accepts plugin set installs and the setup plugin opt-out', () => {
+    expect(isSafeCommandSummary('mesh-llm plugins install --set [REDACTED]')).toBe(true)
+    expect(isSafeCommandSummary('mesh-llm setup --skip-runtime --skip-plugin-install')).toBe(true)
+    expect(isSafeCommandSummary('mesh-llm plugins install reference [REDACTED] --set [REDACTED]')).toBe(false)
+    expect(
+      isSafeCommandSummary('mesh-llm plugins install --set [REDACTED] --archive [REDACTED] --name [REDACTED]')
+    ).toBe(false)
+  })
+
   it('rejects private values, controls, bounds, and deep malformed prefixes', () => {
     const malformedSummaries = [
       'mesh-llm load private-value',

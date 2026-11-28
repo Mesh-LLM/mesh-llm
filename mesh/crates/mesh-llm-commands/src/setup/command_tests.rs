@@ -1,3 +1,4 @@
+use super::SetupPluginStore;
 use super::service_paths::ServiceInstallContext;
 use super::service_runner::{ServiceCommand, ServiceCommandRunner};
 use super::{
@@ -104,7 +105,11 @@ async fn run_setup_executes_planned_steps_and_github_star_action() {
     assert_eq!(plan.service, SetupServicePlan::Skip);
     assert_eq!(
         actions.steps,
-        vec![SetupStep::InstallRuntime, SetupStep::PruneInactiveRuntimes]
+        vec![
+            SetupStep::InstallRuntime,
+            SetupStep::PruneInactiveRuntimes,
+            SetupStep::InstallPlugins(SetupPluginStore::Invoking),
+        ]
     );
     assert_eq!(actions.github, vec![SetupGitHubStarPlan::PromptIfEligible]);
 }
@@ -166,6 +171,7 @@ async fn run_setup_suppresses_github_star_for_yes_mode() {
 fn github_summary_reports_authenticated_star_success() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
+        super::SetupPluginsPlan::Skip,
         super::SetupServicePlan::Skip,
         SetupGitHubStarPlan::PromptIfEligible,
     );
@@ -180,6 +186,7 @@ fn github_summary_reports_authenticated_star_success() {
 async fn service_summary_reports_real_service_installation() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
+        super::SetupPluginsPlan::Skip,
         super::SetupServicePlan::Install,
         SetupGitHubStarPlan::Skip(SetupGitHubStarSkipReason::AutomaticYes),
     );
@@ -222,6 +229,7 @@ async fn service_summary_reports_real_service_installation() {
 fn github_summary_reports_nonfatal_star_request_failure() {
     let plan = super::SetupPlan::new(
         super::SetupRuntimePlan::Skip,
+        super::SetupPluginsPlan::Skip,
         super::SetupServicePlan::Skip,
         SetupGitHubStarPlan::PromptIfEligible,
     );

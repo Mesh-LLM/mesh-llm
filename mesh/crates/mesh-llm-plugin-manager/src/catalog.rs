@@ -91,9 +91,20 @@ pub(crate) fn is_sha256_hex(digest: &str) -> bool {
             .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
 }
 
+/// A named, curated group of catalog plugins, such as `recommended`. A set
+/// carries no releases or checksums: each member's own catalog entry pin stays
+/// the authority for what installing it means.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSet {
+    pub name: String,
+    pub description: String,
+    pub plugins: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCatalog {
     entries: Vec<CatalogEntry>,
+    sets: Vec<CatalogSet>,
 }
 
 impl PluginCatalog {
@@ -113,7 +124,105 @@ impl PluginCatalog {
         }
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         ensure_unique_names(&entries)?;
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            sets: Vec::new(),
+        })
+    }
+
+    /// Parse `plugin-sets.jsonl`: named set records only. They live in their
+    /// own file so a catalog that publishes sets stays parseable for hosts
+    /// built before sets existed. Whether members exist is checked by
+    /// [`Self::with_sets`].
+    pub fn parse_sets_jsonl(input: &str) -> Result<Vec<CatalogSet>> {
+        let mut sets = Vec::new();
+        for (index, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let context = format!("plugin-sets.jsonl line {}", index + 1);
+            let set: CatalogSet = serde_json::from_str(line).with_context(|| context.clone())?;
+            validate_set(&set).with_context(|| context)?;
+            sets.push(set);
+        }
+        sets.sort_by(|left, right| left.name.cmp(&right.name));
+        for pair in sets.windows(2) {
+            if pair[0].name == pair[1].name {
+                bail!("duplicate plugin set '{}'", pair[0].name);
+            }
+        }
+        Ok(sets)
+    }
+
+    /// Attach named sets, refusing sets that name a plugin this catalog does
+    /// not list.
+    pub fn with_sets(mut self, sets: Vec<CatalogSet>) -> Result<Self> {
+        for set in &sets {
+            for member in &set.plugins {
+                if self.find_exact(member).is_none() {
+                    bail!(
+                        "plugin set '{}' names '{member}', which is not in the plugin catalog",
+                        set.name
+                    );
+                }
+            }
+        }
+        self.sets = sets;
+        Ok(self)
+    }
+
+    /// Fetch the plugin entries, then the sets from `sets_url`. Anything wrong
+    /// on the sets side (absent, unreachable, malformed, naming unknown
+    /// plugins) yields a catalog with no sets and the reason: a broken sets
+    /// file is never a broken plugin catalog.
+    pub async fn fetch_with_sets(
+        client: &Client,
+        plugins_url: &str,
+        sets_url: Option<&str>,
+    ) -> Result<(Self, Option<String>)> {
+        let catalog = Self::fetch(client, plugins_url).await?;
+        let Some(sets_url) = sets_url else {
+            return Ok((
+                catalog,
+                Some(format!(
+                    "no plugin-sets.jsonl beside the catalog URL {plugins_url}"
+                )),
+            ));
+        };
+        match Self::fetch_sets(client, sets_url).await {
+            Ok(sets) => match catalog.clone().with_sets(sets) {
+                Ok(with_sets) => Ok((with_sets, None)),
+                Err(error) => Ok((catalog, Some(format!("{error:#}")))),
+            },
+            Err(error) => Ok((catalog, Some(format!("{error:#}")))),
+        }
+    }
+
+    async fn fetch_sets(client: &Client, sets_url: &str) -> Result<Vec<CatalogSet>> {
+        let response = client
+            .get(sets_url)
+            .header(reqwest::header::USER_AGENT, crate::github::USER_AGENT)
+            .send()
+            .await
+            .with_context(|| format!("fetch plugin sets {sets_url}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("plugin sets request failed: {status} {sets_url}");
+        }
+        let body = response
+            .text()
+            .await
+            .with_context(|| format!("read plugin sets {sets_url}"))?;
+        Self::parse_sets_jsonl(&body)
+    }
+
+    pub fn sets(&self) -> &[CatalogSet] {
+        &self.sets
+    }
+
+    pub fn find_set(&self, name: &str) -> Option<&CatalogSet> {
+        self.sets.iter().find(|set| set.name == name)
     }
 
     pub async fn fetch(client: &Client, url: &str) -> Result<Self> {
@@ -156,6 +265,29 @@ impl PluginCatalog {
             })
             .collect()
     }
+}
+
+/// Where the sets for the catalog at `catalog_url` live: the same location
+/// with the final `plugins.jsonl` replaced by `plugin-sets.jsonl`. `None` for
+/// a catalog URL that does not end that way (a custom catalog), which has no
+/// sibling file by convention.
+pub fn sets_url_for(catalog_url: &str) -> Option<String> {
+    catalog_url
+        .strip_suffix("/plugins.jsonl")
+        .map(|base| format!("{base}/plugin-sets.jsonl"))
+}
+
+fn validate_set(set: &CatalogSet) -> Result<()> {
+    if set.name.trim().is_empty() {
+        bail!("plugin set has an empty name");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for member in &set.plugins {
+        if !seen.insert(member.as_str()) {
+            bail!("plugin set '{}' lists '{member}' twice", set.name);
+        }
+    }
+    Ok(())
 }
 
 fn ensure_unique_names(entries: &[CatalogEntry]) -> Result<()> {
@@ -277,5 +409,79 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("duplicate"));
+    }
+
+    const SET_ENTRIES: &str = r#"{"name":"capsules","description":"Audit records","github_url":"https://github.com/Mesh-LLM/capsules","author_email":"m@meshllm.cloud","author_name":"Mesh LLM"}
+{"name":"notes","description":"Team notes","github_url":"https://github.com/acme/notes","author_email":"dev@example.com","author_name":"Acme"}"#;
+
+    #[test]
+    fn parses_sets_and_attaches_them_to_the_catalog() {
+        let sets = PluginCatalog::parse_sets_jsonl(
+            r#"{"name":"recommended","description":"Start here","plugins":["capsules"]}
+{"name":"extras","description":"More","plugins":["notes","capsules"]}
+"#,
+        )
+        .unwrap();
+        let catalog = PluginCatalog::parse_jsonl(SET_ENTRIES)
+            .unwrap()
+            .with_sets(sets)
+            .unwrap();
+        assert_eq!(
+            catalog
+                .sets()
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["extras", "recommended"]
+        );
+        assert_eq!(
+            catalog.find_set("recommended").unwrap().plugins,
+            ["capsules"]
+        );
+        assert!(catalog.find_set("missing").is_none());
+    }
+
+    #[test]
+    fn rejects_invalid_sets() {
+        let duplicate_name = PluginCatalog::parse_sets_jsonl(
+            "{\"name\":\"a\",\"description\":\"\",\"plugins\":[]}\n{\"name\":\"a\",\"description\":\"\",\"plugins\":[]}",
+        )
+        .unwrap_err();
+        assert!(duplicate_name.to_string().contains("duplicate plugin set"));
+
+        let duplicate_member =
+            PluginCatalog::parse_sets_jsonl(r#"{"name":"a","description":"","plugins":["x","x"]}"#)
+                .unwrap_err();
+        assert!(format!("{duplicate_member:#}").contains("twice"));
+
+        let unknown_member = PluginCatalog::parse_jsonl(SET_ENTRIES)
+            .unwrap()
+            .with_sets(
+                PluginCatalog::parse_sets_jsonl(
+                    r#"{"name":"a","description":"","plugins":["ghost"]}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap_err();
+        assert!(
+            unknown_member
+                .to_string()
+                .contains("not in the plugin catalog")
+        );
+    }
+
+    #[test]
+    fn sets_live_beside_the_default_catalog_file_only() {
+        assert_eq!(
+            sets_url_for(
+                "https://huggingface.co/datasets/meshllm/plugin-catalog/resolve/main/plugins.jsonl"
+            )
+            .as_deref(),
+            Some(
+                "https://huggingface.co/datasets/meshllm/plugin-catalog/resolve/main/plugin-sets.jsonl"
+            )
+        );
+        assert_eq!(sets_url_for("http://127.0.0.1:1/custom-catalog.json"), None);
+        assert_eq!(sets_url_for("plugins.jsonl"), None);
     }
 }

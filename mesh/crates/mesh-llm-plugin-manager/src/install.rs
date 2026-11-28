@@ -6,8 +6,8 @@ use reqwest::Client;
 use sha2::Digest;
 
 use crate::{
-    archive::{ExtractedPluginArchive, stage_plugin_archive},
-    catalog::PluginCatalog,
+    archive::{ExtractedPluginArchive, StagedPluginArchive, stage_plugin_archive},
+    catalog::{CatalogEntry, PluginCatalog},
     catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     infer_plugin_asset, select_plugin_asset,
@@ -114,7 +114,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    install_resolved_plugin(resolved, options, progress, None, CommitMode::Replace).await
 }
 
 pub fn install_plugin_archive(
@@ -146,8 +146,12 @@ pub fn install_plugin_archive(
         asset: asset_name.clone(),
     });
     let store = PluginStore::new(&options.store_root);
+    let staged = stage_for_install(&archive_path, archive_ext, name, options)?;
+    // The reporter runs after the lock is released: the lock is not
+    // reentrant, and a reporter may change the store itself.
+    let lock = store.lock_writes()?;
     let current = store.load_optional(name)?;
-    let extracted = extract_for_install(&archive_path, archive_ext, name, options)?;
+    let extracted = staged.commit()?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -163,6 +167,7 @@ pub fn install_plugin_archive(
         verified_sha256: None,
     };
     store.save(&metadata)?;
+    drop(lock);
     progress.report(PluginProgressEvent::Installed {
         installed: Box::new(metadata.clone()),
     });
@@ -174,21 +179,21 @@ pub fn install_plugin_archive(
 
 /// Every install path extracts through here, so the executable it checks is
 /// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches.
-pub(crate) fn extract_for_install(
+/// names the one the host launches. The caller commits the staged package
+/// under the store's write lock.
+pub(crate) fn stage_for_install(
     archive_path: &std::path::Path,
     archive_ext: ArchiveExt,
     name: &str,
     options: &PluginInstallOptions,
-) -> Result<ExtractedPluginArchive> {
-    let staged = stage_plugin_archive(
+) -> Result<StagedPluginArchive> {
+    stage_plugin_archive(
         archive_path,
         archive_ext,
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )?;
-    staged.commit()
+    )
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -219,7 +224,14 @@ pub async fn update_plugin(
         version: None,
         pin: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current)).await
+    install_resolved_plugin(
+        resolved,
+        options,
+        progress,
+        Some(current),
+        CommitMode::Replace,
+    )
+    .await
 }
 
 struct ResolvedInstallSource {
@@ -248,15 +260,7 @@ async fn resolve_install_source(
             let entry = catalog
                 .find_exact(&name)
                 .with_context(|| format!("plugin '{name}' was not found in the catalog"))?;
-            let source = GitHubPluginSource::from_url(&entry.github_url)?;
-            let pin = CatalogPin::for_entry(entry, options.target.triple())?;
-            pin.ensure_matches_request(version.as_ref())?;
-            Ok(ResolvedInstallSource {
-                plugin_name: entry.name.clone(),
-                source,
-                version: Some(pin.version().clone()),
-                pin: Some(pin),
-            })
+            resolve_catalog_entry(entry, version.as_ref(), options)
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
             plugin_name: source.plugin_name().to_string(),
@@ -267,11 +271,53 @@ async fn resolve_install_source(
     }
 }
 
+fn resolve_catalog_entry(
+    entry: &CatalogEntry,
+    requested: Option<&PluginVersion>,
+    options: &PluginInstallOptions,
+) -> Result<ResolvedInstallSource> {
+    let source = GitHubPluginSource::from_url(&entry.github_url)?;
+    let pin = CatalogPin::for_entry(entry, options.target.triple())?;
+    pin.ensure_matches_request(requested)?;
+    Ok(ResolvedInstallSource {
+        plugin_name: entry.name.clone(),
+        source,
+        version: Some(pin.version().clone()),
+        pin: Some(pin),
+    })
+}
+
+/// Install `entry` at the release the catalog snapshot it came from pins,
+/// without fetching the catalog again, only if it is still not installed
+/// when the package is put in place. A caller that resolved several entries
+/// from one snapshot installs each through this, so a catalog that changes
+/// mid-operation cannot change what the operation installs. A plugin that
+/// someone else installed while this one downloaded is left exactly as it
+/// is, and the outcome is that plugin with `changed: false`.
+pub async fn install_catalog_entry(
+    entry: &CatalogEntry,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    let resolved = resolve_catalog_entry(entry, None, options)?;
+    install_resolved_plugin(resolved, options, progress, None, CommitMode::CreateOnly).await
+}
+
+/// Whether an install may replace a plugin that is installed when its
+/// package is put in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitMode {
+    Replace,
+    /// Keep a plugin that appeared since the install started.
+    CreateOnly,
+}
+
 async fn install_resolved_plugin(
     resolved: ResolvedInstallSource,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
+    mode: CommitMode,
 ) -> Result<InstallOutcome> {
     let release_client = GitHubReleaseClient::new()?;
     progress.report(PluginProgressEvent::ResolvingGitHub {
@@ -342,24 +388,40 @@ async fn install_resolved_plugin(
     progress.report(PluginProgressEvent::Extracting {
         asset: asset.name.clone(),
     });
-    let extracted = extract_for_install(
+    let staged = stage_for_install(
         &archive_path,
         options.target.archive_ext(),
         &resolved.plugin_name,
         options,
-    )?;
-    let _ = fs::remove_file(&archive_path);
-
-    let metadata = build_installed_metadata(
-        &resolved,
-        &release.tag_name,
-        asset,
-        &options.target,
-        extracted,
-        current.as_ref(),
-        Some(verified_sha256),
     );
-    PluginStore::new(&options.store_root).save(&metadata)?;
+    let _ = fs::remove_file(&archive_path);
+    let staged = staged?;
+
+    let store = PluginStore::new(&options.store_root);
+    let committed = commit_staged(&store, staged, &resolved.plugin_name, mode, |extracted| {
+        build_installed_metadata(
+            &resolved,
+            &release.tag_name,
+            asset,
+            &options.target,
+            extracted,
+            current.as_ref(),
+            Some(verified_sha256),
+        )
+    })?;
+    let metadata = match committed {
+        Committed::Placed(metadata) => metadata,
+        Committed::Kept(present) => {
+            progress.report(PluginProgressEvent::AlreadyCurrent {
+                name: present.name.clone(),
+                version: present.installed_version.clone(),
+            });
+            return Ok(InstallOutcome {
+                metadata: present,
+                changed: false,
+            });
+        }
+    };
 
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
@@ -377,6 +439,34 @@ async fn install_resolved_plugin(
         metadata,
         changed: true,
     })
+}
+
+#[derive(Debug, PartialEq)]
+enum Committed {
+    /// The staged package is in place and recorded with this metadata.
+    Placed(InstalledPluginMetadata),
+    /// `CommitMode::CreateOnly` found this plugin installed and left it.
+    Kept(InstalledPluginMetadata),
+}
+
+/// Put `staged` in place and record it, under the store's write lock, so no
+/// other writer changes `name` between the check and the write.
+fn commit_staged(
+    store: &PluginStore,
+    staged: StagedPluginArchive,
+    name: &str,
+    mode: CommitMode,
+    metadata_for: impl FnOnce(ExtractedPluginArchive) -> InstalledPluginMetadata,
+) -> Result<Committed> {
+    let _lock = store.lock_writes()?;
+    if mode == CommitMode::CreateOnly
+        && let Some(present) = store.load_optional(name)?
+    {
+        return Ok(Committed::Kept(present));
+    }
+    let metadata = metadata_for(staged.commit()?);
+    store.save(&metadata)?;
+    Ok(Committed::Placed(metadata))
 }
 
 fn build_installed_metadata(
@@ -993,6 +1083,93 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    /// A set member staged while the operator installed the same plugin:
+    /// the operator's package and metadata stay as they are.
+    #[test]
+    fn a_create_only_commit_keeps_a_plugin_installed_meanwhile() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let staged = stage_for_install(&archive_path, ArchiveExt::TarGz, "demo", &options).unwrap();
+
+        // The operator's install lands, disabled, while the member was staged.
+        install_plugin_archive("demo", "9.9.9", &archive_path, &options, &mut |_| {}).unwrap();
+        let store = PluginStore::new(&options.store_root);
+        let theirs = store.set_enabled("demo", false).unwrap();
+        std::fs::write(theirs.install_path.join("operator-marker"), b"").unwrap();
+
+        let committed = commit_staged(&store, staged, "demo", CommitMode::CreateOnly, |_| {
+            panic!("a create-only commit must not build metadata over an installed plugin")
+        })
+        .unwrap();
+        assert_eq!(committed, Committed::Kept(theirs.clone()));
+        assert_eq!(store.load("demo").unwrap(), theirs);
+        assert!(theirs.install_path.join("operator-marker").is_file());
+    }
+
+    /// The lock is not reentrant, so a reporter that changes the store when
+    /// told a plugin is installed must not run while the install holds it.
+    #[test]
+    fn a_reporter_can_change_the_store_when_told_a_plugin_is_installed() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let (done, finished) = std::sync::mpsc::channel();
+        let install_options = options.clone();
+        std::thread::spawn(move || {
+            let store = PluginStore::new(&install_options.store_root);
+            let result = install_plugin_archive(
+                "demo",
+                "9.9.9",
+                &archive_path,
+                &install_options,
+                &mut |event| {
+                    if let PluginProgressEvent::Installed { installed } = event {
+                        store.set_enabled(&installed.name, false).unwrap();
+                    }
+                },
+            );
+            let _ = done.send(result.map(|outcome| outcome.changed));
+        });
+        let changed = finished
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("the install returns while its reporter changes the store")
+            .unwrap();
+        assert!(changed);
+        let store = PluginStore::new(&options.store_root);
+        assert!(!store.load("demo").unwrap().enabled);
+    }
+
+    #[test]
+    fn a_replace_commit_puts_the_staged_package_in_place() {
+        let temp = TempDir::new().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_archive_with(&archive_path, "demo");
+        let theirs =
+            install_plugin_archive("demo", "9.9.9", &archive_path, &options, &mut |_| {}).unwrap();
+        std::fs::write(theirs.metadata.install_path.join("old-marker"), b"").unwrap();
+        let staged = stage_for_install(&archive_path, ArchiveExt::TarGz, "demo", &options).unwrap();
+        let store = PluginStore::new(&options.store_root);
+
+        let committed = commit_staged(&store, staged, "demo", CommitMode::Replace, |extracted| {
+            InstalledPluginMetadata {
+                installed_version: "1.0.0".to_string(),
+                install_path: extracted.install_path,
+                ..theirs.metadata.clone()
+            }
+        })
+        .unwrap();
+        let Committed::Placed(placed) = committed else {
+            panic!("a replace commit places the package: {committed:?}");
+        };
+        assert_eq!(store.load("demo").unwrap(), placed);
+        assert_eq!(placed.installed_version, "1.0.0");
+        assert!(!placed.install_path.join("old-marker").exists());
     }
 
     #[test]

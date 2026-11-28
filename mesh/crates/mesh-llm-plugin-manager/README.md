@@ -2,7 +2,9 @@
 
 Plugin package management primitives for Mesh LLM.
 
-This crate owns install-reference parsing, platform target naming, native
+This crate owns catalog parsing (plugin entries from `plugins.jsonl`, named
+plugin sets from `plugin-sets.jsonl`), set resolution and installation
+(`sets`), install-reference parsing, platform target naming, native
 release asset selection, validation of packaged plugin manifest metadata
 (including local web UI bundle roots and entry scripts), and local
 installed-plugin metadata. Catalog/GitHub installs use `install_plugin`;

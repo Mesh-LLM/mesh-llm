@@ -95,8 +95,8 @@ pub fn stage_plugin_archive(
 }
 
 /// Stage and commit in one step: extract, validate, and put in place. Product
-/// code goes through `install::extract_for_install`, which checks the staged
-/// package against the installed plugins before committing it.
+/// code stages through `install::stage_for_install` and commits under the
+/// plugin store's write lock.
 #[cfg(test)]
 pub fn extract_plugin_archive(
     archive_path: &Path,
