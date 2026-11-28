@@ -358,7 +358,11 @@ function Ensure-MsvcToolchain {
         return
     }
 
-    Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
+    if ($targetsOtherArch) {
+        Write-Host "The shell's MSVC environment targets $($env:VSCMD_ARG_TGT_ARCH); importing vcvars64 for x64."
+    } else {
+        Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
+    }
 
     $programFilesX86 = ${env:ProgramFiles(x86)}
     $vswhereCandidates = @()
