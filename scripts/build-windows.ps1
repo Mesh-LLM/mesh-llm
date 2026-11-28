@@ -1,5 +1,6 @@
 param(
-    [string]$BuildProfile = ""
+    [string]$BuildProfile = "",
+    [string]$TargetArch = ""
 )
 
 # Stable workspace entrypoint; implementation belongs to Mesh.

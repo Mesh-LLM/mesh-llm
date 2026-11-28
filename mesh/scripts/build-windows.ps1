@@ -1,7 +1,10 @@
 # Build the MeshLLM host and console on Windows. Skippy is external: the host
 # loads a packaged Skippy runtime at run time, so no native backend is built here.
 param(
-    [string]$BuildProfile = ""
+    [string]$BuildProfile = "",
+    # Architecture of the host to build: x64 or arm64. Defaults to the
+    # machine's own, so an x64 machine cross-compiles arm64 only when asked.
+    [string]$TargetArch = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +15,18 @@ $meshUiDir = Join-Path $repoRoot "mesh\crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null
 $buildProfile = if ($BuildProfile) { $BuildProfile.ToLowerInvariant() } elseif ($env:MESH_LLM_BUILD_PROFILE) { $env:MESH_LLM_BUILD_PROFILE.ToLowerInvariant() } else { "debug" }
+
+function Test-HostIsArm64 {
+    # PROCESSOR_ARCHITEW6432 names the machine when a 32-bit shell runs under WOW64.
+    $hostArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    return $hostArch -eq "ARM64"
+}
+
+$windowsArch = if ($TargetArch) { $TargetArch.ToLowerInvariant() } elseif (Test-HostIsArm64) { "arm64" } else { "x64" }
+if ($windowsArch -notin @("x64", "arm64")) {
+    throw "Unsupported -TargetArch '$TargetArch'. Expected x64 or arm64."
+}
+$cargoTarget = if ($windowsArch -eq "arm64") { "aarch64-pc-windows-msvc" } else { $null }
 
 switch ($buildProfile) {
     "debug" { if (-not $env:VITE_MESH_LLM_DEBUG_UI) { $env:VITE_MESH_LLM_DEBUG_UI = "true" } }
@@ -331,12 +346,23 @@ function Get-MissingCommands {
 
 function Ensure-MsvcToolchain {
     $requiredTools = @("cl", "link", "lib", "rc", "mt")
+    if ($windowsArch -eq "arm64") {
+        Ensure-MsvcArm64Toolchain $requiredTools
+        return
+    }
     $missingTools = @(Get-MissingCommands -Commands $requiredTools)
-    if ($missingTools.Count -eq 0) {
+    # A shell initialized for ARM64 has cl, link and lib on PATH too, but
+    # they target ARM64: import the x64 environment over it.
+    $targetsOtherArch = $env:VSCMD_ARG_TGT_ARCH -and $env:VSCMD_ARG_TGT_ARCH -ne "x64"
+    if ($missingTools.Count -eq 0 -and -not $targetsOtherArch) {
         return
     }
 
-    Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
+    if ($targetsOtherArch) {
+        Write-Host "The shell's MSVC environment targets $($env:VSCMD_ARG_TGT_ARCH); importing vcvars64 for x64."
+    } else {
+        Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
+    }
 
     $programFilesX86 = ${env:ProgramFiles(x86)}
     $vswhereCandidates = @()
@@ -389,6 +415,73 @@ function Ensure-MsvcToolchain {
     }
 }
 
+# The installation path of the latest Visual Studio that has $Component, or
+# $null when vswhere is missing or no installation has it.
+function Resolve-VsInstallationPath {
+    param([string]$Component)
+
+    $vswhereCandidates = @()
+    if (${env:ProgramFiles(x86)}) {
+        $vswhereCandidates += (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
+    }
+    if ($env:ProgramFiles) {
+        $vswhereCandidates += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    }
+    $vswhereFromPath = Resolve-CommandPath "vswhere"
+    if ($vswhereFromPath) {
+        $vswhereCandidates += $vswhereFromPath
+    }
+    $vswhere = $vswhereCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique -First 1
+    if (-not $vswhere) {
+        return $null
+    }
+    $output = & $vswhere -latest -products * -requires $Component -property installationPath | Select-Object -First 1
+    if ($output) {
+        return $output.Trim()
+    }
+    return $null
+}
+
+# An ARM64 host needs the MSVC environment that targets ARM64: its link, lib
+# and rc, and the ARM64 import libraries and UCRT. A shell already initialized
+# for another target is initialized again.
+function Ensure-MsvcArm64Toolchain {
+    param([string[]]$RequiredTools)
+
+    if ($env:VSCMD_ARG_TGT_ARCH -eq "arm64" -and @(Get-MissingCommands -Commands $RequiredTools).Count -eq 0) {
+        return
+    }
+    $installationPath = Resolve-VsInstallationPath "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    if (-not $installationPath) {
+        throw "Visual Studio Build Tools with the ARM64 MSVC tools (component Microsoft.VisualStudio.Component.VC.Tools.ARM64) were not found. Install them to build -TargetArch arm64."
+    }
+    $vcvarsall = Join-Path $installationPath "VC\Auxiliary\Build\vcvarsall.bat"
+    $vcvarsArch = if (Test-HostIsArm64) { "arm64" } else { "amd64_arm64" }
+    Write-Host "Importing the MSVC environment for ARM64: vcvarsall $vcvarsArch"
+    Import-CmdEnvironment "`"$vcvarsall`" $vcvarsArch >nul"
+
+    $missingTools = @(Get-MissingCommands -Commands $RequiredTools)
+    if ($missingTools.Count -gt 0 -or $env:VSCMD_ARG_TGT_ARCH -ne "arm64") {
+        throw "vcvarsall $vcvarsArch did not provide an ARM64 MSVC environment (target '$($env:VSCMD_ARG_TGT_ARCH)', missing: $($missingTools -join ', '))."
+    }
+}
+
+# The ring crate compiles its aarch64 assembly with clang.
+function Ensure-ClangForArm64 {
+    if (Resolve-CommandPath "clang") {
+        Write-Host "Using clang: $(Resolve-CommandPath 'clang')"
+        return
+    }
+    $installationPath = Resolve-VsInstallationPath "Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+    $llvmHost = if (Test-HostIsArm64) { "ARM64" } else { "x64" }
+    $llvmBin = if ($installationPath) { Join-Path $installationPath "VC\Tools\Llvm\$llvmHost\bin" } else { $null }
+    if (-not $llvmBin -or -not (Test-Path (Join-Path $llvmBin "clang.exe"))) {
+        throw "clang was not found. Install the Visual Studio component Microsoft.VisualStudio.Component.VC.Llvm.Clang (C++ Clang compiler for Windows), or put clang on PATH, to build -TargetArch arm64."
+    }
+    $env:Path = "$llvmBin;$env:Path"
+    Write-Host "Using clang: $(Join-Path $llvmBin 'clang.exe')"
+}
+
 function Invoke-InRepo {
     param(
         [scriptblock]$Script
@@ -403,6 +496,9 @@ function Invoke-InRepo {
 }
 
 Ensure-MsvcToolchain
+if ($windowsArch -eq "arm64") {
+    Ensure-ClangForArm64
+}
 Configure-LldLinker
 Configure-CompilerCache
 if ((Test-Sccache) -and -not $env:RUSTC_WRAPPER) {
@@ -434,6 +530,11 @@ Invoke-InRepo {
         $hostArgs += "--release"
         $outputProfile = "release"
     }
+    $outputDir = $outputProfile
+    if ($cargoTarget) {
+        $hostArgs += @("--target", $cargoTarget)
+        $outputDir = "$cargoTarget\$outputProfile"
+    }
     Invoke-NativeCommand "cargo" $hostArgs
-    Write-Host "Mesh host: target\$outputProfile\mesh-llm.exe"
+    Write-Host "Mesh host: target\$outputDir\mesh-llm.exe"
 }
