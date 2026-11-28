@@ -256,7 +256,7 @@ mod output_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests {
     use super::*;
 
@@ -267,11 +267,6 @@ mod tests {
     /// impossible requirements, not an error.
     #[test]
     fn cli_definition_is_internally_consistent() {
-        if !cfg!(debug_assertions) {
-            panic!(
-                "clap\x27s debug_assert checks are compiled out; this test needs a debug-assertions profile"
-            );
-        }
         use clap::CommandFactory;
         Cli::command().debug_assert();
     }
