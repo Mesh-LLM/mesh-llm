@@ -135,7 +135,10 @@ pub(super) fn acquire_instance_runtime(
     }
 
     match crate::runtime::instance::InstanceRuntime::acquire(std::process::id()) {
-        Ok(rt) => Some(Arc::new(rt)),
+        Ok(rt) => {
+            super::dead_slots::spawn_dead_slot_prune(std::process::id());
+            Some(Arc::new(rt))
+        }
         Err(err) => {
             tracing::warn!("failed to acquire instance runtime: {err}");
             None
