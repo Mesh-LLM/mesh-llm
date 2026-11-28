@@ -174,3 +174,15 @@ fn generic_facade_prepares_full_mounted_roster_and_correlates_locator_before_out
     assert!(!refused.exists());
     temp.close().unwrap();
 }
+
+/// clap validates its argument graph (name uniqueness, relations,
+/// groups, action and value-parser agreement) only under debug
+/// assertions, and only when debug_assert is invoked; a
+/// misconfiguration otherwise surfaces as silently ignored flags or
+/// impossible requirements, not an error.
+#[cfg(debug_assertions)]
+#[test]
+fn cli_definition_is_internally_consistent() {
+    use clap::CommandFactory;
+    Cli::command().debug_assert();
+}

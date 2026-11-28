@@ -558,6 +558,18 @@ pub enum StatePayloadKind {
 mod tests {
     use super::*;
 
+    /// clap validates its argument graph (name uniqueness, relations,
+    /// groups, action and value-parser agreement) only under debug
+    /// assertions, and only when debug_assert is invoked; a
+    /// misconfiguration otherwise surfaces as silently ignored flags or
+    /// impossible requirements, not an error.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cli_definition_is_internally_consistent() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
     #[test]
     fn remote_handoff_listener_defaults_to_loopback() {
         let cli = Cli::try_parse_from([

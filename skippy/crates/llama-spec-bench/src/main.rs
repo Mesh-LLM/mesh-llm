@@ -801,3 +801,19 @@ fn prompt_case_from_value(value: &Value, line_index: usize) -> Result<PromptCase
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::*;
+
+    /// clap validates its argument graph (name uniqueness, relations,
+    /// groups, action and value-parser agreement) only under debug
+    /// assertions, and only when debug_assert is invoked; a
+    /// misconfiguration otherwise surfaces as silently ignored flags or
+    /// impossible requirements, not an error.
+    #[test]
+    fn cli_definition_is_internally_consistent() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
+    }
+}
