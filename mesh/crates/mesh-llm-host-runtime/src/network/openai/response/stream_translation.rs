@@ -67,6 +67,17 @@ struct StreamedChatAssembly {
 }
 
 impl StreamedChatAssembly {
+    /// The content the caller received so far.
+    fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Whether another target can continue this stream from its content
+    /// alone: one choice, and no reasoning or tool call already streamed.
+    fn resumable(&self) -> bool {
+        !self.saw_reasoning && self.tool_calls.is_empty() && !self.multi_choice
+    }
+
     /// Fold one (already client-facing, i.e. post-normalization) SSE data
     /// frame's `choices[0].delta` into the running assembly. A frame that
     /// isn't a recognizable chat-completion chunk, or carries no delta (an

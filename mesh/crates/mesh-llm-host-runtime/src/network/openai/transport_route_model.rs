@@ -90,7 +90,17 @@ pub async fn route_model_request(
         peer_capsule_id: context.peer_capsule_id,
         served_by_node_id: context.served_by_node_id,
     };
-    route_model_request_inner(args).await
+    crate::network::openai::response::stream_resume::with_stream_resume(route_model_request_inner(
+        args,
+    ))
+    .await
+}
+
+/// End a caller's stream that was held open for a resume that did not happen.
+async fn close_held_stream(tcp_stream: &mut ClientStream) {
+    use tokio::io::AsyncWriteExt;
+    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
+    let _ = tcp_stream.shutdown().await;
 }
 
 struct RouteModelRequestArgs<'a> {
@@ -121,6 +131,8 @@ struct RouteModelState {
 
 enum RouteModelDisposition {
     Continue,
+    /// Continue the caller's committed stream with this request on the next target.
+    Resume(Vec<u8>),
     Return(RouteDispatchOutcome),
 }
 
@@ -371,8 +383,11 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     // resolves the capsule client nonce once, before target selection), so every
     // attempt here — including a timeout retry to a different target — forwards
     // the identical nonce instead of letting each target's frontend mint its own.
-    let forwarding_raw = request.raw.as_slice();
+    // After a committed stream broke, the request rewritten to continue it.
+    let mut resumed_raw: Option<Vec<u8>> = None;
     for (idx, target) in ordered.into_iter().enumerate() {
+        let forwarding_raw = resumed_raw.as_deref().unwrap_or(request.raw.as_slice());
+        crate::network::openai::response::stream_resume::set_allowed(idx + 1 < total_targets);
         // A prior attempt in this same loop may have probed a response,
         // recorded ITS peer's `X-Capsule-Id` into the sink, and then still
         // been classified retryable (e.g. context overflow) -- drain that
@@ -456,7 +471,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             total_route_ms = route_started.elapsed().as_millis(),
             "openai route_model_request attempt"
         );
-        match handle_route_model_attempt_result(
+        match route_model_attempt_disposition(
             &node,
             model,
             &target,
@@ -464,8 +479,13 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             affinity,
             attempt_result,
             &mut state,
+            request.raw.as_slice(),
         ) {
             RouteModelDisposition::Continue => continue,
+            RouteModelDisposition::Resume(raw) => {
+                resumed_raw = Some(raw);
+                continue;
+            }
             RouteModelDisposition::Return(result) => {
                 record_served_by_node_id(served_by_node_id, &result, &target);
                 return finalize_route_model_result(
@@ -482,6 +502,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     }
 
     if state.timeout_attempts == 0
+        && crate::network::openai::response::stream_resume::continuation().is_none()
         && let Some(handoff) = automatic_retry
     {
         handoff.retain(tcp_stream);
@@ -496,6 +517,30 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         route_observer,
     )
     .await
+}
+
+/// After a committed stream broke with another target left, the request that
+/// continues it there; `None` to handle the attempt as before.
+fn resume_after_attempt(attempt_result: &RouteAttemptResult, raw: &[u8]) -> Option<Vec<u8>> {
+    use crate::network::openai::response::stream_resume;
+    if !matches!(
+        attempt_result,
+        RouteAttemptResult::CommittedStreamFailure {
+            cause: crate::network::openai::response::CommittedStreamFailureCause::Truncated,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let delivered = stream_resume::take_delivered()?;
+    let resumed = stream_resume::resumed_request(raw, &delivered)?;
+    stream_resume::begin_continuation(stream_resume::StreamContinuation {
+        id: delivered.id,
+        created: delivered.created,
+        model: delivered.model,
+        prior_completion_chunks: delivered.content_chunks,
+    });
+    Some(resumed)
 }
 
 struct ReservedModelRoute {
@@ -639,6 +684,39 @@ async fn send_route_model_none_target(
     )
     .await;
     response_outcome(503, result)
+}
+
+/// How the route loop goes on after an attempt: resume a broken committed
+/// stream on the next target when it can, else handle the result as before.
+#[allow(clippy::too_many_arguments)]
+fn route_model_attempt_disposition(
+    node: &mesh::Node,
+    model: &str,
+    target: &election::InferenceTarget,
+    selection: &TargetSelection,
+    affinity: &AffinityRouter,
+    attempt_result: RouteAttemptResult,
+    state: &mut RouteModelState,
+    raw: &[u8],
+) -> RouteModelDisposition {
+    if let Some(resumed) = resume_after_attempt(&attempt_result, raw) {
+        tracing::info!(
+            model = model,
+            target = ?target,
+            attempt = state.attempts,
+            "openai route_model_request resuming a committed stream on the next target"
+        );
+        return RouteModelDisposition::Resume(resumed);
+    }
+    handle_route_model_attempt_result(
+        node,
+        model,
+        target,
+        selection,
+        affinity,
+        attempt_result,
+        state,
+    )
 }
 
 fn handle_route_model_attempt_result(
