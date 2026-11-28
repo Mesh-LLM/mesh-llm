@@ -211,6 +211,9 @@ describe('LogRequestDetails', () => {
     expect(
       screen.getByText('This request exceeds the bounded diagnostic limit. The records shown below are incomplete.')
     ).toHaveAttribute('role', 'status')
+    expect(screen.queryByText('None reported.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No errors' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('diagnostic-self-report')).toHaveTextContent('none in the loaded records')
   })
 
   it.each([
@@ -260,7 +263,7 @@ describe('LogRequestDetails', () => {
     expect(within(diagnostics).getByText('error_trace')).toBeInTheDocument()
     expect(within(diagnostics).getByText('corrupt')).toBeInTheDocument()
     expect(within(diagnostics).getByText('missing')).toBeInTheDocument()
-    expect(within(diagnostics).getByText('2048 B / v4')).toBeInTheDocument()
+    expect(within(diagnostics).getByText('2,048 B / v4')).toBeInTheDocument()
     expect(within(diagnostics).getByText('Not recorded')).toBeInTheDocument()
     expect(diagnostics).toHaveTextContent('http://peer-b.mesh.invalid:9337')
     expect(diagnostics).toHaveTextContent('https://peer-b.mesh.invalid')

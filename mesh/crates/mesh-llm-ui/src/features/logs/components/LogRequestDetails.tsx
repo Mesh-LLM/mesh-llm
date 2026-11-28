@@ -165,6 +165,9 @@ export function LogRequestDetails({
             )}
           />
           <LogRequestDiagnostics
+            historyPartial={Boolean(
+              artifactsQuery.data?.nextCursor || eventsQuery.data?.nextCursor || attemptsQuery.data?.nextCursor
+            )}
             artifacts={artifactsQuery.data?.items}
             artifactsError={artifactsQuery.isError}
             artifactsLoading={artifactsQuery.isLoading}

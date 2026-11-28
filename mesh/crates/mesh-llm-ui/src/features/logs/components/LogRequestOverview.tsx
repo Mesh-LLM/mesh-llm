@@ -21,6 +21,7 @@ import type {
   LogProxyAttempt,
   LogRequest
 } from '@/features/logs/api/schemas'
+import { LogTokenWords } from '@/features/logs/components/LogTokenWords'
 import { LogNetworkIdentityBand } from '@/features/logs/components/LogNetworkIdentityBand'
 import {
   formatAttemptEvidence,
@@ -34,6 +35,7 @@ import {
   LogRequestRoutingOverview
 } from '@/features/logs/components/LogRequestOverviewEvidence'
 import { LogRequestOverviewMetadata } from '@/features/logs/components/LogRequestOverviewMetadata'
+import { outcomeLabels } from '@/features/logs/lib/receipt-words'
 
 type LogRequestOverviewProps = {
   readonly request: LogRequest
@@ -76,12 +78,12 @@ const toneTextClass: Record<StatusBadgeTone, string> = {
 }
 
 const outcomePresentation: Record<LogOutcome, OutcomePresentation> = {
-  active: { icon: Activity, label: 'Active', tone: 'accent' },
-  completed: { icon: CircleCheckBig, label: 'Completed', tone: 'good' },
-  failed: { icon: CircleX, label: 'Failed', tone: 'bad' },
-  rejected: { icon: Ban, label: 'Rejected', tone: 'bad' },
-  cancelled: { icon: CircleSlash, label: 'Cancelled', tone: 'warn' },
-  dropped: { icon: CircleMinus, label: 'Dropped', tone: 'bad' }
+  active: { icon: Activity, label: outcomeLabels.active, tone: 'accent' },
+  completed: { icon: CircleCheckBig, label: outcomeLabels.completed, tone: 'good' },
+  failed: { icon: CircleX, label: outcomeLabels.failed, tone: 'bad' },
+  rejected: { icon: Ban, label: outcomeLabels.rejected, tone: 'bad' },
+  cancelled: { icon: CircleSlash, label: outcomeLabels.cancelled, tone: 'warn' },
+  dropped: { icon: CircleMinus, label: outcomeLabels.dropped, tone: 'bad' }
 }
 
 function MetricCell({ children, icon: Icon, iconTone = 'muted', label }: MetricCellProps) {
@@ -131,7 +133,7 @@ export function LogRequestOverview({ request, artifacts, attempts, events }: Log
         <MetricCell icon={OutcomeIcon} iconTone={presentation.tone} label="Status">
           <div data-metric-outcome={request.outcome} data-testid="request-outcome">
             <div className="type-panel-title text-foreground">
-              <span>{presentation.label}</span>
+              <LogTokenWords token={request.outcome} words={presentation.label} />
             </div>
             <div
               className={`mt-1 font-mono type-caption ${toneTextClass[httpStatusTone]}`}

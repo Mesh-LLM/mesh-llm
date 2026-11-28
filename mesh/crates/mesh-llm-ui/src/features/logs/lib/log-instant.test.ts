@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareLogInstants, sortByOccurredAt } from './log-instant'
+import { compareLogInstants, formatInstant, sortByOccurredAt } from './log-instant'
 
 type LogFixture = {
   readonly id: string
@@ -45,5 +45,16 @@ describe('sortByOccurredAt', () => {
 
     expect(sortByOccurredAt(entries)).not.toBe(entries)
     expect(entries.map((entry) => entry.id)).toEqual(['second', 'first'])
+  })
+})
+
+describe('formatInstant', () => {
+  it('says the date, time and zone name in en-US words', () => {
+    expect(formatInstant('2026-10-27T22:09:03Z', { timeZone: 'America/Chicago' })).toBe('Oct 27, 2026, 5:09:03 PM CDT')
+    expect(formatInstant('2026-10-27T22:09:03Z', { timeZone: 'UTC' })).toBe('Oct 27, 2026, 10:09:03 PM UTC')
+  })
+
+  it('returns an unparseable value unchanged', () => {
+    expect(formatInstant('not a time')).toBe('not a time')
   })
 })

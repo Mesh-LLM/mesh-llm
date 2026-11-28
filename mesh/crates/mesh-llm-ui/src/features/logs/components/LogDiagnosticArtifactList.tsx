@@ -2,7 +2,8 @@ import { DatabaseZap } from 'lucide-react'
 import { useMemo } from 'react'
 import type { LogArtifact } from '@/features/logs/api/schemas'
 import { LogArtifactStateBadges } from '@/features/logs/components/LogArtifactStateBadges'
-import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
+import { formatInstant, sortByOccurredAt } from '@/features/logs/lib/log-instant'
+import { groupThousands } from '@/features/logs/lib/receipt-words'
 
 export type LogDiagnosticArtifactListProps = {
   readonly artifacts: readonly LogArtifact[]
@@ -19,10 +20,6 @@ function ArtifactQueryState({ loading, error }: { readonly loading: boolean; rea
   )
 }
 
-function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString()
-}
-
 function DiagnosticArtifact({ artifact }: { readonly artifact: LogArtifact }) {
   return (
     <article className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-3">
@@ -36,13 +33,13 @@ function DiagnosticArtifact({ artifact }: { readonly artifact: LogArtifact }) {
         <div className="min-w-0">
           <dt className="type-label text-fg-faint">Captured</dt>
           <dd className="mt-1 break-words font-mono text-[length:var(--density-type-caption)] text-fg-dim">
-            <time dateTime={artifact.occurredAt}>{formatTimestamp(artifact.occurredAt)}</time>
+            <time dateTime={artifact.occurredAt}>{formatInstant(artifact.occurredAt)}</time>
           </dd>
         </div>
         <div className="min-w-0">
           <dt className="type-label text-fg-faint">Bytes / version</dt>
           <dd className="mt-1 break-words font-mono text-[length:var(--density-type-caption)] text-fg-dim">
-            {artifact.bytes} B / v{artifact.version}
+            {groupThousands(artifact.bytes)} B / v{artifact.version}
           </dd>
         </div>
         <div className="min-w-0 sm:col-span-2">
@@ -59,6 +56,7 @@ function DiagnosticArtifact({ artifact }: { readonly artifact: LogArtifact }) {
 export function LogDiagnosticArtifactList({ artifacts, loading, error }: LogDiagnosticArtifactListProps) {
   const orderedArtifacts = useMemo(() => sortByOccurredAt(artifacts), [artifacts])
   const ready = !loading && !error
+  if (ready && orderedArtifacts.length === 0) return null
 
   return (
     <section aria-label="Error artifacts" className="rounded-[var(--radius)] border border-border-soft bg-panel p-3">
@@ -71,11 +69,6 @@ export function LogDiagnosticArtifactList({ artifacts, loading, error }: LogDiag
       </p>
       <div className="mt-3">
         <ArtifactQueryState error={error} loading={loading} />
-        {ready && orderedArtifacts.length === 0 ? (
-          <p className="type-caption text-fg-dim" role="status">
-            No error artifact metadata was retained.
-          </p>
-        ) : null}
         {ready && orderedArtifacts.length > 0 ? (
           <div className="grid gap-2">
             {orderedArtifacts.map((artifact) => (

@@ -3,13 +3,12 @@ import type { LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/sch
 import {
   attemptDurationMs,
   formatDurationMs,
-  formatTimestamp,
   machineValue,
   type RetainedQueryState
 } from '@/features/logs/components/LogRequestOverviewDerivations'
 import { LogRequestLifecycleStrip } from '@/features/logs/components/LogRequestLifecycleStrip'
 import { LogRequestOverviewPanel } from '@/features/logs/components/LogRequestOverviewPanel'
-import { compareLogInstants } from '@/features/logs/lib/log-instant'
+import { compareLogInstants, formatInstant } from '@/features/logs/lib/log-instant'
 
 function EvidenceState({
   loading,
@@ -90,7 +89,7 @@ function AttemptTime({ label, value }: { readonly label: string; readonly value:
     <div className="min-w-0">
       <dt className="type-label text-fg-faint">{label}</dt>
       <dd className="mt-0.5 break-all font-mono tabular-nums type-caption text-foreground">
-        {value === undefined ? 'Not recorded' : <time dateTime={value}>{formatTimestamp(value)}</time>}
+        {value === undefined ? 'Not recorded' : <time dateTime={value}>{formatInstant(value)}</time>}
       </dd>
     </div>
   )

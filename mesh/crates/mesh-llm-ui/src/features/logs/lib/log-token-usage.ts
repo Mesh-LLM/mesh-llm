@@ -1,4 +1,5 @@
 import type { LogLifecycleEvent } from '@/features/logs/api/schemas'
+import { groupThousands } from '@/features/logs/lib/receipt-words'
 
 type TokenUsageEvent = Pick<
   LogLifecycleEvent,
@@ -31,5 +32,5 @@ export function formatTokenUsage(event: TokenUsageEvent): string | undefined {
   const entries = tokenUsageEntries(event)
   return entries.length === 0
     ? undefined
-    : entries.map(({ label, value }) => `${label}: ${value.toLocaleString()}`).join(' · ')
+    : entries.map(({ label, value }) => `${label}: ${groupThousands(value)}`).join(' · ')
 }

@@ -1,4 +1,5 @@
 import type { LogArtifact } from '@/features/logs/api/schemas'
+import { groupThousands } from '@/features/logs/lib/receipt-words'
 
 export type ArtifactCounts = {
   readonly total: number
@@ -22,7 +23,7 @@ export function deriveArtifactCounts(items: readonly LogArtifact[]): ArtifactCou
     count: items.filter((item) => item.contentState === state).length
   }))
     .filter(({ count }) => count > 0)
-    .map(({ state, count }) => `${count.toLocaleString()} ${state}`)
+    .map(({ state, count }) => `${groupThousands(count)} ${state}`)
     .join(' · ')
   const redacted = items.filter((item) => item.redacted).length
   const truncated = items.filter((item) => item.truncated).length

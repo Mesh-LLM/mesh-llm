@@ -12,6 +12,7 @@ import {
   LogRequestDiagnosticSummary
 } from '@/features/logs/components/LogRequestDiagnosticSummary'
 import { artifactMatchesTab, isErrorEvent } from '@/features/logs/lib/log-request-details'
+import { receiptWord } from '@/features/logs/lib/receipt-words'
 import { LogRequestEvidenceTimeline } from './LogRequestEvidenceTimeline'
 
 export type LogRequestDiagnosticsProps = {
@@ -27,6 +28,8 @@ export type LogRequestDiagnosticsProps = {
   readonly attemptsError: boolean
   readonly artifactsLoading: boolean
   readonly artifactsError: boolean
+  /** True when any evidence query has a continuation cursor, so later records were not loaded. */
+  readonly historyPartial?: boolean
 }
 
 const interruptedEventKinds: readonly LogEventKind[] = ['rejected', 'cancelled', 'dropped']
@@ -80,11 +83,12 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
   const eventsReady = !props.eventsLoading && !props.eventsError
   const attemptsReady = !props.attemptsLoading && !props.attemptsError
   const artifactsReady = !props.artifactsLoading && !props.artifactsError
-  const evidenceComplete = eventsReady && attemptsReady && artifactsReady
-  const hasErrorEvidence =
-    diagnosticEvents.length > 0 ||
-    (props.attempts ?? []).some((attempt) => attempt.statusCode !== undefined && attempt.statusCode >= 400) ||
-    errorArtifacts.length > 0
+  const historyPartial = props.historyPartial ?? false
+  const evidenceComplete = eventsReady && attemptsReady && artifactsReady && !historyPartial
+  const failedAttempts = (props.attempts ?? []).filter(
+    (attempt) => attempt.statusCode !== undefined && attempt.statusCode >= 400
+  )
+  const hasErrorEvidence = diagnosticEvents.length > 0 || failedAttempts.length > 0 || errorArtifacts.length > 0
 
   if (props.requestError) return <RequestQueryState state="error" />
   if (props.requestLoading) return <RequestQueryState state="loading" />
@@ -93,10 +97,15 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
   const diagnosticEvidence: LogRequestDiagnosticEvidence = {
     artifacts: artifactsReady ? (props.artifacts ?? []) : undefined,
     attemptCount: attemptsReady ? (props.attempts ?? []).length : undefined,
+    failedAttemptCount: attemptsReady ? failedAttempts.length : undefined,
+    failureEventCount: eventsReady ? diagnosticEvents.length : undefined,
+    errorFileCount: artifactsReady ? errorArtifacts.length : undefined,
+    historyPartial,
     diagnosticMarkerCount: eventsReady && artifactsReady ? diagnosticEvents.length + errorArtifacts.length : undefined,
     evidenceComplete,
     hasErrorEvidence
   }
+  const noProblems = evidenceComplete && !hasErrorEvidence
   const successful =
     props.request.outcome === 'completed' && diagnosticEvidence.evidenceComplete && !diagnosticEvidence.hasErrorEvidence
 
@@ -116,20 +125,27 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
               <QueryNotice error={props.attemptsError} label="Routing attempts" loading={props.attemptsLoading} />
             </div>
           ) : null}
-          <LogRequestEvidenceTimeline
-            ariaLabel="Ordered diagnostic evidence"
-            attemptEmptyMessage={
-              attemptsReady ? 'No retry or proxy attempts were retained for this request.' : undefined
-            }
-            attempts={attemptsReady ? (props.attempts ?? []) : []}
-            eventEmptyMessage={eventsReady ? 'No failed or interrupted lifecycle markers were retained.' : undefined}
-            events={eventsReady ? diagnosticEvents : []}
-          />
-          <LogDiagnosticArtifactList
-            artifacts={errorArtifacts}
-            error={props.artifactsError}
-            loading={props.artifactsLoading}
-          />
+          <section aria-label="Problems spotted" className="min-w-0 space-y-[var(--shell-normal)]">
+            <h3 className="type-label text-fg-faint">{receiptWord('section.anomalies')}</h3>
+            {noProblems ? (
+              <p className="type-caption text-fg-dim" role="status">
+                {receiptWord('anomalies.none')}
+              </p>
+            ) : null}
+            <LogRequestEvidenceTimeline
+              ariaLabel="Ordered diagnostic evidence"
+              attemptEmptyMessage={
+                attemptsReady ? 'No retry or proxy attempts were retained for this request.' : undefined
+              }
+              attempts={attemptsReady ? (props.attempts ?? []) : []}
+              events={eventsReady ? diagnosticEvents : []}
+            />
+            <LogDiagnosticArtifactList
+              artifacts={errorArtifacts}
+              error={props.artifactsError}
+              loading={props.artifactsLoading}
+            />
+          </section>
         </>
       )}
     </section>

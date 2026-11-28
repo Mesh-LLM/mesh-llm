@@ -1,9 +1,11 @@
 import { Milestone, Radio, Route } from 'lucide-react'
 import { useMemo } from 'react'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
+import { LogTokenWords } from '@/features/logs/components/LogTokenWords'
+import { tokenWords } from '@/features/logs/lib/receipt-words'
 import type { LogLifecycleEvent, LogProxyAttempt } from '@/features/logs/api/schemas'
 import { formatTokenUsage } from '@/features/logs/lib/log-token-usage'
-import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
+import { formatInstant, sortByOccurredAt } from '@/features/logs/lib/log-instant'
 import { isStreamEvent } from '@/features/logs/lib/log-request-details'
 import { attemptStatus, attemptTone, elapsedMilliseconds, eventTone } from '@/features/logs/lib/log-timeline'
 import { formatElapsedMs } from '@/lib/format-duration'
@@ -24,7 +26,6 @@ type LogRequestEvidenceTimelineProps = {
   readonly ariaLabel: string
   readonly events: readonly LogLifecycleEvent[]
   readonly attempts: readonly LogProxyAttempt[]
-  readonly eventEmptyMessage: string | undefined
   readonly attemptEmptyMessage: string | undefined
 }
 
@@ -74,7 +75,7 @@ function EventEvidence({
       <div className="flex flex-wrap items-start gap-2">
         <Icon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-fg-faint" />
         <StatusBadge size="caption" tone={tone}>
-          {event.kind}
+          <LogTokenWords token={event.kind} words={tokenWords(event.kind)} />
         </StatusBadge>
         {event.attemptId !== undefined ? (
           <code className="break-all font-mono text-[length:var(--density-type-caption)] text-fg-dim">
@@ -83,7 +84,7 @@ function EventEvidence({
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[length:var(--density-type-caption)] text-fg-faint">
           {deltaMs !== undefined ? <span>{formatElapsedMs(deltaMs, { prefix: '+' })}</span> : null}
-          <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString()}</time>
+          <time dateTime={event.occurredAt}>{formatInstant(event.occurredAt)}</time>
         </div>
       </div>
       {hasMetadata ? (
@@ -130,7 +131,7 @@ function AttemptEvidence({
         {attempt.engine !== undefined ? <span>engine {attempt.engine}</span> : null}
         {durationMs !== undefined ? <span>{formatElapsedMs(durationMs)}</span> : null}
         {deltaMs !== undefined ? <span>{formatElapsedMs(deltaMs, { prefix: '+' })}</span> : null}
-        <time dateTime={attempt.occurredAt}>{new Date(attempt.occurredAt).toLocaleTimeString()}</time>
+        <time dateTime={attempt.occurredAt}>{formatInstant(attempt.occurredAt)}</time>
       </div>
     </article>
   )
@@ -140,22 +141,15 @@ export function LogRequestEvidenceTimeline({
   ariaLabel,
   events,
   attempts,
-  eventEmptyMessage,
   attemptEmptyMessage
 }: LogRequestEvidenceTimelineProps) {
   const entries = useMemo(() => orderedEvidence(events, attempts), [attempts, events])
-  const showEventEmpty = events.length === 0 && eventEmptyMessage !== undefined
   const showAttemptEmpty = attempts.length === 0 && attemptEmptyMessage !== undefined
 
   return (
     <>
-      {showEventEmpty || showAttemptEmpty ? (
+      {showAttemptEmpty ? (
         <div className="mb-3 grid gap-2 sm:grid-cols-2">
-          {showEventEmpty ? (
-            <p className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-2 type-caption text-fg-dim">
-              {eventEmptyMessage}
-            </p>
-          ) : null}
           {showAttemptEmpty ? (
             <p className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-2 type-caption text-fg-dim">
               {attemptEmptyMessage}
