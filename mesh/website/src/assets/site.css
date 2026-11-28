@@ -4101,6 +4101,19 @@ h2.title .title-line {
   direction: rtl;
   text-align: right;
 }
+/* The select is the only part that opens the menu, so stretch its box over the
+   whole control (label and caret included). Padding cancels the negative
+   margins, which leaves the value text where it was; the control clips the
+   oversized left edge. */
+.catalog .control-select {
+  overflow: hidden;
+  cursor: pointer;
+}
+.catalog .control-select select {
+  align-self: stretch;
+  margin: -4px -30px -4px -12rem;
+  padding: 4px 30px 4px 12rem;
+}
 .catalog .control select option {
   direction: ltr;
 }
