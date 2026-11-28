@@ -10,5 +10,6 @@ The workflows are plain. Keep them that way.
   where it can be run locally, not in workflow YAML.
 - Skippy is built, tested and released in its own repository. Do not add Skippy
   builds, GPU runtimes or Skippy tests here. CPU smokes use the pinned release;
-  only the Linux smoke builds a named Skippy ref from source.
+  only the Linux smoke builds a named Skippy ref from source. Test-only overrides
+  skip the macOS/Windows package-install smokes; fresh pinned CI must pass them.
 - Pin every action to a full commit SHA. Run `actionlint` before pushing.

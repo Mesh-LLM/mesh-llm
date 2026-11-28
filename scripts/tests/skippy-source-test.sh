@@ -3,10 +3,17 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-read -r _ _ pinned_version <<<"$("$root/scripts/skippy-pin.sh")"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 work="$(cd "$work" && pwd -P)"
+# Test local overrides of the committed release, not CI's temporary Git inputs.
+mkdir -p "$work/pin/scripts"
+cp "$root/scripts/skippy-pin.sh" "$work/pin/scripts/"
+cp "$root/Cargo.toml" "$work/pin/Cargo.toml"
+if grep -q '^skippy-ffi = .*git =' "$work/pin/Cargo.toml"; then
+    git -C "$root" show HEAD:Cargo.toml >"$work/pin/Cargo.toml"
+fi
+read -r _ _ pinned_version <<<"$("$work/pin/scripts/skippy-pin.sh")"
 fixture="$work/mesh"
 checkout="$fixture/.deps/skippy"
 mkdir -p "$fixture/scripts" "$fixture/.cargo" "$fixture/consumer/src" "$checkout/crates/skippy-ffi/src" "$checkout/crates/skippy-runtime/src"

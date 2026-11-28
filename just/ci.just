@@ -2,15 +2,17 @@
 # nothing here builds a helper tool first.
 
 # Format, lint, and shell checks.
-lint:
+lint *ARGS:
     cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets {{ ARGS }} -- -D warnings
     shellcheck scripts/*.sh scripts/tests/*.sh mesh/scripts/*.sh
     scripts/tests/skippy-pin-test.sh
     scripts/tests/skippy-source-test.sh
     scripts/tests/build-skippy-runtime-test.sh
     scripts/tests/fetch-skippy-runtime-test.sh
     scripts/tests/ci-resolve-skippy-test.sh
+    scripts/tests/ci-skippy-ref-test.sh
+    scripts/tests/ci-pin-skippy-test.sh
     scripts/tests/ci-skippy-runtime-test.sh
     python3 scripts/tests/ci-cpu-host-smoke-test.py
     scripts/tests/install-asset-test.sh
@@ -40,8 +42,8 @@ smoke runtime model:
 # The tests that call into a native runtime, which `test-rust` leaves ignored.
 # `runtime` is a directory of packaged Skippy runtimes.
 [unix]
-test-with-runtime runtime:
-    SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR="$(cd "{{ runtime }}" && pwd -P)" cargo test -p mesh-llm-system --features dynamic-native-runtime --lib test_skippy_backend -- --ignored
+test-with-runtime runtime *ARGS:
+    SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR="$(cd "{{ runtime }}" && pwd -P)" cargo test -p mesh-llm-system --features dynamic-native-runtime --lib test_skippy_backend {{ ARGS }} -- --ignored
 
 # Everything a pull request must pass, except the smoke (it needs a runtime and a model).
 test-all: lint test-rust test-ui

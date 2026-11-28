@@ -58,18 +58,45 @@ skill and the inventory in the same change.
 
 ## Testing MeshLLM against a Skippy change
 
-Lint and the Rust tests always use the Skippy crates.io release pinned in `Cargo.toml`.
-The smoke job can use another one:
+Lint, all three OS Rust test jobs, the website CLI generator and Linux smoke
+use the same Skippy revision.
+By default it is the crates.io release in `Cargo.toml`/`Cargo.lock`, with
+the matching runtime source commit in `scripts/skippy-pin.sh`. For test-only
+cross-repository work, select another one:
 
 - In a pull request, add a line `Skippy-Ref: pull/123` (or a branch, tag or
   full commit SHA) to the description. Editing the description starts a run.
 - From the Actions page, run `ci.yml` with the `skippy_ref` input.
 
-`scripts/ci-resolve-skippy.sh` turns the ref into a repository and commit. A
-branch or pull request is resolved once per run, so re-run the workflow after
-a new Skippy push. A named ref is always built fresh and never written to the
-runtime cache that pinned runs read. Running the workflow on `main` with a
-Skippy ref means you trust that code.
+The selection job parses the directive with `scripts/ci-skippy-ref.sh` and
+resolves it once with `scripts/ci-resolve-skippy.sh`. For an override,
+`ci-pin-skippy.sh` temporarily replaces the manifest's Skippy registry dependencies
+with exact Git revisions (dropping the old release version constraints). Cargo
+resolves one lockfile. The exact manifest/lockfile artifact is shared by lint,
+tests, website and smoke, which still use `--locked`. Do not commit these
+temporary CI files. Only smoke
+builds the native CPU runtime, from that same SHA. The macOS/Windows CPU
+install smokes are skipped for overrides because they need published packages;
+they must pass in the fresh pinned run before merging. Ordinary runs download the
+pinned release runtime and use the committed manifest and lockfile unchanged.
+
+A branch or PR is resolved once per run; start a fresh full run after a new
+Skippy push. A failed-jobs rerun can reuse the previous selection and artifact;
+it does not select a new branch head. If its short-lived artifact has expired,
+start a full run. Running on `main` with a Skippy ref means you trust that code.
+
+**An override run is never merge-ready.** The existing required `PR / Quality`,
+`PR / Linux`, `PR / macOS`, `PR / Windows` and `PR / Website` checks fail while
+an override was selected, without stopping the test jobs. They also read the
+current PR description before passing, rejecting a directive added while an
+older pinned run was finishing. Blank or duplicate directives fail closed.
+
+Before merging, land the Skippy change, update Mesh's committed pin/lockfile
+to the intended supported revision/release as needed, remove the directive,
+and wait for a fresh full pinned run to pass. Removing the directive cannot
+turn an old override run green. Do not merge using stale checks while an edited
+description's run is queued, and do not bypass the required checks. These are
+CI merge checks, not an atomic server-side rule on PR-description contents.
 
 ## Validation
 

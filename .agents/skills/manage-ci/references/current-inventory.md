@@ -20,29 +20,39 @@ runners.
 
 | Job | Runner | Command |
 |---|---|---|
-| Lint | `ubuntu-24.04` | `just lint` |
+| Select Skippy revision | `ubuntu-24.04` | Parse/resolve once; share temporary manifest/lockfile for overrides |
+| Lint | `ubuntu-24.04` | `just lint --locked` |
 | Test | `ubuntu-24.04`, `macos-15`, `windows-2022` | `just test-rust --locked --no-fail-fast` |
 | Console | `ubuntu-24.04` | `just test-ui` |
 | Public website | `ubuntu-24.04` | `scripts/ci-website.sh` |
-| Inference smoke (CPU) | `ubuntu-24.04` | `scripts/ci-resolve-skippy.sh`, `scripts/fetch-skippy-runtime.sh` (pinned release) or `scripts/ci-skippy-runtime.sh` (named ref), `just mesh`, `just smoke`, `just test-with-runtime` |
-| CPU host smoke | `macos-15`, `windows-2022` | `just mesh`, `scripts/ci-cpu-host-smoke.py` (published CPU runtime) |
+| Inference smoke (CPU) | `ubuntu-24.04` | Download release runtime or `scripts/ci-skippy-runtime.sh`; `just mesh`, `just smoke`, `just test-with-runtime --locked` |
+| CPU host smoke | `macos-15`, `windows-2022` | Pinned runs only: `just mesh`, `scripts/ci-cpu-host-smoke.py` (published CPU runtime) |
+| PR / Quality, Linux, macOS, Windows, Website | `ubuntu-24.04` | All seven prerequisite jobs succeeded, selected pin (no override), and current PR description has no override |
 
 `just lint` is `cargo fmt --all -- --check`, Clippy on the workspace with
 warnings denied, ShellCheck on `scripts/*.sh`, `scripts/tests/*.sh` and
 `mesh/scripts/*.sh`, and the script tests in `scripts/tests/`.
 
-The smoke job downloads the pinned release's CPU runtime, a pinned test model,
-and checks the model SHA-256. A named Skippy ref instead checks source out under
-`.deps/skippy` and builds its CPU runtime. The model is cached; the compiler
-cache is sccache's GitHub backend.
-The macOS and Windows CPU smokes always use the pinned release, including when
-the Linux smoke tests a named Skippy ref. They exercise MeshLLM's runtime
-install and serving boundary with one request.
+For overrides, the selection job freezes a Git SHA plus a temporary root
+`Cargo.toml` and `Cargo.lock` in a three-day artifact. Lint, all OS tests,
+the website CLI generator and Linux smoke download that exact artifact ID
+and retain `--locked`. Ordinary runs use the committed files. Only override smoke checks out `.deps/skippy` and
+builds a CPU runtime; ordinary smoke downloads the pinned release runtime.
+The test model is SHA-256 checked and cached. Compiler caching uses sccache's
+GitHub backend; override runtimes are not placed in a shared runtime cache.
 
-The workflow has `contents: read` and uses no secret or variable. A pull
-request cancels its own earlier run.
-All five required PR checks include the CPU host smoke matrix as well as the
-existing jobs.
+The workflow has `contents: read`; the required-check job also has
+`pull-requests: read` to check the current description using `GITHUB_TOKEN`.
+It uses no configured secret or variable. A PR cancels its earlier run.
+The existing five `PR / ...` names remain the required checks; they deliberately
+fail for test-only overrides even when all tests pass. No ruleset change is
+needed for repositories already requiring those five names.
+
+The macOS and Windows CPU install/serving smokes run only against the pinned
+release: an arbitrary source revision has no published packages to install.
+Override runs skip that matrix rather than compile hosts against a different
+Skippy revision. All five required PR checks still require it, and the public
+website job, to pass in the fresh pinned run before merging.
 
 ## `release.yml` jobs
 

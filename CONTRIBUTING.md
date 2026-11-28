@@ -88,6 +88,30 @@ scripts/skippy-source.sh --pinned      # back to the pinned crates.io release
 
 Do not commit the `Cargo.toml` or `Cargo.lock` changes that a local override produces.
 
+### Test a Mesh PR against an unreleased Skippy change
+
+Add one standalone line to the Mesh PR description:
+
+```text
+Skippy-Ref: pull/123
+```
+
+The value can also be a Skippy branch, tag or full 40-character commit SHA.
+Editing the description starts CI. One resolved Skippy SHA and lockfile are
+used by lint, the Linux/macOS/Windows Rust tests, the website CLI generator
+and Linux inference smoke. Only smoke builds the CPU runtime from source.
+The macOS/Windows CPU package-install smokes are skipped for overrides: an
+arbitrary ref has no published packages. They must pass in fresh pinned CI.
+After another Skippy push, start a fresh full run; rerunning only failed jobs
+may retain the previous selection.
+
+**This is test-only, not merge-ready:** the five required `PR / ...` checks
+intentionally fail for an override, even when all test jobs pass. Before merge,
+land the Skippy change, update Mesh's permanent pin and lockfile as needed,
+remove the directive, and wait for a fresh full green run on the committed
+pin. Never merge from stale checks while the new run is queued. See the
+[agent CI guide](.agents/skills/manage-ci/SKILL.md#testing-meshllm-against-a-skippy-change).
+
 Run real inference through the host you built, on a runtime directory and a
 GGUF model you supply. The script uses a throwaway home and cache:
 

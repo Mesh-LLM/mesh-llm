@@ -27,6 +27,8 @@ Always use `just`. Never build manually. Bare `just` (or `just build`) downloads
 
 To build against a local Skippy checkout instead of the pinned release, run `scripts/skippy-source.sh <checkout>`, or `scripts/skippy-source.sh --ref <branch|tag|commit|pull/N> [repository-url]` to have it fetched; `scripts/skippy-source.sh --pinned` goes back. The override is `.cargo/skippy-local.toml`, which is not committed. A checkout at another version temporarily changes `Cargo.toml`; do not commit it or the `Cargo.lock` it produces.
 
+For CI cross-repository testing, put `Skippy-Ref: <branch|tag|full-SHA|pull/N>` in the PR description. All Rust checks use that revision, but it is **test-only**: required merge checks stay red until the directive is removed and fresh CI passes against the committed pin. See `.agents/skills/manage-ci/SKILL.md` before using or changing this flow.
+
 ### Distribution builds
 
 Packagers build MeshLLM from source in a clean environment and install them as system packages. Keep that possible:
