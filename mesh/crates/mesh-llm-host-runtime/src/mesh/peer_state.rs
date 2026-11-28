@@ -1017,6 +1017,7 @@ impl Node {
         let state = self.state.lock().await;
         let conn_opt = state.connections.get(&dead_id).cloned();
         let peer = state.peers.get(&dead_id);
+        let known_target = peer.is_some() || conn_opt.is_some();
         let peer_addr = peer.map(|p| p.addr.clone());
         let recently_seen = peer
             .map(|p| p.last_seen.elapsed().as_secs() < PEER_STALE_SECS)
@@ -1030,6 +1031,7 @@ impl Node {
             peer_addr,
             recently_seen,
             reporter_cooled,
+            known_target,
         }
     }
 
@@ -1039,7 +1041,11 @@ impl Node {
         dead_id: EndpointId,
         report: PeerDownReport,
     ) {
-        match peer_down_report_disposition(report.reporter_cooled, report.recently_seen) {
+        match peer_down_report_disposition(
+            report.reporter_cooled,
+            report.recently_seen,
+            report.known_target,
+        ) {
             PeerDownReportDisposition::SuppressReporterCooldown => tracing::debug!(
                 "PeerDown: {} reported {} dead but reporter is in cooldown, ignoring",
                 remote.fmt_short(),
@@ -1048,6 +1054,11 @@ impl Node {
             PeerDownReportDisposition::RejectRecentlySeen => {
                 self.reject_recent_peer_down_report(remote, dead_id).await;
             }
+            PeerDownReportDisposition::IgnoreUnknownTarget => tracing::debug!(
+                "PeerDown: {} reported {} dead, a peer this node does not know, ignoring",
+                remote.fmt_short(),
+                dead_id.fmt_short()
+            ),
             PeerDownReportDisposition::ProbeReachability => {
                 self.probe_and_apply_peer_down(remote, dead_id, report)
                     .await;

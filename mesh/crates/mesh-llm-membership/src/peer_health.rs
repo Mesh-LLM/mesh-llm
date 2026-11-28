@@ -296,17 +296,24 @@ pub fn should_remove_connection(
 pub enum PeerDownReportDisposition {
     SuppressReporterCooldown,
     RejectRecentlySeen,
+    /// The target is neither a known peer nor connected: there is nothing to
+    /// remove, and with no address the probe could not reach it, so it would
+    /// mark an endpoint this node never knew as dead and departed.
+    IgnoreUnknownTarget,
     ProbeReachability,
 }
 
 pub fn peer_down_report_disposition(
     reporter_cooled: bool,
     recently_seen: bool,
+    known_target: bool,
 ) -> PeerDownReportDisposition {
     if reporter_cooled {
         PeerDownReportDisposition::SuppressReporterCooldown
     } else if recently_seen {
         PeerDownReportDisposition::RejectRecentlySeen
+    } else if !known_target {
+        PeerDownReportDisposition::IgnoreUnknownTarget
     } else {
         PeerDownReportDisposition::ProbeReachability
     }
