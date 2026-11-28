@@ -98,6 +98,28 @@ fn completed_measurement_snapshot(
 
 /// Return a completed native buffer measurement only when its model identity,
 /// capacity pool, and allocation-affecting configuration all match.
+/// The budget the context planner may fill. On unified memory outside Metal
+/// the budget is system RAM the OS and other programs share, so the
+/// configured safety margin is kept out of the KV cache and compute buffers
+/// the planner sizes, the reserve the node already advertises (#3165). The
+/// weights are admitted against the full budget, so a model that loads keeps
+/// loading; when the weights alone pass the reduced budget, the planner gets
+/// just what they need and plans its minimum context. Elsewhere the budget
+/// is device memory and passes through unchanged.
+pub(super) fn context_planning_budget_bytes(
+    capacity_bytes: u64,
+    unified_memory: bool,
+    safety_margin_bytes: u64,
+    required_bytes: u64,
+) -> u64 {
+    if !unified_memory || cfg!(target_os = "macos") {
+        return capacity_bytes;
+    }
+    capacity_bytes
+        .saturating_sub(safety_margin_bytes)
+        .max(required_bytes.min(capacity_bytes))
+}
+
 pub(super) fn measured_buffers_footprint(
     key: &MemoryPlanMeasurementKey,
 ) -> Option<MeasuredBufferFootprint> {
@@ -191,6 +213,27 @@ pub(super) fn emit_measured_memory_reconciliation(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn unified_memory_plans_context_inside_the_safety_margin() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // A Radeon 780M laptop with 6 GiB of budget and the default 2 GiB margin.
+        let planned = super::context_planning_budget_bytes(6 * GIB, true, 2 * GIB, 3 * GIB);
+        assert_eq!(planned, 4 * GIB);
+        // Weights past the reduced budget still load, on their own size.
+        let planned = super::context_planning_budget_bytes(6 * GIB, true, 2 * GIB, 5 * GIB);
+        assert_eq!(planned, 5 * GIB);
+    }
+
+    #[test]
+    fn device_memory_budget_is_unchanged() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(
+            super::context_planning_budget_bytes(12 * GIB, false, 2 * GIB, 5 * GIB),
+            12 * GIB
+        );
+    }
+
     use super::{
         MEASURED_PLAN_SNAPSHOT, MeasuredPlanSnapshot, MemoryPlanMeasurementKey,
         completed_measurement_snapshot, measured_buffers_footprint,

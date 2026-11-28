@@ -5,8 +5,8 @@ use super::context_planning::{
 use super::live_request_defaults;
 use super::local_dflash_plan::{plan_with_default_dflash_draft, planned_default_dflash_draft};
 use super::local_memory_plan::{
-    MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
-    emit_memory_plan_resolved, measured_buffers_footprint,
+    MemoryPlanMeasurementKey, MemoryPlanStartPath, context_planning_budget_bytes,
+    emit_measured_memory_reconciliation, emit_memory_plan_resolved, measured_buffers_footprint,
 };
 use super::split_planning::format_gb;
 use crate::api;
@@ -312,6 +312,9 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<String>,
     pub(super) capacity_budget_bytes: u64,
+    /// The node's GPU shares system RAM with the OS (an integrated GPU), so
+    /// the context plan leaves the safety margin free.
+    pub(super) unified_memory: bool,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
     pub(super) n_batch_override: Option<u32>,
@@ -800,6 +803,7 @@ pub(super) async fn start_runtime_local_model(
             pinned_gpu: spec.pinned_gpu,
             device_override: spec.device_override,
             capacity_budget_bytes: local_capacity_bytes,
+            unified_memory: spec.node.is_soc.unwrap_or(false),
             cache_type_k_override: spec.cache_type_k_override,
             cache_type_v_override: spec.cache_type_v_override,
             n_batch_override: spec.n_batch_override,
@@ -1044,7 +1048,12 @@ pub(super) async fn start_local_openai_model(
         parallel_override: spec.parallel_override,
         model_bytes: local_model_bytes,
         projector_bytes: planned_projector_bytes(&spec, &model_name),
-        vram_bytes: my_vram,
+        vram_bytes: context_planning_budget_bytes(
+            my_vram,
+            spec.unified_memory,
+            skippy::effective_safety_margin_bytes(spec.mesh_config.defaults.as_ref()),
+            required_bytes,
+        ),
         metadata: compact_meta.as_ref(),
         kv_cache_quant,
         local_layer_fraction,

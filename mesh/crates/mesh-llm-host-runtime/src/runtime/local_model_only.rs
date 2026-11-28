@@ -257,9 +257,11 @@ async fn run_local_model_only_inner(
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
 
     let model_name = model.declared_ref.clone();
+    let hardware_survey = hardware::survey();
+    let unified_memory = hardware_survey.is_soc;
     let survey_telemetry = survey::SurveyTelemetry::start(
         &config,
-        hardware::survey(),
+        hardware_survey,
         survey::SurveyTelemetrySource {
             node_id: "local-model-only".into(),
             node_role: "worker".into(),
@@ -278,6 +280,7 @@ async fn run_local_model_only_inner(
         pinned_gpu: model.pinned_gpu.as_ref(),
         device_override: startup_device_override(model.gpu_id.as_deref()),
         capacity_budget_bytes: local_capacity_bytes,
+        unified_memory,
         cache_type_k_override: model.cache_type_k.as_deref(),
         cache_type_v_override: model.cache_type_v.as_deref(),
         n_batch_override: model.n_batch,
