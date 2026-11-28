@@ -12,12 +12,12 @@ readme = "README.md"
 anyhow.workspace = true
 libloading = "0.9"
 mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.80.0" }
-skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.80.0" }
-skippy-tokenizer = { path = "../../../skippy/crates/skippy-tokenizer", version = "0.80.0" }
+skippy-serving = { workspace = true }
+skippy-tokenizer = { workspace = true }
 tracing = "0.1"
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.80.0", features = ["test-support"] }
+skippy-serving = { workspace = true, features = ["test-support"] }

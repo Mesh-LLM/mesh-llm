@@ -20,7 +20,7 @@ mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod model_capabilities;
-mod model_open_drain;
+mod model_open_observer;
 #[cfg(all(test, feature = "dynamic-native-runtime"))]
 mod native_unavailable_tests;
 mod package;
@@ -35,7 +35,6 @@ use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
 pub(crate) mod runtime_events;
 mod source_fetch;
-mod split_certification;
 mod stage;
 mod topology;
 
@@ -119,7 +118,6 @@ pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
 pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use source_fetch::StageSourceFetch;
-pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
@@ -282,10 +280,12 @@ pub(crate) struct SkippyOpenAiGuardrailOptions {
     telemetry: survey::SurveyTelemetry,
 }
 
-/// Host consumer for native model-open events. Runs on a host drain thread,
-/// never on the native callback thread.
+/// Host consumer for native model-open events. Runs on Skippy's drain
+/// thread, never on the native callback thread.
 pub(crate) type NativeModelOpenEventReporter = Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>;
-pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents};
+pub(crate) use model_open_observer::{
+    ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents,
+};
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
@@ -869,19 +869,6 @@ mod tests {
         assert_eq!(config.load_mode, LoadMode::RuntimeSlice);
         assert!(config.upstream.is_none());
         assert!(config.downstream.is_none());
-    }
-
-    #[test]
-    fn single_stage_config_canonicalizes_checkpoint_quantization_aliases() {
-        let mut options =
-            SkippyModelLoadOptions::for_direct_gguf("Qwen3-8B-Q4_K_M", "/models/qwen.gguf")
-                .with_layer_end(36)
-                .with_package_identity(fake_package_identity(36));
-        options.checkpoint_quantization = Some("Q4_K".to_string());
-
-        let config = single_stage_config(&options).unwrap();
-
-        assert_eq!(config.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
     }
 
     #[test]

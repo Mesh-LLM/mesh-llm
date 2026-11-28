@@ -27,7 +27,7 @@ struct ModelPrepareSummary<'a> {
     model_id: &'a Option<String>,
     flavor: &'a str,
     timeout: &'a str,
-    mesh_llm_ref: &'a str,
+    skippy_ref: &'a str,
     dry_run: bool,
     confirm: bool,
     follow: bool,

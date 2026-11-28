@@ -11,17 +11,16 @@ use crate::{
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 pub use mesh_llm_config::{
-    BoolOrAuto, IntegerOrString, ModelFitConfig, ReasoningBudget, RequestDefaultsConfig,
-    ThroughputConfig,
+    BoolOrAuto, HardwareConfig, IntegerOrString, ModelFitConfig, ReasoningBudget,
+    RequestDefaultsConfig, ThroughputConfig,
 };
 pub use mesh_llm_config::{
-    ConfigDiagnostic, ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, HardwareConfig,
-    LocalServingNodeConfig, MeshConfig, MeshRequirementsConfig, ModelConfigDefaults,
-    ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelRuntimeKind, OwnerControlConfig,
-    PluginConfigEditor, PluginConfigEntry, PluginStartupConfig, PluginWebUiPreference,
-    SkippyConfig, SpeculativeConfig, TelemetryConfig, TelemetryMetricsConfig, apply_env_overrides,
-    config_path, config_to_toml, parse_config_toml as base_parse_config_toml,
-    validate_config_with_plugin_schemas,
+    ConfigDiagnostic, ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig,
+    MeshConfig, MeshRequirementsConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
+    ModelDefaultsEditor, ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor,
+    PluginConfigEntry, PluginStartupConfig, PluginWebUiPreference, SkippyConfig, SpeculativeConfig,
+    TelemetryConfig, TelemetryMetricsConfig, apply_env_overrides, config_path, config_to_toml,
+    parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;

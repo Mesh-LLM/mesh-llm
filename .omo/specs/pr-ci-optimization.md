@@ -1,5 +1,11 @@
 # PR and main CI composition plan
 
+> **Historical. Do not follow.** This is the plan for the CI that built Skippy
+> in this repository. Its planner, lane workflows, `ci/` files and `tools/xtask`
+> are no longer checked in. The current CI is described in
+> `.github/AGENTS.md` and `.agents/skills/manage-ci/SKILL.md`. The status line
+> below was true when it was written.
+
 Status: implemented on this branch. The shared planner, focused PR and main
 entrypoints, manual controller, topic/platform lane workflows, platform-pure reusable
 graphs, contracts and documentation are checked in. Ruleset migration remains

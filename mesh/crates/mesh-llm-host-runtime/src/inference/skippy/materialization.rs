@@ -195,7 +195,6 @@ mod tests {
             model_path: Some(package_dir.to_string_lossy().to_string()),
             source_model_bytes: None,
             source_model_sha256: None,
-            split_certification: None,
             local_source_required: false,
             projector_path: None,
             projector_use_gpu: None,
@@ -229,7 +228,6 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
-            max_request_tier: None,
         }
     }
 
@@ -360,7 +358,6 @@ mod tests {
             model_path: None,
             source_model_bytes: None,
             source_model_sha256: None,
-            split_certification: None,
             local_source_required: false,
             projector_path: None,
             projector_use_gpu: None,
@@ -394,7 +391,6 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
-            max_request_tier: None,
         };
 
         let error = resolve_stage_load_package(&load, StageSourceFetch::Allowed)

@@ -55,7 +55,6 @@ fn parser_auto_with_full_coverage_forwards_no_parsed_categories() {
             .iter()
             .all(|category| !policy.forwards(category))
     );
-    assert!(policy.forwards_model_fallback_note());
 }
 
 #[test]

@@ -88,7 +88,7 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `private.nodes` | array of string | `[]` (private requests stay on this node); node ids of 64 hex characters. See [Private routing](/docs/pages/config-toml/#private-nodes) | node-level | applies dynamically | wired | `mesh-llm private add` / `remove` |
 | `request_tiers.owners` | object (string map) | `{}`; owner id (64 hex characters) to `local`, `trusted` or `mesh`, overriding the tier that owner's nodes are served at. See [Request tiers](/docs/pages/config-toml/#request-tiers) | node-level | applies dynamically | wired | none |
-| `request_tiers.local_kv_reserve_percent` | integer | `0` (no reserve); 0 to 100, the share of each model's KV token budget only `local` requests may use | node-level | model reload | wired | none |
+| `request_tiers.local_kv_reserve_percent` | integer | `0` (no reserve); 0 to 100, the share of each model's KV token budget only `local` requests may use | node-level | model reload | partial (accepted and resolved; no KV is reserved until the Skippy runtime has request tiers) | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
@@ -248,8 +248,8 @@ Lifecycle settings apply to native and provider model entries. Native policy cha
 | `hardware.lora_adapters` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.control_vectors` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.check_tensors` | boolean | `false` | both | model reload | partial (single-node resolution only; multi-node stages use disabled default) | none |
-| `hardware.checkpoint_quantization` | enum | `preserve` (default), `F32`, `F16`, `BF16`, `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ2_M`, `IQ1_S`, `IQ1_M`, `TQ1_0`, `TQ2_0`, `Q2_K`, `Q2_K_S`, `IQ3_XS`, `IQ3_XXS`, `IQ3_S`, `IQ3_M`, `Q3_K_S`, `Q3_K_M`, `Q3_K_L`, `IQ4_NL`, `IQ4_XS`, `Q4_K_S`, `Q4_K_M`, `Q5_K_S`, `Q5_K_M`, `Q6_K`, `Q8_0`, `MXFP4_MOE` | both | model reload | partial (single-node direct SafeTensors checkpoints only) | none |
-| `hardware.checkpoint_imatrix` | string path | unset; relative paths resolve from the checkpoint directory | both | model reload | partial (single-node direct SafeTensors checkpoints only); required by importance-aware recipes | none |
+| `hardware.checkpoint_quantization` | string | unsupported | both | not applicable | rejected (Skippy serves GGUF only) | none |
+| `hardware.checkpoint_imatrix` | string | unsupported | both | not applicable | rejected (Skippy serves GGUF only) | none |
 | `hardware.mmap` | bool-or-`auto` | `auto` | both | model reload | wired | `--mmap` |
 | `hardware.use_mmap_prefetch` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |
 | `hardware.use_mmap_buffer` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |
@@ -260,10 +260,10 @@ Lifecycle settings apply to native and provider model entries. Native policy cha
 | `hardware.no_host_buffer` | boolean | `false` | both | model reload | partial (single-node resolution only; multi-node stages use disabled default) | none |
 | `hardware.warmup` | bool-or-`auto` | unsupported | both | not applicable | rejected | none |
 
-For one-off SafeTensors serving, `mesh-llm serve --quant <RECIPE>` overrides
-`hardware.checkpoint_quantization`; `--checkpoint-imatrix <PATH>` supplies the
-optional importance matrix. Run `mesh-llm serve --help-advanced` for the full
-recipe list.
+SafeTensors checkpoints are not served. Convert the checkpoint to GGUF or pick
+a published GGUF. `hardware.checkpoint_quantization` and
+`hardware.checkpoint_imatrix` no longer do anything, and `mesh-llm config
+validate` rejects them.
 
 Missing TOML for this group: LoRA per-adapter scale, control-vector scale and
 layer range (`il_start`/`il_end`), RoPE/YaRN load-time overrides, and general
@@ -494,7 +494,7 @@ deployment environment and must never be persisted in `config.toml`.
 
 ## Internal status matrix
 
-[`skippy/docs/CONFIGURATION.md`](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CONFIGURATION.md)
+[`skippy/docs/CONFIGURATION.md`](https://github.com/Mesh-LLM/skippy/blob/main/docs/CONFIGURATION.md)
 is the internal, per-field status inventory this reference is generated
 against: owner module, translation target, supported serving modes, and test
 evidence for every key path above. Keep both in sync; a compile-time test in

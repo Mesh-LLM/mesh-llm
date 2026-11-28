@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$REPO_ROOT/scripts/lib/automation.sh"
 TMP_ROOT=""
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -20,12 +17,13 @@ for input in "$@"; do
             *.tar.gz|*.tgz) ;;
             *) echo "unsupported native SDK artifact input: $input" >&2; exit 1 ;;
         esac
-        mesh_automation artifact verify-checksum "$input"
+        (cd "$(dirname "$input")" && { shasum -a 256 -c "$(basename "$input").sha256" 2>/dev/null || sha256sum -c "$(basename "$input").sha256"; }) >/dev/null ||
+            { echo "checksum mismatch: $input" >&2; exit 1; }
         if [[ -z "$TMP_ROOT" ]]; then
             TMP_ROOT="$(mktemp -d)"
         fi
         extract_dir="$(mktemp -d "$TMP_ROOT/artifact.XXXXXX")"
-        mesh_automation artifact extract-tar "$input" "$extract_dir"
+        tar -xzf "$input" -C "$extract_dir"
         shopt -s nullglob dotglob
         entries=("$extract_dir"/*)
         if [[ "${#entries[@]}" != "1" || ! -d "${entries[0]}" || -L "${entries[0]}" ]]; then
@@ -34,6 +32,16 @@ for input in "$@"; do
         fi
         artifact_dir="${entries[0]}"
     fi
-    mesh_automation prepared-input native-sdk-manifest "$artifact_dir" "$artifact_dir/manifest.json"
+    manifest="$artifact_dir/manifest.json"
+    jq -e '.schema_version == 1 and .artifact_id and .sdk_version and .target_triple and .library and .uniffi_library and .library_sha256 and
+        (.features | type == "array" and all(.[]; type == "string"))' "$manifest" >/dev/null ||
+        { echo "invalid native SDK manifest: $manifest" >&2; exit 1; }
+    for rel in $(jq -r '.library, .uniffi_library' "$manifest"); do
+        [[ "$rel" != /* && "/$rel/" != *"/../"* && -f "$artifact_dir/$rel" ]] || { echo "manifest library missing or unsafe: $rel" >&2; exit 1; }
+    done
+    for rel in $(jq -r '.library, .uniffi_library' "$manifest"); do
+        actual="$(shasum -a 256 "$artifact_dir/$rel" 2>/dev/null || sha256sum "$artifact_dir/$rel")"
+        [[ "${actual%% *}" == "$(jq -r .library_sha256 "$manifest")" ]] || { echo "library_sha256 mismatch for $rel: $manifest" >&2; exit 1; }
+    done
     echo "verified native SDK artifact: $artifact_dir"
 done

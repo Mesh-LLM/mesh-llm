@@ -256,6 +256,10 @@ fn resolve_speculative(
         package_default_allowed: auto_defaults_enabled,
     })?;
     decode.requested_strategy.clone_from(&strategy);
+    // Skippy names a plain draft-model plan "draft-model"; keep the label the same.
+    if mode == "draft" && draft_model_path.is_some() && decode.effective_strategy == "disabled" {
+        decode.effective_strategy = "draft-model".to_string();
+    }
     // A standalone N-gram plan (no native MTP, no draft model) runs in the
     // legacy `ngram` mode so the embedded frontend derives its window from the
     // proposer's proposal limit.

@@ -109,7 +109,11 @@ pub async fn run_native_runtime_list(
     }
 
     let installed =
-        skippy_runtime_install::discover_local_native_runtimes(bundle_dirs, &cache, mesh_version)?;
+        mesh_llm_system::native_runtime_install::discover_local_native_runtimes_for_release(
+            bundle_dirs,
+            &cache,
+            mesh_version,
+        )?;
     formatter.render_installed(&installed, cache.root())
 }
 
@@ -901,7 +905,7 @@ mod tests {
 
     #[test]
     fn available_runtime_bundle_dirs_expand_a_product_root() {
-        skippy_runtime_install::rerun_without_bundle_env!(
+        mesh_llm_system::rerun_without_bundle_env!(
             available_runtime_bundle_dirs_expand_a_product_root
         );
         let temp = tempfile::tempdir().unwrap();
@@ -920,7 +924,7 @@ mod tests {
 
     #[test]
     fn doctor_discovery_includes_a_bundle_when_the_cache_is_empty() {
-        skippy_runtime_install::rerun_without_bundle_env!(
+        mesh_llm_system::rerun_without_bundle_env!(
             doctor_discovery_includes_a_bundle_when_the_cache_is_empty
         );
         let temp = tempfile::tempdir().unwrap();

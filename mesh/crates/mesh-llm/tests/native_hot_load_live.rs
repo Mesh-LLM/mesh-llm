@@ -84,27 +84,18 @@ async fn real_gguf_cold_load_idle_unload_and_reload() {
     server.assert_alive();
 }
 
-/// Reuse the shared product/SDK smoke artifact, including its canonical cache name.
+/// The SmolLM2 fixture CI's inference smoke also uses (.github/workflows/ci.yml).
+const FIXTURE_FILE: &str = "SmolLM2-135M-Instruct-Q8_0.gguf";
+const FIXTURE_SIZE_BYTES: u64 = 144_811_072;
+
 fn fixture_model() -> PathBuf {
-    let manifest: Value = serde_json::from_str(include_str!(
-        "../../../../ci/model-artifacts/manifests/product-smoke.json"
-    ))
-    .unwrap();
-    let artifact = manifest["artifacts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|artifact| artifact["id"] == "smollm2-q8-inference")
-        .expect("shared SmolLM2 inference fixture");
     let model = std::env::var_os("MESH_LLM_HOT_LOAD_TEST_GGUF")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let home = std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .expect("set MESH_LLM_HOT_LOAD_TEST_GGUF to the restored SmolLM2 fixture");
-            PathBuf::from(home)
-                .join(".models")
-                .join(artifact["file"].as_str().unwrap())
+            PathBuf::from(home).join(".models").join(FIXTURE_FILE)
         });
     assert!(model.is_absolute(), "GGUF path must be absolute");
     let model = model
@@ -115,8 +106,8 @@ fn fixture_model() -> PathBuf {
     assert_eq!(&magic, b"GGUF", "fixture must be a real GGUF");
     assert_eq!(
         model.metadata().unwrap().len(),
-        artifact["size_bytes"].as_u64().unwrap(),
-        "use the shared smollm2-q8-inference artifact, not a different model"
+        FIXTURE_SIZE_BYTES,
+        "use the SmolLM2 Q8_0 fixture, not a different model"
     );
     model
 }

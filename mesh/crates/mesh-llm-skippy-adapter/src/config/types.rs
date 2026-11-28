@@ -98,8 +98,6 @@ pub struct ResolvedHardwareConfig {
     pub op_offload: Option<bool>,
     pub no_host_buffer: bool,
     pub check_tensors: bool,
-    pub checkpoint_quantization: Option<String>,
-    pub checkpoint_imatrix: Option<String>,
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: skippy_protocol::SplitMode,

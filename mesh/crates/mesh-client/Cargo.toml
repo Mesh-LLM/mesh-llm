@@ -29,7 +29,7 @@ mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.80.0", default
 mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.80.0" }
 mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.80.0" }
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.80.0" }
-skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.80.0" }
+skippy-model-artifact = { workspace = true }
 httparse = "1"
 tokio = { version = "1", features = ["io-util", "sync", "net", "time", "rt-multi-thread"] }
 prost = "0.14"

@@ -1,12 +1,12 @@
 use super::{
     LocalOpenAiModelStartSpec, RuntimeOptions, RuntimeResourcePlanningProfile,
     SkippyNativeLogForwardingGuard, acquire_instance_runtime,
-    apply_runtime_cli_checkpoint_overrides, apply_runtime_cli_speculative_overrides,
-    apply_runtime_config_options, build_startup_model_specs, cleanup_run_auto_runtime_dir,
-    configure_run_auto_process_state, emit_shutdown, openai_guardrail_policy_handle,
-    preflight_pinned_startup_models, resolve_local_model_only_startup_models,
-    runtime_model_required_bytes, skippy_telemetry_options, start_local_openai_model,
-    startup_device_override, wait_for_shutdown_signal,
+    apply_runtime_cli_speculative_overrides, apply_runtime_config_options,
+    build_startup_model_specs, cleanup_run_auto_runtime_dir, configure_run_auto_process_state,
+    emit_shutdown, openai_guardrail_policy_handle, preflight_pinned_startup_models,
+    resolve_local_model_only_startup_models, runtime_model_required_bytes,
+    skippy_telemetry_options, start_local_openai_model, startup_device_override,
+    wait_for_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -197,11 +197,6 @@ async fn run_local_model_only_inner(
     crate::runtime::serving_strategy::log_strategy_plan(&strategy_plan);
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     super::run_auto::apply_runtime_cli_parallel_override(&mut config, options.parallel);
-    apply_runtime_cli_checkpoint_overrides(
-        &mut config,
-        options.checkpoint_quantization.as_deref(),
-        options.checkpoint_imatrix.as_deref(),
-    )?;
     apply_runtime_config_options(&mut options, &config);
     let host_ram_offload = config.gpu.host_ram_offload.unwrap_or(false);
     mesh_llm_system::capacity::set_process_host_ram_offload(host_ram_offload);

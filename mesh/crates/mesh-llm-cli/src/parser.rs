@@ -291,34 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn uncertified_split_override_requires_explicit_split_mode() {
-        let error = Cli::try_parse_from([
-            "mesh-llm",
-            "--model",
-            "model.gguf",
-            "--allow-uncertified-split",
-        ])
-        .expect_err("uncertified override without --split should fail");
-
-        assert!(error.to_string().contains("--split"));
-    }
-
-    #[test]
-    fn uncertified_split_override_parses_with_split_mode() {
-        let cli = Cli::try_parse_from([
-            "mesh-llm",
-            "--model",
-            "model.gguf",
-            "--split",
-            "--allow-uncertified-split",
-        ])
-        .expect("explicit uncertified split CLI should parse");
-
-        assert!(cli.placement.split);
-        assert!(cli.placement.allow_uncertified_split);
-    }
-
-    #[test]
     fn models_package_parses_experimental_publication() {
         let cli = Cli::parse_from([
             "mesh-llm",

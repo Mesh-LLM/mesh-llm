@@ -38,83 +38,71 @@ sudo apt-get update
 sudo apt-get install -y mold lld
 ```
 
-**Linux NVIDIA**: x86_64 with an NVIDIA GPU. Requires the CUDA toolkit (`nvcc` in your `PATH`). On Arch Linux, CUDA is typically at `/opt/cuda`; on Ubuntu/Debian it's at `/usr/local/cuda`. Auto-detection finds the right SM architecture for your GPU.
+GPU toolchains (CUDA, ROCm, Vulkan) are not needed to build MeshLLM. The
+inference runtime is built and released by
+[Skippy](https://github.com/Mesh-LLM/skippy); MeshLLM only loads it.
 
-**Linux AMD**: ROCm/HIP is supported when ROCm is installed. Typical installs expose `hipcc`, `hipconfig`, and `rocm-smi` under `/opt/rocm/bin`.
-
-**Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
-
-**Windows**: native runtime builds support `cuda`, `hip`/`rocm`, `vulkan`, or
-`cpu`. Metal is not supported on Windows. Install the Rust lld tools with
+**Windows**: install the Rust lld tools with
 `rustup component add llvm-tools-preview`, or install LLVM with `winget install
 LLVM.LLVM`.
 
 ## Build from source
 
-Build both debug products in order: patched llama.cpp and the standalone
-Skippy CLI with a locally packaged runtime, then the backend-neutral MeshLLM
-host and console:
+Build the Skippy runtime, then the MeshLLM host and console:
 
 ```bash
 just
 ```
 
-This produces `target/debug/skippy`, `target/debug/native-runtimes/`, and
-`target/debug/mesh-llm`. Pass `--runtime-bundle target/debug/native-runtimes`
-when running Skippy; MeshLLM discovers the adjacent runtime itself.
-Use `just skippy` when working only on the complete standalone Skippy product,
-or `just mesh` to rebuild only MeshLLM. `just build` runs the same sequence
-as bare `just`; `just skippy-cli-build` builds only Skippy's CLI.
+This produces `target/debug/mesh-llm` and `target/debug/native-runtimes`. `just build` is the same thing, and
+`just build-dev` is a faster build for local iteration.
 
-Release and packaging use the same host/runtime boundary. The only lower-level
-static compilation primitive is runtime packaging; it never builds a host.
-For explicit local stages, build the backend runtime you are changing first:
+`just build` also gets the inference runtime. It downloads the native runtime
+that the Skippy release pinned in `Cargo.toml` published for this machine,
+checks it against the release's checksums, and puts it in
+`target/debug/native-runtimes`, where the host finds it with no settings.
+It builds the runtime from source instead (the commit in `scripts/skippy-pin.sh`, fetched into
+`.deps/skippy`) when the release has no package for this machine and backend
+(including Vulkan), when you select another Skippy source (below), or when
+you ask: `MESH_LLM_RUNTIME_FROM_SOURCE=1 just build`. The backend is detected (Metal on
+macOS; CUDA, ROCm or Vulkan on Linux and Windows when their tools are installed; otherwise
+CPU), or name it: `just build backend=cuda cuda_arch='120;86'`. Naming
+`cuda_arch` or `rocm_arch` builds from source. A runtime
+already there for the same pin and backend is reused. `just mesh` rebuilds the
+host alone, and `just runtime` the runtime alone. On Windows the runtime step
+needs Git Bash.
 
-```bash
-just release-runtime-build cpu
-just release-runtime-build metal
-just release-runtime-build cuda
-just release-runtime-build rocm
-just release-runtime-build vulkan
-```
+MeshLLM itself never links llama.cpp: it loads that packaged runtime at run
+time, or one it downloads from a Skippy release.
 
-Backend toolchains must be available for the corresponding runtime build. For
-NVIDIA on Linux, put `nvcc` on `PATH`; runtime packaging detects the selected
-CUDA major and architecture from the toolchain/environment.
-
-```bash
-PATH=/opt/cuda/bin:$PATH just release-runtime-build cuda
-# or
-PATH=/usr/local/cuda/bin:$PATH just release-runtime-build cuda
-```
-
-Then build the standalone Skippy CLI, followed by the neutral MeshLLM host
-and console once. The same host can be composed with any compatible backend
-runtime:
+For work that spans both repositories, point the build at a local Skippy
+checkout, and go back to the pin when done:
 
 ```bash
-just skippy-cli-release-build
-just release-host-build
+scripts/skippy-source.sh ../skippy     # build against that checkout
+scripts/skippy-source.sh --ref main    # or fetch a branch, tag, commit or pull/<number>
+scripts/skippy-source.sh --ref my-branch https://github.com/me/skippy   # from a fork
+scripts/skippy-source.sh               # show what the build uses
+scripts/skippy-source.sh --pinned      # back to the pinned crates.io release
 ```
 
-Exercise the exact release discovery boundary with an isolated cache:
+Do not commit the `Cargo.toml` or `Cargo.lock` changes that a local override produces.
+
+Run real inference through the host you built, on a runtime directory and a
+GGUF model you supply. The script uses a throwaway home and cache:
 
 ```bash
-runtime_cache="$(mktemp -d)"
-MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
-MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$runtime_cache" \
-  ./target/release/mesh-llm runtime list
+just smoke <dir-of-packaged-skippy-runtimes> <model.gguf>
 ```
 
-The resolver validates version, Skippy ABI, OS, architecture, and backend. It
-does not search the current working directory or copy a matching bundled
-runtime into the user cache.
-
-Create a portable product bundle after building both layers:
+Build the release host and package it with a runtime:
 
 ```bash
-just release-bundle v0.X.0 dist
+just release-build
+MESH_LLM_NATIVE_RUNTIME_DIR=<unpacked-skippy-runtime> just release-bundle v0.X.0 dist
 ```
+
+[RELEASE.md](RELEASE.md) covers signing and the release workflow.
 
 ## UI development workflow
 
@@ -165,49 +153,23 @@ just ui-dev http://127.0.0.1:3131 5174
 ## Useful commands
 
 ```bash
-just stop             # stop mesh/rpc/llama processes
+just stop             # stop mesh-llm processes
 just test             # quick test against :9337
-just check-release    # release-target/docs/workflow parity check
-just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-client Python/Node/LiteLLM smoke
+just lint             # format, Clippy, and shell checks
+just test-rust        # Rust tests for the whole workspace
+just test-ui          # console lint, type check, unit tests, and build
+just test-all         # everything a pull request must pass, except the smoke
 just --list           # list all recipes
 ```
-
-On macOS and Linux, local Cargo artifacts are bounded independently from the sccache
-compiler-object cache, which here keeps sccache's own 10 GiB local default. That default is
-a developer-machine limit only -- CI does not use it, and pins a 2 GiB trusted seed instead
-(`SCCACHE_CACHE_SIZE=2G`, see `.github/actions/restore-sccache-seed`). Inspect and prune the
-local Cargo artifacts with:
-
-```bash
-just cache-status
-just cache-prune-dry-run max_size=80GiB max_age=14
-just cache-prune max_size=80GiB max_age=14
-```
-
-Pruning evicts the oldest incremental sessions first, then uses
-`cargo clean -p` for old or size-dominant workspace packages. It is scoped to
-this worktree's `target/` and reports before/after bytes. On macOS and Linux,
-`just build` and `just build-dev` hold a shared lock for their full build while
-cache status and dry-run pruning take the same lock in shared mode. Executed
-pruning requires the corresponding exclusive lock before measuring or deleting
-artifacts. Direct Cargo and lower-level build commands do not share that lock,
-so pruning also refuses to run when it detects an active Cargo or Rust compiler
-process as a best-effort safeguard. Cargo configurations that separate
-`build.build-dir` from `target-dir` are rejected because the cache manager does
-not report, lock, or clean a second artifact tree.
-
-On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
 ### Line endings on native Windows
 
 `.gitattributes` checks every text file out with LF on every platform. A
 checkout created before that landed, with `core.autocrlf=true`, keeps its CRLF
-working copy until the files are re-extracted, and five host-runtime tests
+working copy until the files are re-extracted, and four host-runtime tests
 still fail locally on content they read verbatim: both `config_schema`
-snapshots, the `plugin::config` fixture, `inference::skippy::topology`, which
-greps its own source, and `inference::skippy::split_certification`, whose
-`build.rs` patch-queue digest is hashed from the bytes of the llama.cpp
-patches and gates production split certification rather than tests alone.
+snapshots, the `plugin::config` fixture, and `inference::skippy::topology`,
+which greps its own source.
 
 Renormalise once, after committing or stashing anything in progress, since the
 second command discards uncommitted work:
@@ -222,18 +184,12 @@ fresh clone needs none of this.
 
 ### Testing crates on native Windows
 
-A bare Windows checkout cannot build the test targets of crates that pull in
-`skippy-ffi`'s static link mode (`mesh-llm-system` does, through
-`skippy-runtime-install`, which depends on `skippy-ffi` with
-`default-features = false`), because `skippy-ffi/build.rs` then requires
-the llama.cpp ABI archives to be prepared
-(`automatic native preparation is not supported for Windows from build.rs yet`).
-`just test-all` needs the same native preparation, through its Bash pipeline.
+Nothing native is compiled on any platform, so `just test-rust` and
+single-crate commands work on a bare Windows checkout. MeshLLM always selects
+`skippy-ffi`'s `dynamic-runtime` mode (see the Skippy entries in the root
+`Cargo.toml`); it never links llama.cpp.
 
-For crate suites that do not exercise the native runtime, enable
-`dynamic-native-runtime`: feature unification turns on `skippy-ffi`'s
-`dynamic-runtime`, whose build script returns early. The `mesh-llm-system`
-gates then run on a machine without a prepared native build:
+The `mesh-llm-system` gates, with the device code enabled:
 
 ```powershell
 cargo test --locked -p mesh-llm-system --lib --features dynamic-native-runtime
@@ -244,9 +200,9 @@ cargo fmt --check -p mesh-llm-system
 `--no-deps` keeps Clippy scoped to the package you are changing. `cfg`-gated
 code can be dead on one platform only, so if a platform-specific warning
 appears that your diff does not touch, compare the run against the same
-command on `main` before attributing it to your change. Running the
-native-runtime suites still needs a prepared build (`LLAMA_STAGE_BUILD_DIR`
-or `SKIPPY_LLAMA_BUILD_DIR` pointing at one), which this section does not cover.
+command on `main` before attributing it to your change. The tests that call
+into a native runtime need a packaged Skippy runtime and run through
+`just test-with-runtime <runtime-dir>`, which is not available on Windows.
 The Rust MSVC toolchain needs the Visual Studio Build Tools with the
 "Desktop development with C++" workload installed.
 
@@ -270,68 +226,22 @@ classification details.
 
 ## CI / GitHub Actions
 
-For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
-[optimization spec](.omo/specs/pr-ci-optimization.md), and the canonical
-[`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
-`.github/AGENTS.md` enforces that sequence.
+Pull requests run [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-The current five-way PR/main topology, manual controller, planner profiles,
-and runner/provider/cache policy are documented in [`ci/ci.md`](ci/ci.md),
-especially [Planner and profiles](ci/ci.md#planner-and-profiles) and [Provider
-and cache policy](ci/ci.md#provider-and-cache-policy). The normative rules for
-editing workflows and CI scripts live in the [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md).
+| Job | Local command |
+|---|---|
+| Lint | `just lint` |
+| Test, per platform | `just test-rust --locked --no-fail-fast` |
+| Console | `just test-ui` |
+| Inference smoke (CPU) | `just smoke <runtime-dir> <model.gguf>`, then `just test-with-runtime <runtime-dir>` |
 
-When a pull request changes workflow YAML, local actions, planner contracts,
-runner selection, or other CI plumbing, apply the `ci:canary` label to request
-the optional non-required diagnostic. It builds the pull-request merge commit
-through one real hosted Linux amd64 CPU chain (UI artifact, release host,
-native runtime including its runtime-event gate, and product composition).
-The PR head SHA is retained as separate identity evidence. The canary does not
-cover the five required lane orchestrators, macOS, Windows, GPU, SDK, smoke,
-or release paths. The canary lane and runner-policy actions come from protected
-`main`; the merge commit is used only as the product source. Remove the label to
-cancel an active run.
+`just test-all` runs the first three. The smoke job downloads the CPU runtime
+from the pinned Skippy release, builds MeshLLM, and requires a real completion.
+With `Skippy-Ref` it builds the runtime and MeshLLM against that source instead.
+It does not cover GPU runtimes, macOS, or Windows.
 
-Linux CI uses prebuilt public and self-hosted images from
-[`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
-CPU, Vulkan, versioned CUDA, and versioned ROCm images share a core environment,
-warm dependencies from MeshLLM's checked-in manifests, and allow container
-runtimes to reuse cached layers where the runner host or K3s node retains them
-instead of reinstalling host packages in every job.
-
-If CI is missing a dependency, update the appropriate MeshLLM manifest and
-lockfile or the runner image's YAML profile/installer, then publish the image
-and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
-`cargo install`, downloaded binary, or similar setup step to an individual
-workflow. Existing workflow-local setup is migration debt, not a pattern for
-new jobs.
-
-### Local validation and extensions
-
-Run the narrow checks that match the change, plus the full contract suite for
-workflow changes:
-
-```bash
-just ci-validate
-```
-
-The canonical complete local gate is `just test-all`; it includes repository
-consistency, Rust formatting, Clippy, Rust tests, UI/docs builds, and E2E smoke.
-Use `just ci-shellcheck <changed-script>...` for changed shell scripts and
-`just check-release` when release-target consistency is in scope. These are the
-complete CI-definition and worktree checks; narrow checks do not replace
-`just test-all` when full repository validation is required.
-
-Planner fixtures and the CI repository-consistency recipes are included in
-`just ci-validate`. Use `just ci-crate-lists`, `just check-release`, or
-`just publish-crates` when iterating on the corresponding narrower contract.
-
-To add coverage, extend one typed reusable slice or local action, update the
-ownership/dependency/row catalog and planner fixtures, preserve immutable
-producer-to-consumer reachability, and add the slice to its lane's stable
-summary. Keep the controller's bounded projection and aggregate check contract
-in sync. Never copy a PR job into an entrypoint or accept a raw runner label.
-Validate the GitHub fallback before any provider rollout.
+Run `just lint` after changing a shell script or a workflow; it includes
+ShellCheck and the script tests under `scripts/tests/`.
 
 ## GPU benchmark execution
 
@@ -343,13 +253,13 @@ mesh-llm gpus detect
 
 Internally, mesh-llm runs a hidden `benchmark` subcommand in a narrow subprocess boundary so native backend hangs and stdout capture stay isolated from the main process.
 
-Standard builds support benchmark execution only for the backends wired into the normal build flow:
+The benchmark runs through the installed Skippy native runtime, so it is available only for backends that have one:
 
 - macOS Apple Silicon: Metal
 - Linux / Windows NVIDIA: CUDA
 - Linux / Windows AMD: HIP / ROCm
 
-Intel GPU benchmark execution is not currently supported in standard `just build` flows, so runtime benchmark selection intentionally skips Intel GPUs.
+Intel GPUs have no published native-runtime benchmark tool, so runtime benchmark selection intentionally skips them.
 
 ## Protocol Backward Compatibility
 

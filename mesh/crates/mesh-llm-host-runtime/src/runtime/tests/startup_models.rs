@@ -280,61 +280,6 @@ spec_default = true
     assert_eq!(model.and_then(|s| s.spec_default.clone()), off);
 }
 
-#[test]
-fn cli_checkpoint_overrides_are_canonical_and_take_precedence() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let imatrix = temp.path().join("test.imatrix");
-    std::fs::write(&imatrix, b"fixture").expect("write fixture");
-    let mut config: plugin::MeshConfig = toml::from_str(
-        r#"
-[defaults.hardware]
-checkpoint_quantization = "F16"
-checkpoint_imatrix = "old-default.dat"
-
-[[models]]
-model = "test/model"
-
-[models.hardware]
-checkpoint_quantization = "Q8_0"
-checkpoint_imatrix = "old-model.dat"
-"#,
-    )
-    .expect("config parses");
-
-    apply_runtime_cli_checkpoint_overrides(&mut config, Some("q4-k"), Some(&imatrix))
-        .expect("CLI overrides apply");
-
-    let canonical_imatrix = std::fs::canonicalize(&imatrix)
-        .expect("canonical imatrix")
-        .to_string_lossy()
-        .into_owned();
-    let defaults = config
-        .defaults
-        .as_ref()
-        .and_then(|defaults| defaults.hardware.as_ref())
-        .expect("default hardware");
-    assert_eq!(defaults.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
-    assert_eq!(
-        defaults.checkpoint_imatrix.as_deref(),
-        Some(canonical_imatrix.as_str())
-    );
-    let model = config.models[0].hardware.as_ref().expect("model hardware");
-    assert_eq!(model.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
-    assert_eq!(
-        model.checkpoint_imatrix.as_deref(),
-        Some(canonical_imatrix.as_str())
-    );
-}
-
-#[test]
-fn cli_checkpoint_override_rejects_unknown_recipe() {
-    let mut config = plugin::MeshConfig::default();
-    let error = apply_runtime_cli_checkpoint_overrides(&mut config, Some("Q4_FANTASY"), None)
-        .expect_err("unknown recipe must fail");
-
-    assert!(error.to_string().contains("invalid --quant"));
-}
-
 fn remote_catalog_layer_entry(
     variant_name: &str,
     curated_name: &str,
@@ -946,7 +891,7 @@ async fn cached_hf_multipart_gguf_uses_ordered_blob_identities() {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn cached_hf_safetensors_is_not_indexed_as_gguf() {
+async fn cached_hf_safetensors_is_refused_with_gguf_guidance() {
     let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-preindex-hf-safetensors-cache-{}",
@@ -969,13 +914,14 @@ async fn cached_hf_safetensors_is_not_indexed_as_gguf() {
     std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
     std::fs::write(&snapshot_path, b"SAFE").unwrap();
 
-    let plans = resolve_startup_models(&[direct_gguf_startup_spec(&snapshot_path, None)], true)
+    let error = resolve_startup_models(&[direct_gguf_startup_spec(&snapshot_path, None)], true)
         .await
-        .expect("cached Hugging Face SafeTensors resolves");
+        .expect_err("a SafeTensors checkpoint is not servable");
 
-    assert_eq!(plans.len(), 1);
-    assert!(!plans[0].local_source_required);
-    assert!(plans[0].preindexed_split_package.is_none());
+    assert!(
+        format!("{error:#}").contains("Skippy serves GGUF models only"),
+        "{error:#}"
+    );
 
     let _ = std::fs::remove_dir_all(&cache_root);
 }

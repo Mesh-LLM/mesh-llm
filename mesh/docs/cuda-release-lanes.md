@@ -1,5 +1,12 @@
 # CUDA release lanes
 
+> **Historical.** MeshLLM's inference engine is now
+> [Skippy](https://github.com/Mesh-LLM/skippy), a separate repository that
+> builds and releases the native runtime. This document predates that split and
+> is kept as a record: its numbers, build steps and commands describe the old
+> in-tree engine and may no longer run here. Current engine performance and
+> runtime build notes belong in the Skippy repository.
+
 mesh-llm publishes **two CUDA release bundles per tagged release**. They
 share source, features, and upstream llama.cpp pin, and differ only in
 the CUDA toolkit version and GPU architecture coverage. Pick the one

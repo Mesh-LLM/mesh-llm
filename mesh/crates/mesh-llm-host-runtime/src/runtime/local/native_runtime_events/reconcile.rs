@@ -1,10 +1,13 @@
 //! Post-return reconciliation of one native model open.
 //!
-//! Runs on the loading thread after the final drain, before the caller
+//! Runs on Skippy's drain thread after the final drain. Skippy joins that
+//! thread before the load returns, so this is done before the caller
 //! settles the load terminal from the native return. It only reports:
 //! lost callbacks become engine health, and a terminal callback that
 //! disagrees with the return becomes an `InvariantProtocolViolation`
-//! diagnostic. The terminal itself is never touched here.
+//! diagnostic. When Skippy delivered no summary, the load's events are
+//! incomplete and a `WarningRaised` diagnostic says so. The terminal itself
+//! is never touched here.
 
 use std::sync::Arc;
 
@@ -18,6 +21,7 @@ use crate::runtime_events::engine::{RuntimeEventEngine, ScopedIngress};
 use crate::runtime_events::runtime_event_engine;
 
 const CONTRADICTION_SUMMARY: &str = "native model-open observation contradicts return";
+const UNOBSERVED_SUMMARY: &str = "native model-open events unavailable for this load";
 
 /// Where reconciliation reports: the load's own progress ingress when the
 /// caller holds one, otherwise the process engine through an unreserved
@@ -28,8 +32,17 @@ pub(super) struct ModelOpenReconciliation {
 }
 
 impl ModelOpenReconciliation {
-    pub(super) fn reconcile(&self, observation: &ModelOpenObservation, returned: ModelOpenReturn) {
+    pub(super) fn reconcile(
+        &self,
+        observation: Option<&ModelOpenObservation>,
+        returned: ModelOpenReturn,
+    ) {
         let Some(engine) = self.engine() else {
+            return;
+        };
+        let Some(observation) = observation else {
+            tracing::warn!(model = %self.model, "{UNOBSERVED_SUMMARY}");
+            self.submit(&engine, unobserved_fact(&self.model));
             return;
         };
         report_losses(&engine, &self.model, observation);
@@ -40,7 +53,7 @@ impl ModelOpenReconciliation {
                 last_sequence = ?observation.last_sequence,
                 "{CONTRADICTION_SUMMARY}"
             );
-            self.submit_contradiction(&engine);
+            self.submit(&engine, contradiction_fact(&self.model));
         }
     }
 
@@ -51,8 +64,7 @@ impl ModelOpenReconciliation {
             .or_else(runtime_event_engine)
     }
 
-    fn submit_contradiction(&self, engine: &Arc<RuntimeEventEngine>) {
-        let fact = contradiction_fact(&self.model);
+    fn submit(&self, engine: &Arc<RuntimeEventEngine>, fact: RuntimeFact) {
         let _ = match self.ingress.as_ref() {
             Some(ingress) => ingress.try_submit(fact),
             None => engine
@@ -84,6 +96,16 @@ fn contradiction_fact(model: &str) -> RuntimeFact {
         FactData {
             reason: Some(ReasonCode::InternalRuntimeFailure),
             summary: HumanSummary::new(CONTRADICTION_SUMMARY).ok(),
+            ..crate::runtime::model_lifecycle::model_scope(model)
+        },
+    ))
+}
+
+fn unobserved_fact(model: &str) -> RuntimeFact {
+    RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+        DiagnosticEventKind::WarningRaised,
+        FactData {
+            summary: HumanSummary::new(UNOBSERVED_SUMMARY).ok(),
             ..crate::runtime::model_lifecycle::model_scope(model)
         },
     ))

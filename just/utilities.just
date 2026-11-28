@@ -1,66 +1,20 @@
 # ── Utilities ──────────────────────────────────────────────────
 
-# Measure repository-local Cargo build-cache usage (80 GiB / 14 day defaults).
-[unix]
-cache-status max_size="80GiB" max_age="14":
-    just automation-run ci-ops build-cache status --max-size "{{ trim_start_match(max_size, "max_size=") }}" --max-age "{{ trim_start_match(max_age, "max_age=") }}"
-
-# Emit Cargo's effective workspace and artifact-directory metadata as JSON.
-[unix]
-cache-cargo-metadata:
-    @cargo metadata --no-deps --format-version 1
-
-# Remove one package from an explicitly validated Cargo target directory.
-[unix]
-cache-cargo-clean:
-    @test -n "${MESH_LLM_CACHE_TARGET_DIR:-}" || { echo "cache-cargo-clean: MESH_LLM_CACHE_TARGET_DIR is unset; this recipe is driven by ci-ops build-cache" >&2; exit 1; }
-    @test -n "${MESH_LLM_CACHE_PACKAGE:-}" || { echo "cache-cargo-clean: MESH_LLM_CACHE_PACKAGE is unset; this recipe is driven by ci-ops build-cache" >&2; exit 1; }
-    @cargo clean --target-dir "$MESH_LLM_CACHE_TARGET_DIR" -p "$MESH_LLM_CACHE_PACKAGE"
-
-# Preview bounded, oldest-first incremental and package-aware Cargo cleanup.
-[unix]
-cache-prune-dry-run max_size="80GiB" max_age="14":
-    just automation-run ci-ops build-cache prune --max-size "{{ trim_start_match(max_size, "max_size=") }}" --max-age "{{ trim_start_match(max_age, "max_age=") }}"
-
-# Prune only repository-local Cargo artifacts; refuses during compilation.
-[unix]
-cache-prune max_size="80GiB" max_age="14":
-    just automation-run ci-ops build-cache prune --execute --max-size "{{ trim_start_match(max_size, "max_size=") }}" --max-age "{{ trim_start_match(max_age, "max_age=") }}"
-
-# Update both tracked llama.cpp pin files from the prepared checkout.
-llama-update-pin:
-    scripts/update-llama-pin.sh
-
-# Run the same focused/full native upgrade checks as the canary controller.
-[unix]
-llama-upgrade upstream backend="metal" cache=env("HF_CACHE", ""):
-    just automation-run automation canary-receipts local-upgrade --root "{{justfile_directory()}}" --upstream "{{upstream}}" --backend "{{backend}}" --cache-root "{{cache}}"
-
-[unix]
-llama-upgrade-check phase="fast" backend="metal":
-    just automation-run automation canary-receipts repair-check --root "{{justfile_directory()}}" --controller-root "{{justfile_directory()}}" --state-dir "{{justfile_directory()}}/.deps/llama-upgrade-local" --build-dir "{{justfile_directory()}}/.deps/llama-upgrade-local-native" --backend "{{backend}}" --phase "{{phase}}"
-
-# Render a Markdown summary for a llama.cpp upstream pin change.
-llama-summary old new:
-    scripts/summarize-llama-upstream.sh "{{ old }}" "{{ new }}"
-
-# Clean Rust, llama.cpp, and UI build artifacts.
+# Clean Rust and UI build artifacts.
 [unix]
 clean:
     #!/usr/bin/env bash
     set -euo pipefail
     rm -rf \
         target \
-        .deps/llama.cpp/build-stage-abi-* \
-        .deps/llama-build/build-stage-abi-* \
         "{{ ui_dir }}/node_modules" \
         "{{ ui_dir }}/dist"
-    echo "Cleaned Rust target, llama.cpp build dirs, and UI artifacts"
+    echo "Cleaned Rust target and UI artifacts"
 
 [windows]
 clean:
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force target,'.deps/llama.cpp/build-stage-abi-*','.deps/llama-build/build-stage-abi-*','{{ ui_dir }}/node_modules','{{ ui_dir }}/dist' -ErrorAction SilentlyContinue"
-    echo "Cleaned Rust target, llama.cpp build dirs, and UI artifacts"
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force target,'{{ ui_dir }}/node_modules','{{ ui_dir }}/dist' -ErrorAction SilentlyContinue"
+    echo "Cleaned Rust target and UI artifacts"
 
 # Clean UI build artifacts (node_modules, dist). Fixes stale pnpm state.
 [unix]
@@ -82,13 +36,7 @@ test port="9337":
     curl -s http://localhost:{{ port }}/v1/chat/completions \
         -H 'Content-Type: application/json' \
         -d '{"model":"test","messages":[{"role":"user","content":"Hello! Write a haiku about distributed computing."}],"max_tokens":50}' \
-        | just with-lld cargo xtool ci-ops chat-display
-
-# Show the local llama.cpp ABI patch queue
-diff:
-    @find skippy/llama_cpp/patches -maxdepth 1 -type f -name '*.patch' -print | sort
-    @sed 's#^#skippy/llama_cpp/patches/model_support/#' skippy/llama_cpp/patches/model_support/series
-    @sed 's#^#skippy/llama_cpp/patches/generated/#' skippy/llama_cpp/patches/generated/series
+        | jq -r '.choices[0].message.content'
 
 # Build the client-only Docker image
 [unix]

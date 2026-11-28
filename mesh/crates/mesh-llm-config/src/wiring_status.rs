@@ -179,9 +179,9 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "request_tiers.local_kv_reserve_percent",
-        status: WiringStatus::Wired,
+        status: WiringStatus::Partial,
         owner: "n/a",
-        reason: "",
+        reason: "The node validates and resolves it; reserving KV needs request tiers in Skippy (Mesh-LLM/skippy#113), which the pinned release lacks",
         behavior: WiringBehavior::None,
     },
     WiringEntry {

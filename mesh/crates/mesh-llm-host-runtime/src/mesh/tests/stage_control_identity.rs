@@ -66,7 +66,6 @@ fn identity_test_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
-        split_certification: Some("certified".to_string()),
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -120,7 +119,6 @@ fn identity_test_load_request() -> crate::inference::skippy::StageLoadRequest {
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
         }),
-        max_request_tier: None,
     }
 }
 

@@ -140,7 +140,7 @@ pub(super) const DESCRIPTORS: &[Descriptor] = &[
             "--model-id",
             "--flavor",
             "--timeout",
-            "--mesh-llm-ref",
+            "--skippy-ref",
             "--status",
             "--logs",
             "--cancel",

@@ -48,7 +48,6 @@ RUN --mount=type=cache,id=mesh-llm-downloads-debian-bookworm-sccache-${TARGETARC
 RUN --mount=type=cache,id=mesh-llm-rustup-stable-debian-bookworm-${TARGETARCH},target=/root/.rustup/downloads,sharing=locked \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
-ENV LLAMA_STAGE_BUILD_DIR=".deps/llama.cpp/build-stage-abi-static"
 RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
     cargo install cargo-chef --version 0.1.68 --locked
@@ -56,26 +55,13 @@ WORKDIR /src
 # Satisfy GitHub Actions preflight checks (exact strings required)
 COPY Cargo.toml Cargo.lock ./
 # Copy the whole crates tree. A hand-maintained per-crate list went stale twice
-# (#1241, and again once skippy-package-format, skippy-scheduler, and
-# mesh-llm-log-store landed), which breaks `cargo build --locked` at deploy time.
+# (#1241 and later), which breaks `cargo build --locked` at deploy time.
+# Skippy's crates are Cargo git dependencies; no inference runtime is built here.
 # .dockerignore already drops node_modules, dist, and target, so this costs no
 # extra context and invalidates the same downstream layers as the list did.
 COPY mesh/crates/ mesh/crates/
-COPY skippy/crates/ skippy/crates/
-COPY tools/xtask/ tools/xtask/
-COPY tools/trajectory-reader/ tools/trajectory-reader/
 COPY scripts/ scripts/
-COPY skippy/scripts/ skippy/scripts/
 COPY mesh/scripts/ mesh/scripts/
-COPY skippy/llama_cpp/upstream.txt skippy/llama_cpp/upstream.txt
-COPY skippy/llama_cpp/whisper-upstream.txt skippy/llama_cpp/whisper-upstream.txt
-COPY skippy/llama_cpp/patches/ skippy/llama_cpp/patches/
-RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
-    scripts/prepare-llama.sh pinned && \
-    SCCACHE_DIR=/root/.cache/sccache \
-    MESH_LLM_REQUIRE_SCCACHE=1 \
-    LLAMA_STAGE_USE_SCCACHE=1 \
-    scripts/build-llama.sh
 RUN mkdir -p mesh/crates/mesh-llm-ui/dist && echo '<html></html>' > mesh/crates/mesh-llm-ui/dist/index.html
 RUN cargo chef prepare --recipe-path recipe.json
 RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
@@ -93,9 +79,6 @@ COPY --from=ui-builder /app/dist mesh/crates/mesh-llm-ui/dist
 COPY Cargo.toml Cargo.lock ./
 # Same rationale as the rust-deps stage above: copy the whole tree, not a list.
 COPY mesh/crates/ mesh/crates/
-COPY skippy/crates/ skippy/crates/
-COPY tools/xtask/ tools/xtask/
-COPY tools/trajectory-reader/ tools/trajectory-reader/
 RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \
     --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \

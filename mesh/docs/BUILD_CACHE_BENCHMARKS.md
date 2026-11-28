@@ -1,5 +1,12 @@
 # Container build cache benchmarks
 
+> **Historical.** MeshLLM's inference engine is now
+> [Skippy](https://github.com/Mesh-LLM/skippy), a separate repository that
+> builds and releases the native runtime. This document predates that split and
+> is kept as a record: its numbers, build steps and commands describe the old
+> in-tree engine and may no longer run here. Current engine performance and
+> runtime build notes belong in the Skippy repository.
+
 ## llama.cpp compiler cache
 
 Measured 2026-08-02 on `mesh1.patio51.com` (Linux ARM64) with Debian Bookworm,

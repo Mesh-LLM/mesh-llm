@@ -664,7 +664,7 @@ struct EmissionState {
     internal_hook_failure: bool,
     /// The exchange's request tier: a phase reached from the backend runs on
     /// the backend's task, not the request's.
-    tier: skippy_inference_api::InferenceRequestTier,
+    tier: crate::mesh::request_tier::InferenceRequestTier,
 }
 
 #[derive(Default)]
@@ -704,7 +704,7 @@ pub(crate) struct ExchangeSession {
     /// A private exchange's private scope, restored for its terminal callback.
     scope: Option<crate::mesh::PrivateScope>,
     /// The exchange's request tier, restored for its terminal callback.
-    tier: skippy_inference_api::InferenceRequestTier,
+    tier: crate::mesh::request_tier::InferenceRequestTier,
     /// For a private exchange, keeps every observing plugin's own inference
     /// private from admission to its terminal callback: between callbacks it
     /// still holds request and response content.

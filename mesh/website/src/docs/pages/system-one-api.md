@@ -28,7 +28,7 @@ HTTP request and response contract. Causal decoders can also score questions
 using last-prefill reads or explicit teacher-forced candidate likelihoods.
 They add per-question `readouts` and physical `readout_usage`; confidence is
 relative to the offered candidates, not calibrated probability of truth.
-See the [causal decision guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CAUSAL_DECISIONS.md)
+See the [causal decision guide](https://github.com/Mesh-LLM/skippy/blob/main/docs/CAUSAL_DECISIONS.md)
 for examples, tokenizer validation, caching, limits and split compatibility.
 
 ## Run Laya

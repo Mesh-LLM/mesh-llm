@@ -14,9 +14,9 @@ host = []
 [dependencies]
 anyhow.workspace = true
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.80.0" }
-skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.80.0" }
-skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.80.0" }
-skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.80.0" }
+skippy-model-artifact = { workspace = true }
+skippy-model-hf = { workspace = true }
+skippy-model-ref = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 

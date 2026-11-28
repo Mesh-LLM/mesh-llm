@@ -13,9 +13,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$SCRIPT_DIR/lib/automation.sh"
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 
 RELEASE_TAG="${1:?usage: $0 <release-tag>}"
 REPO="${MESH_RC_RELEASE_REPO:-Mesh-LLM/mesh-llm}"
@@ -258,7 +256,7 @@ for second in $(seq 1 "$MAX_WAIT"); do
     MODELS_JSON="$(curl -fsS "http://127.0.0.1:${API_PORT}/v1/models" 2>/dev/null || true)"
     MODEL_ID="$(
         printf '%s' "$MODELS_JSON" |
-            mesh_automation product rc-ok model 2>/dev/null ||
+            jq -er '.data[0].id // empty' 2>/dev/null ||
             true
     )"
     if [[ -n "$MODEL_ID" ]]; then
@@ -275,7 +273,7 @@ done
 
 echo "checking /v1/chat/completions"
 CHAT_PAYLOAD="$(
-    mesh_automation product rc-ok request "$MODEL_ID"
+    jq -cn --arg model "$MODEL_ID" '{model: $model, messages: [{role: "user", content: "Reply with exactly: rc-ok"}], max_tokens: 16, temperature: 0}'
 )"
 CHAT_RESPONSE="$(
     curl -fsS "http://127.0.0.1:${API_PORT}/v1/chat/completions" \
@@ -285,7 +283,8 @@ CHAT_RESPONSE="$(
 )"
 printf '%s' "$CHAT_RESPONSE" >"$AUDIT/chat-completions.json"
 printf '%s' "$CHAT_RESPONSE" |
-    mesh_automation product rc-ok verify
+    jq -e '(.choices[0].message.content // "" | gsub("^\\s+|\\s+$"; "")) == "rc-ok"' >/dev/null ||
+    { echo "RC chat response must contain exactly rc-ok" >&2; exit 1; }
 
 cleanup
 MESH_PID=""

@@ -234,4 +234,4 @@ Schema-v1 layer-entry manifests and schema-v2 artifact catalogs are different fo
 
 Changes to identity calculation, artifact or tensor storage semantics, admission rules, or required fields require a new schema version unless old readers can safely preserve the exact contract.
 
-For the implementation-level rules and peer artifact-transfer behavior, see the [layer package repository specification](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/specs/layer-package-repos.md).
+For the implementation-level rules and peer artifact-transfer behavior, see the [layer package repository specification](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md).

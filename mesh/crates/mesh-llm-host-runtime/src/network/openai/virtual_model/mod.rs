@@ -85,7 +85,7 @@ impl InferenceRpcBridge {
             );
         }
         let tier = self.plugins.nested_request_tier(plugin_name);
-        if tier != skippy_inference_api::InferenceRequestTier::Local {
+        if tier != crate::mesh::request_tier::InferenceRequestTier::Local {
             request_builder = request_builder.header(
                 crate::mesh::request_tier::REQUEST_TIER_HEADER,
                 tier.as_str(),

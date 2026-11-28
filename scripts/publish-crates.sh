@@ -3,8 +3,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$SCRIPT_DIR/lib/automation.sh"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -253,10 +251,8 @@ run_cargo_publish_once() {
     fi
 
     echo "cargo ${args[*]}"
-    # Registry verification runs from the isolated package tarball, where the
-    # repository-only patched llama.cpp build inputs are intentionally absent.
-    # Verify the Rust package surface through skippy-ffi's dynamic link mode;
-    # this does not change the uploaded crate contents or feature defaults.
+    # Packaged-crate verification links skippy-ffi dynamically; the uploaded
+    # crate contents and feature defaults are unchanged.
     if output="$(
         LLAMA_STAGE_LINK_MODE=dynamic \
             LLAMA_STAGE_BUILD_DIR="$native_verify_build_dir" \
@@ -319,29 +315,20 @@ publish_crate_with_retry() {
     return 101
 }
 
-# Publishable workspace dependencies for every crate, derived once from cargo
-# metadata into "<crate> <dep>" lines.
-#
-# This is intentionally derived rather than hand-maintained: a stale hand-written
-# map silently breaks the dry-run whenever a new crate joins the workspace, and
-# the failure only surfaces at release time, at the end of a long release build.
-registry_dep_pairs=""
-publication_metadata=""
-
-load_registry_dep_pairs() {
-    if ! publication_metadata="$(cargo metadata --format-version 1 --no-deps --locked 2>/dev/null)"; then
-        echo "failed to read cargo metadata for workspace dependency derivation" >&2
-        exit 1
-    fi
-    if [[ -z "$publication_metadata" ]]; then
-        echo "cargo metadata returned no workspace data" >&2
-        exit 1
-    fi
-    registry_dep_pairs="$(
-        printf '%s' "$publication_metadata" | mesh_automation repository publish-order --dependency-pairs
-    )"
-}
-
+# Publishable workspace crates and their non-dev path dependencies on each
+# other, derived from cargo metadata so new crates join the chain automatically.
+if ! publication_metadata="$(cargo metadata --format-version 1 --no-deps --locked 2>/dev/null)"; then
+    echo "failed to read cargo metadata for workspace dependency derivation" >&2
+    exit 1
+fi
+registry_dep_pairs="$(
+    printf '%s' "$publication_metadata" | jq -r '
+        [.packages[] | select(.publish != [])] as $pkgs
+        | ($pkgs | map({key: (.manifest_path | sub("/Cargo.toml$"; "")), value: .name}) | from_entries) as $dirs
+        | $pkgs[] | .name as $name
+        | .dependencies[] | select(.kind != "dev" and .path != null)
+        | $dirs[.path] // empty | select(. != $name) | "\($name) \(.)"'
+)"
 unpublished_registry_deps() {
     local crate="$1"
     printf '%s\n' "$registry_dep_pairs" | awk -v crate="$crate" '$1 == crate { print $2 }'
@@ -360,82 +347,10 @@ should_skip_initial_dry_run() {
     return 1
 }
 
-publish_crates=(
-    mesh-llm-identity
-    skippy-events
-    skippy-tokenizer
-    mesh-llm-protocol
-    mesh-llm-transport
-    mesh-llm-routing
-    skippy-model-ref
-    skippy-model-artifact
-    mesh-llm-types
-    skippy-guardrails
-    mesh-native-serving-plugin-api
-    mesh-llm-skills
-    skippy-gpu-bench
-    skippy-ffi
-    skippy-package-format
-    skippy-model
-    skippy-protocol
-    skippy-native-runtime
-    mesh-llm-config
-    mesh-llm-plugin
-    mesh-llm-membership
-    skippy-coordinator
-    skippy-topology
-    skippy-metrics
-    skippy-cache
-    skippy-model-resolver
-    mesh-llm-client
-    mesh-llm-api-client
-    mesh-llm-events
-    mesh-llm-control-api
-    mesh-llm-runtime-event-contracts
-    mesh-llm-log-store
-    mesh-llm-build-info
-    mesh-llm-analytics
-    mesh-llm-release-footer
-    mesh-llm-ui
-    mesh-llm-console-server
-    mesh-llm-tui
-    skippy-hf-hub
-    skippy-model-hf
-    skippy-model-package
-    mesh-llm-node
-    mesh-llm-api-server
-    skippy-hardware-profile
-    skippy-runtime
-    skippy-scheduler
-    skippy-inference-api
-    skippy-runtime-install
-    skippy-config
-    skippy-serving
-    skippy-api
-    mesh-llm-skippy-adapter
-    skippy-commands
-    mesh-llm-cli
-    skippy-cli
-    mesh-native-serving-plugin-host
-    mesh-llm-plugin-manager
-    mesh-mixture-of-agents
-    mesh-llm-moa-plugin
-    mesh-llm-system
-    mesh-llm-host-runtime
-    mesh-llm-embedded-runtime
-    mesh-llm-sdk
-)
-
-load_registry_dep_pairs
-selected_roster="$(
-    printf '%s' "$publication_metadata" \
-        | mesh_automation repository publish-order --selected-script "$PWD/scripts/publish-crates.sh" --source-root "$PWD"
-)"
 publish_crates=()
 while IFS= read -r crate; do
-    [[ -n "$crate" ]] || continue
-    publish_crates+=("$crate")
-done <<< "$selected_roster"
+    [[ -n "$crate" ]] && publish_crates+=("$crate")
+done < <("$SCRIPT_DIR/published-crates.sh")
 
 for index in "${!publish_crates[@]}"; do
     crate="${publish_crates[$index]}"

@@ -18,7 +18,6 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$REPO_ROOT/scripts/lib/automation.sh"
 SDK="all"
 DIST_DIR="$REPO_ROOT/mesh/crates/mesh-llm-ui/dist"
 SKIP_BUILD=0
@@ -69,7 +68,7 @@ fi
 
 write_manifest() {
     local dest="$1"
-    mesh_automation prepared-input sdk-console-manifest "$dest"
+    (cd "$dest" && find . -type f ! -name manifest.txt ! -path './.*' | sed 's|^\./||' | LC_ALL=C sort) >"$dest/manifest.txt"
 }
 
 copy_console_assets() {

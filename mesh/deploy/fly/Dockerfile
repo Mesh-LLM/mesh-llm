@@ -49,27 +49,14 @@ ENV PATH="/root/.cargo/bin:$PATH"
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 # Copy the whole crates tree. A hand-maintained per-crate list went stale twice
-# (#1241, and again once skippy-package-format, skippy-scheduler, and
-# mesh-llm-log-store landed), which breaks `cargo build --locked` at deploy time.
+# (#1241 and later), which breaks `cargo build --locked` at deploy time.
+# Skippy's crates are Cargo git dependencies; no inference runtime is built here.
 # .dockerignore already drops node_modules, dist, and target, so this costs no
 # extra context and invalidates the same downstream layers as the list did.
 COPY mesh/crates/ mesh/crates/
-COPY skippy/crates/ skippy/crates/
-COPY tools/xtask/ tools/xtask/
-COPY tools/trajectory-reader/ tools/trajectory-reader/
 COPY scripts/ scripts/
-COPY skippy/scripts/ skippy/scripts/
 COPY mesh/scripts/ mesh/scripts/
 COPY scripts/lib/ scripts/lib/
-COPY skippy/llama_cpp/upstream.txt skippy/llama_cpp/upstream.txt
-COPY skippy/llama_cpp/whisper-upstream.txt skippy/llama_cpp/whisper-upstream.txt
-COPY skippy/llama_cpp/patches/ skippy/llama_cpp/patches/
-RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
-    scripts/prepare-llama.sh pinned && \
-    SCCACHE_DIR=/root/.cache/sccache \
-    MESH_LLM_REQUIRE_SCCACHE=1 \
-    LLAMA_STAGE_USE_SCCACHE=1 \
-    scripts/build-llama.sh
 COPY --from=ui-builder /app/dist mesh/crates/mesh-llm-ui/dist
 RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,id=mesh-llm-cargo-git-debian-bookworm-rust-stable-${TARGETARCH},target=/root/.cargo/git,sharing=locked \

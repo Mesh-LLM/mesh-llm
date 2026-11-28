@@ -243,9 +243,9 @@ library's metadata so the wrapper checksums match the packaged artifact.
 After regeneration, update the matching generated file hash in
 `mesh/sdk/python/sdk-inputs.json`. For `mesh_ffi.py`, hash
 `mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py` with `shasum -a 256` or
-`sha256sum`, replace its `files` entry, then validate the manifest from the
-repository root with `cargo xtool automation smoke-observation sdk-source
---kind root`.
+`sha256sum`, and replace its `files` entry. The `cargo xtool` command that
+validated this manifest was removed with `tools/xtask`; nothing replaces it
+yet.
 The source distribution includes the prebuilt native bridge, allowing the
 default `python -m build` sdist-to-wheel flow to produce a platform wheel
 without compiling or downloading the bridge.

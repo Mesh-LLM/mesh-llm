@@ -76,7 +76,6 @@ fn load_request() -> StageLoadRequest {
         model_path: Some("/models/model.gguf".to_string()),
         source_model_bytes: Some(64 * 1024 * 1024 * 1024),
         source_model_sha256: None,
-        split_certification: None,
         local_source_required: false,
         projector_path: Some("/models/mmproj.gguf".to_string()),
         projector_use_gpu: None,
@@ -135,7 +134,6 @@ fn load_request() -> StageLoadRequest {
             endpoint: "127.0.0.1:9001".to_string(),
             node_id: None,
         }),
-        max_request_tier: None,
     }
 }
 

@@ -14,7 +14,7 @@ Phases 1 through 5 in this plan are complete:
 
 The original chat/Responses phases are complete. Full-model audio endpoints
 and OCR family certification are documented separately in
-[NON_CHAT_MODELS.md](../../../skippy/docs/NON_CHAT_MODELS.md); projector execution remains
+[NON_CHAT_MODELS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/NON_CHAT_MODELS.md); projector execution remains
 colocated with its model trunk.
 
 ## Goals

@@ -130,7 +130,7 @@ transcription migration is deferred.
 ## Native Runtime Artifacts
 
 The accepted packaging direction is documented in
-[design/NATIVE_RUNTIMES.md](../../skippy/docs/design/NATIVE_RUNTIMES.md). In short: native
+[design/NATIVE_RUNTIMES.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/NATIVE_RUNTIMES.md). In short: native
 runtimes are release artifacts, not implicit Cargo builds. Runtime selection
 defaults to the running MeshLLM release manifest, but compatibility is enforced
 against the exact Skippy ABI version supported by the loader.

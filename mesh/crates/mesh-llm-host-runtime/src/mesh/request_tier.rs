@@ -19,9 +19,14 @@
 use super::config_reload::{ReloadedSetting, SettingSpec, WhenUnloadable};
 use crate::crypto::{OwnershipStatus, OwnershipSummary};
 use iroh::EndpointId;
-use skippy_inference_api::InferenceRequestTier;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+mod class;
+pub(crate) use class::{
+    CACHE_PARTITION_HEADER, InferenceRequestTier, PRIVATE_CACHE_PARTITION,
+    SKIPPY_REQUEST_TIER_HEADER,
+};
 
 /// The header a forwarding node names its client's tier in.
 pub(crate) const REQUEST_TIER_HEADER: &str = "x-mesh-request-tier";
@@ -41,9 +46,13 @@ pub(crate) async fn with_request_tier<F: std::future::Future>(
 /// The tier of the request this task is serving. Work that no ingress
 /// classified started on this machine, so it is `local`.
 pub(crate) fn current_request_tier() -> InferenceRequestTier {
-    CURRENT_REQUEST_TIER
-        .try_with(|tier| *tier)
-        .unwrap_or(InferenceRequestTier::Local)
+    classified_request_tier().unwrap_or(InferenceRequestTier::Local)
+}
+
+/// The tier of the request this task is serving, or `None` on a task no
+/// ingress classified.
+pub(crate) fn classified_request_tier() -> Option<InferenceRequestTier> {
+    CURRENT_REQUEST_TIER.try_with(|tier| *tier).ok()
 }
 
 /// The tier the raw HTTP request `raw` claims in [`REQUEST_TIER_HEADER`]:
@@ -78,12 +87,11 @@ pub(crate) fn mark_class_for_local_server(raw: &[u8], private: bool) -> Option<V
     if tier == InferenceRequestTier::Local && !private {
         return None;
     }
-    let mut lines = format!("{}: {tier}\r\n", skippy_inference_api::REQUEST_TIER_HEADER);
+    let mut lines = format!("{SKIPPY_REQUEST_TIER_HEADER}: {tier}\r\n");
     if private {
         lines.push_str(&format!(
             "{}: {}\r\n",
-            skippy_inference_api::CACHE_PARTITION_HEADER,
-            skippy_inference_api::PRIVATE_CACHE_PARTITION
+            CACHE_PARTITION_HEADER, PRIVATE_CACHE_PARTITION
         ));
     }
     let mut raw = raw.to_vec();

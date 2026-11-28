@@ -673,7 +673,6 @@ impl MeshApi {
                     "manifest_sha256": status.manifest_sha256.clone(),
                     "source_model_path": status.source_model_path.clone(),
                     "source_model_sha256": status.source_model_sha256.clone(),
-                    "split_certification": status.split_certification.clone(),
                     "source_model_bytes": status.source_model_bytes,
                     "materialized_path": status.materialized_path.clone(),
                     "materialized_bytes": status

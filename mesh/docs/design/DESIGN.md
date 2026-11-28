@@ -3,10 +3,10 @@
 > Current serving note: mesh serving embeds the Skippy/llama.cpp stage runtime
 > in `mesh-llm`. Operator runbooks are available in
 > [`../MESHES.md`](../MESHES.md) and
-> [`../SKIPPY_SPLITS.md`](../../../skippy/docs/SKIPPY_SPLITS.md).
+> [`../SKIPPY_SPLITS.md`](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md).
 
 The proposed graph-derived replacement for model-aware stage filtering is
-specified in [`SKIPPY_GRAPH_FILTER_V2.md`](../../../skippy/docs/design/SKIPPY_GRAPH_FILTER_V2.md).
+specified in [`SKIPPY_GRAPH_FILTER_V2.md`](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/SKIPPY_GRAPH_FILTER_V2.md).
 
 mesh-llm connects nodes over QUIC (via [iroh](https://iroh.computer)), gossips
 capabilities and model state, routes OpenAI-compatible requests through the
@@ -186,7 +186,7 @@ the packaged `mesh-llm` binary, not SDK, XCFramework, or other native
 artifacts. `missing` is expected for unstamped local and dev builds, `valid`
 means the packaged binary matches a trusted release signer, and `invalid` means
 the bytes changed after packaging. Operators can verify stamped packaged
-binaries with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+binaries with `cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
 Bare `inspect --binary ...` is only sufficient for unstamped binaries that
 should classify as `missing`; stamped binaries require `--public-key-file` and
 otherwise report `invalid` with an explicit error.

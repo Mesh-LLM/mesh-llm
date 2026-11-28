@@ -5,19 +5,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-load_publish_crates() {
-    crates=()
-    while IFS= read -r crate; do
-        crates+=("$crate")
-    done < <(
-        awk '/^publish_crates=\(/ { inside = 1; next } inside && /^\)/ { exit } inside && /^    [[:alnum:]_-]+$/ { print $1 }' scripts/publish-crates.sh
-    )
-}
-
-load_publish_crates
+crates=()
+while IFS= read -r crate; do
+    crates+=("$crate")
+done < <(scripts/published-crates.sh)
 
 if [[ "${#crates[@]}" -eq 0 ]]; then
-    echo "No crates found in scripts/publish-crates.sh" >&2
+    echo "No crates found in the published crate roster" >&2
     exit 1
 fi
 

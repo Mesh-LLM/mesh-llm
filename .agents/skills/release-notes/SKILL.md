@@ -7,6 +7,10 @@ metadata:
 
 # Release Notes
 
+> **Unavailable.** The `cargo xtool` commands were removed from this repository
+> with `tools/xtask`, and nothing replaces them. The text below describes the
+> workflow as it was, for reference only. Do not try to run it.
+
 Release-note automation uses the Rust commands under `cargo xtool release`.
 The older Python scripts remain as compatibility references while their test
 coverage is migrated. New automation follows the Rust ownership rule in

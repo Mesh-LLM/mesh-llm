@@ -9,22 +9,18 @@ members = [
     "mesh/crates/mesh-llm-wallet",
     "mesh/crates/mesh-llm-events",
     "mesh/crates/mesh-llm-build-info",
-    "skippy/crates/skippy-gpu-bench",
     "mesh/crates/mesh-llm-host-runtime",
     "mesh/crates/mesh-llm-skippy-adapter",
     "mesh/crates/mesh-llm-control-api",
     "mesh/crates/mesh-llm-log-store",
     "mesh/crates/mesh-llm-membership",
-    "skippy/crates/skippy-hardware-profile",
     "mesh/crates/mesh-llm-identity",
-    "skippy/crates/skippy-native-runtime",
     "mesh/crates/mesh-llm-protocol",
+    "mesh/crates/mesh-llm-release-attestation",
     "mesh/crates/mesh-llm-release-footer",
     "mesh/crates/mesh-llm-routing",
-    "skippy/crates/skippy-runtime-install",
     "mesh/crates/mesh-llm-runtime-event-contracts",
     "mesh/crates/mesh-llm-sdk",
-    "skippy/crates/skippy-guardrails",
     "mesh/crates/mesh-llm-system",
     "mesh/crates/mesh-llm-tui",
     "mesh/crates/mesh-llm-types",
@@ -44,48 +40,16 @@ members = [
     "mesh/crates/mesh-llm-ffi",
     "mesh/crates/mesh-llm-nodejs",
     "mesh/crates/mesh-llm-test-harness",
-    "skippy/crates/skippy-model-ref",
-    "skippy/crates/skippy-model-artifact",
-    "skippy/crates/skippy-model-hf",
-    "skippy/crates/skippy-hf-hub",
-    "skippy/crates/skippy-model-resolver",
-    "skippy/crates/skippy-events",
-    "skippy/crates/skippy-tokenizer",
-    "skippy/crates/skippy-protocol",
-    "skippy/crates/skippy-coordinator",
-    "skippy/crates/skippy-topology",
-    "skippy/crates/skippy-cache",
-    "skippy/crates/skippy-metrics",
-    "skippy/crates/skippy-inference-api",
-    "skippy/crates/skippy-ffi",
-    "skippy/crates/skippy-runtime",
-    "skippy/crates/skippy-scheduler",
-    "skippy/crates/skippy-serving",
-    "skippy/crates/skippy-cli",
-    "skippy/crates/skippy-commands",
-    "skippy/crates/skippy-config",
-    "skippy/crates/skippy-api",
-    "skippy/crates/metrics-server",
-    "skippy/crates/skippy-package-builder",
-    "skippy/crates/skippy-package-format",
-    "skippy/crates/skippy-model",
-    "skippy/crates/skippy-quantize",
-    "skippy/crates/skippy-model-package",
-    "skippy/crates/skippy-correctness",
-    "skippy/crates/llama-spec-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
-    "tools/xtask",
-    "tools/authority-automation",
-    "tools/ci-controller",
-    "tools/process-supervision",
-    "tools/runner-cleanup",
-    "tools/trajectory-reader",
 ]
 default-members = [
     "mesh/crates/mesh-llm",
     "mesh/crates/mesh-llm-plugin",
 ]
+# Skippy source checkouts live under .deps and use their own workspace.package
+# version. Without this exclusion Cargo can inherit MeshLLM's version for them.
+exclude = [".deps", "target"]
 resolver = "2"
 
 [workspace.package]
@@ -103,6 +67,39 @@ mesh-llm-analytics = { path = "mesh/crates/mesh-llm-analytics", version = "0.80.
 mesh-llm-build-info = { path = "mesh/crates/mesh-llm-build-info", version = "0.80.0" }
 mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", version = "0.80.0" }
 mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.80.0" }
+# Skippy crates come from crates.io at one exact release, recorded in Cargo.lock.
+# The matching source revision for runtime fallback is in scripts/skippy-pin.sh.
+# To build against a local Skippy checkout or another branch: scripts/skippy-source.sh.
+# MeshLLM loads Skippy's native runtime at run time and never links llama.cpp:
+# the dynamic features below keep skippy-ffi from compiling it, whichever crate
+# is built.
+# Pinned to Skippy release v0.80.4. It has no request tiers (Mesh-LLM/skippy#113):
+# see mesh/docs/specs/request-tiers.md.
+hf_hub = { package = "skippy-hf-hub", version = "=0.80.4", default-features = false }
+skippy-api = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-cache = { version = "=0.80.4" }
+skippy-commands = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-config = { version = "=0.80.4" }
+skippy-coordinator = { version = "=0.80.4" }
+skippy-events = { version = "=0.80.4" }
+skippy-ffi = { version = "=0.80.4", default-features = false, features = ["dynamic-runtime"] }
+skippy-gpu-bench = { version = "=0.80.4" }
+skippy-guardrails = { version = "=0.80.4" }
+skippy-hardware-profile = { version = "=0.80.4" }
+skippy-inference-api = { version = "=0.80.4" }
+skippy-model = { version = "=0.80.4" }
+skippy-model-artifact = { version = "=0.80.4" }
+skippy-model-hf = { version = "=0.80.4" }
+skippy-model-ref = { version = "=0.80.4" }
+skippy-model-resolver = { version = "=0.80.4" }
+skippy-native-runtime = { version = "=0.80.4" }
+skippy-package-format = { version = "=0.80.4" }
+skippy-protocol = { version = "=0.80.4" }
+skippy-runtime = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-runtime-install = { version = "=0.80.4" }
+skippy-serving = { version = "=0.80.4", features = ["dynamic-native-runtime"] }
+skippy-tokenizer = { version = "=0.80.4" }
+skippy-topology = { version = "=0.80.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

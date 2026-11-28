@@ -467,8 +467,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         gguf: cli.serving.gguf,
         memberships_config: cli.serving.memberships_config,
         mmproj: cli.serving.mmproj,
-        checkpoint_quantization: cli.serving.checkpoint_quantization,
-        checkpoint_imatrix: cli.serving.checkpoint_imatrix,
         port: cli.serving.port,
         local_model_only: cli.serving.local_model_only,
         native_serving_plugin: cli.serving.native_serving_plugin,
@@ -500,7 +498,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         speculative_overrides,
         strategy: cli.placement.strategy.map(map_serving_strategy),
         split: cli.placement.split,
-        allow_uncertified_split: cli.placement.allow_uncertified_split,
         split_topology_lock: cli.placement.split_topology_lock,
         auto_balance: cli.placement.auto_balance,
         ctx_size: cli.placement.ctx_size,
@@ -754,18 +751,6 @@ mod cli_entrypoint_tests {
             OsString::from("help"),
             OsString::from("--help"),
         ]));
-    }
-
-    #[test]
-    fn advanced_help_lists_the_complete_checkpoint_quantization_surface() {
-        let help = super::advanced_help_text();
-
-        assert!(help.contains("--quant <CHECKPOINT_QUANTIZATION>"));
-        assert!(help.contains("Valid recipes: preserve, F32, F16, BF16, Q1_0, Q2_0"));
-        assert!(help.contains("IQ2_XXS"));
-        assert!(help.contains("IQ1_M"));
-        assert!(help.contains("MXFP4_MOE"));
-        assert!(help.contains("--checkpoint-imatrix"));
     }
 
     #[test]

@@ -64,6 +64,10 @@ Exact manual provider JSON for OpenCode and Pi is in `mesh/docs/AGENTS.md`.
 
 ## Validating agent behavior
 
+> **Unavailable.** The `cargo xtool` commands were removed from this repository
+> with `tools/xtask`, and nothing replaces them. The text below describes the
+> workflow as it was, for reference only. Do not try to run it.
+
 Direct API contract probe (tool-call forcing, streaming reconstruction):
 
 ```bash

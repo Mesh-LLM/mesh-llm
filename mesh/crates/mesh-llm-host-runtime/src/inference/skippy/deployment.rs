@@ -65,7 +65,6 @@ pub(crate) fn remote_stage_load_request(
         model_path: Some(context.package.package_ref.clone()),
         source_model_bytes: context.package.source_model_bytes,
         source_model_sha256: Some(context.package.source_model_sha256.clone()),
-        split_certification: None,
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -99,7 +98,6 @@ pub(crate) fn remote_stage_load_request(
         load_mode: LoadMode::LayerPackage,
         upstream: None,
         downstream,
-        max_request_tier: None,
     }
 }
 
@@ -174,7 +172,7 @@ pub(crate) fn stage0_config(
         kv_lazy_clear: None,
         kv_release_pages: None,
         kv_row_attention: None,
-        sample_threads: None,
+        sample_threads: Default::default(),
         prefill_coalesce_max_ms: None,
         batch: Default::default(),
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
@@ -184,16 +182,12 @@ pub(crate) fn stage0_config(
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),
         activation_export_bindings: frontier_profile.activation_export_bindings.clone(),
-        checkpoint_quantization: None,
-        checkpoint_imatrix: None,
-        checkpoint_imatrix_sha256: None,
         selected_device,
         kv_cache: None,
         native_mtp_enabled: context.native_mtp_enabled,
         load_mode: LoadMode::LayerPackage,
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
-        max_request_tier: None,
         downstream: Some(PeerConfig {
             persistent_lane_marker: false,
             stage_id: downstream_stage.stage_id.clone(),

@@ -300,7 +300,7 @@ Research for this comparison checked:
 ## Mesh LLM docs for comparison
 
 - [MESHES.md](MESHES.md) for private/public mesh behavior.
-- [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for package-backed stage splits.
-- [LAYER_PACKAGE_REPOS.md](../../skippy/docs/LAYER_PACKAGE_REPOS.md) for package publishing.
+- [SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md) for package-backed stage splits.
+- [LAYER_PACKAGE_REPOS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md) for package publishing.
 - [AGENTS.md](AGENTS.md) for agent/client integrations.
 - [README.md](../../README.md) for feature overview.

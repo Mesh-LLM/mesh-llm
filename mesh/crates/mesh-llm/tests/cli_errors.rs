@@ -23,20 +23,35 @@ fn early_command_errors_are_visible_on_stderr() {
 
 #[test]
 fn gpus_json_without_native_runtime_keeps_json_stdout_and_warns_on_stderr() {
-    // An empty HOME (plus XDG roots) has no installed native runtime and no
-    // bundle: `gpus` must keep working from the OS survey, `--json` stdout
+    // A private binary copy and empty HOME (plus XDG roots) have no native
+    // runtime: `gpus` must keep working from the OS survey, `--json` stdout
     // must stay machine-readable, and the fallback notice belongs on stderr.
     let temp = TempDir::new().expect("tempdir should be created");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("isolated home should be created");
-    let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+    let built = std::path::Path::new(env!("CARGO_BIN_EXE_mesh-llm"));
+    let isolated_bin = temp.path().join(
+        built
+            .file_name()
+            .expect("built binary should have a filename"),
+    );
+    std::fs::copy(built, &isolated_bin).expect("binary should copy into isolated directory");
+    let output = Command::new(isolated_bin)
         .args(["gpus", "--json"])
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", home.join("xdg-config"))
         .env("XDG_CACHE_HOME", home.join("xdg-cache"))
         .env("XDG_DATA_HOME", home.join("xdg-data"))
-        .env_remove("MESH_LLM_NO_RUNTIME_DOWNLOAD")
+        .env("MESH_LLM_NO_RUNTIME_DOWNLOAD", "1")
         .env_remove("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
+            home.join("runtime-cache"),
+        )
+        .env_remove("MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL")
+        .env_remove("SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR")
+        .env_remove("SKIPPY_NATIVE_RUNTIME_CACHE_DIR")
+        .env_remove("SKIPPY_NATIVE_RUNTIME_MANIFEST_URL")
         .output()
         .expect("mesh-llm command should run");
 
@@ -144,5 +159,93 @@ fn benchmark_tune_remote_only_target_reports_local_only_rejection() {
     assert!(
         stderr.contains("local-only") && stderr.contains("download"),
         "stderr should explain the no-download local-only contract, got: {stderr:?}"
+    );
+}
+
+/// Both runtime bundle variables reach discovery: a directory named by either
+/// one must exist.
+#[test]
+fn mesh_and_skippy_bundle_variables_are_both_read() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("isolated home should be created");
+    for (set, unset) in [
+        (
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            "SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR",
+        ),
+        (
+            "SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR",
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+        ),
+    ] {
+        let missing = temp.path().join(format!("missing-{set}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+            .args(["runtime", "list", "--installed", "--json"])
+            .env("HOME", &home)
+            .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", home.join("cache"))
+            .env("SKIPPY_NATIVE_RUNTIME_CACHE_DIR", "")
+            .env(set, &missing)
+            .env(unset, "")
+            .output()
+            .expect("mesh-llm command should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{set}: {stderr}");
+        assert!(
+            stderr.contains("native runtime bundle directory does not exist"),
+            "{set} should be read by discovery, got: {stderr}"
+        );
+    }
+}
+
+fn write_fixture_runtime(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib/libllama.so"), b"runtime").unwrap();
+    let manifest = serde_json::json!({
+        "runtime": {
+            "id": "fixture-runtime",
+            "release_version": "0.0.1",
+            "skippy_abi": "0.0.1",
+            "platform": { "os": "linux", "arch": "x86_64" },
+            "backend": { "kind": "cpu" },
+            "libraries": ["lib/libllama.so"],
+        }
+    });
+    std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+}
+
+/// The bundle search is additive: a valid Mesh directory does not excuse a
+/// Skippy directory that does not exist.
+#[test]
+fn stale_skippy_bundle_directory_fails_beside_a_valid_mesh_one() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("isolated home should be created");
+    let bundle = temp.path().join("bundle");
+    write_fixture_runtime(&bundle);
+    let list = |skippy: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+            .args(["runtime", "list", "--installed", "--json"])
+            .env("HOME", &home)
+            .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", home.join("cache"))
+            .env("SKIPPY_NATIVE_RUNTIME_CACHE_DIR", "")
+            .env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", &bundle)
+            .env("SKIPPY_NATIVE_RUNTIME_BUNDLE_DIR", skippy)
+            .output()
+            .expect("mesh-llm command should run")
+    };
+
+    let valid = list(std::path::Path::new(""));
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+
+    let stale = list(&temp.path().join("stale"));
+    assert!(!stale.status.success());
+    assert!(
+        String::from_utf8_lossy(&stale.stderr)
+            .contains("native runtime bundle directory does not exist")
     );
 }

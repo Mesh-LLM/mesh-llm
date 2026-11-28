@@ -65,7 +65,7 @@ fn finished_callback_with_failed_return_submits_a_diagnostic_and_the_terminal_st
     let engine = install_engine();
     let op = LoadOperation::begin(MODEL);
 
-    scoped(&op).reconcile(&observed(true, false), ModelOpenReturn::Failed);
+    scoped(&op).reconcile(Some(&observed(true, false)), ModelOpenReturn::Failed);
     op.load_failed(MODEL);
 
     let kinds = published(&engine);
@@ -85,7 +85,7 @@ fn failed_handled_callback_with_successful_return_submits_a_diagnostic_and_the_t
     let engine = install_engine();
     let op = LoadOperation::begin(MODEL);
 
-    scoped(&op).reconcile(&observed(false, true), ModelOpenReturn::Succeeded);
+    scoped(&op).reconcile(Some(&observed(false, true)), ModelOpenReturn::Succeeded);
     let _availability = op.native_load_completed(MODEL);
 
     let kinds = published(&engine);
@@ -101,7 +101,7 @@ fn missing_terminal_callback_with_successful_return_submits_no_diagnostic() {
     let engine = install_engine();
     let op = LoadOperation::begin(MODEL);
 
-    scoped(&op).reconcile(&observed(false, false), ModelOpenReturn::Succeeded);
+    scoped(&op).reconcile(Some(&observed(false, false)), ModelOpenReturn::Succeeded);
 
     assert!(contradiction_reasons(&engine).is_empty());
     drop(op);
@@ -117,7 +117,7 @@ fn contradiction_without_a_load_reservation_uses_an_unreserved_ingress() {
         ingress: None,
     };
 
-    reconciliation.reconcile(&observed(true, false), ModelOpenReturn::Failed);
+    reconciliation.reconcile(Some(&observed(true, false)), ModelOpenReturn::Failed);
 
     assert_eq!(contradiction_reasons(&engine).len(), 1);
     clear_runtime_event_engine();
@@ -137,11 +137,38 @@ fn dropped_and_rejected_records_bump_native_health() {
         ..ModelOpenObservation::default()
     };
 
-    reconciliation.reconcile(&observation, ModelOpenReturn::Succeeded);
+    reconciliation.reconcile(Some(&observation), ModelOpenReturn::Succeeded);
 
     let health = engine.health().snapshot();
     assert_eq!(health.dropped_native, 4);
     assert_eq!(health.rejected_native, 1);
     assert!(contradiction_reasons(&engine).is_empty());
+    clear_runtime_event_engine();
+}
+
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
+fn a_load_without_a_summary_raises_a_warning_and_the_terminal_stays_success() {
+    let engine = install_engine();
+    let op = LoadOperation::begin(MODEL);
+
+    scoped(&op).reconcile(None, ModelOpenReturn::Succeeded);
+    let _availability = op.native_load_completed(MODEL);
+
+    let kinds = published(&engine);
+    let warnings = engine
+        .replay()
+        .snapshot()
+        .iter()
+        .filter_map(|frame| match frame.fact.as_ref() {
+            RuntimeFact::Diagnostic(fact) if *fact.kind() == DiagnosticEventKind::WarningRaised => {
+                fact.data().summary.as_ref().map(|s| s.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(warnings, vec![UNOBSERVED_SUMMARY.to_string()]);
+    assert!(contradiction_reasons(&engine).is_empty());
+    assert!(kinds.contains(&"native_model_load_completed"));
     clear_runtime_event_engine();
 }

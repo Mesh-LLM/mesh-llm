@@ -141,7 +141,7 @@ export const REDACTED_SUMMARY_TOKENS: ReadonlySet<string> = new Set([
   '--target',
   '--model-id',
   '--timeout',
-  '--mesh-llm-ref',
+  '--skippy-ref',
   '--status',
   '--logs',
   '--cancel',

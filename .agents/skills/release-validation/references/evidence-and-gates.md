@@ -65,7 +65,8 @@ Add these checks when the delta touches the named surface:
 - **OpenAI frontend/guardrails/tool use/MoA:** schema/error compatibility,
   streaming reconstruction, repeated same-prefix tool loops, `auto` and `mesh`,
   client harness smoke.
-- **Skippy/runtime/ABI/model packaging:** applicable Skippy skill, runtime ABI
+- **Skippy/runtime/ABI/model packaging:** the Skippy repository's own guidance for
+  changes inside Skippy, runtime ABI
   match, package materialization, exact and split inference, cache/session
   behavior, native log review, compatible runtime selection.
 - **CLI/config:** help text, default and explicit precedence, invalid config,

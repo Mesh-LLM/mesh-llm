@@ -15,7 +15,7 @@
 //! without one.
 
 use super::private_invocations::ABANDONED_LINGER;
-use skippy_inference_api::InferenceRequestTier;
+use crate::mesh::request_tier::InferenceRequestTier;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

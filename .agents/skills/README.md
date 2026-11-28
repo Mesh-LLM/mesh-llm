@@ -1,15 +1,18 @@
 # Repo Agent Skills
 
-New skill-local tooling follows the Rust automation rule in
-`manage-ci/SKILL.md`: no new Python helpers, including temporary or inline
-scripts. Extend typed `tools/xtask` commands instead; run an existing check
-from the repository root with `cargo xtool repo-consistency ci-crate-lists`.
-Existing Python-backed instructions remain transitional until their owners
-port and verify them.
+Skippy lives in its own repository (the one pinned in the root `Cargo.toml`).
+Work on Skippy itself, its llama.cpp patches, staged serving, model packages,
+quantization jobs and Skippy benchmarks is done there, with that repository's
+guidance. This repository keeps only what MeshLLM owns: the host, its
+deployment, the mesh, agents, plugins, CI and releases.
+
+`tools/xtask` (`cargo xtool`, `cargo xtask`) was removed from this repository.
+`release-notes` still names it; check that a command or path exists before
+following one.
 
 Skills under `.agents/skills/` are the canonical repo-local skills and are
-auto-picked-up by agents working in this repo. Each is a focused, current
-how-to; deeper reference lives in `docs/`.
+auto-picked-up by agents working in this repo. Each is a focused how-to, but
+not every one is current (see above); deeper reference lives in `mesh/docs/`.
 
 ## Operator Workflows
 
@@ -31,9 +34,9 @@ Ground rules baked into all of these:
 
 Related docs: `mesh/docs/USAGE.md` (install/service/storage), `mesh/docs/CLI.md`
 (commands and model refs), `mesh/docs/MESHES.md` (mesh workflows),
-`mesh/docs/AGENTS.md` (agent clients), `skippy/docs/SKIPPY_SPLITS.md` (big-model splits).
+`mesh/docs/AGENTS.md` (agent clients).
 
 The other directories beside these operator workflows are maintainer-facing
-skills for release validation, release notes, Skippy internals, patch queues,
-benchmarks, CI, plugins, telemetry, and lab work. Plugin-shipped skills install
+skills for release validation, release notes, benchmarks, CI, plugins,
+configuration and telemetry. Plugin-shipped skills install
 via `mesh-llm skills install`.

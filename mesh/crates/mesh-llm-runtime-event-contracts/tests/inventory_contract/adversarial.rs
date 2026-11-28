@@ -5,8 +5,8 @@ use mesh_llm_runtime_event_contracts::all_event_ids;
 use sha2::{Digest, Sha256};
 
 use crate::support::{
-    Inventory, SpecManifest, crate_package_names, inventory_event_ids, load_inventory,
-    load_manifest, repo_root,
+    Inventory, SpecManifest, crate_package_names, inventory_event_ids, is_external_package,
+    is_external_source_path, load_inventory, load_manifest, repo_root,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -88,7 +88,7 @@ fn validate_acceptance(
         .families
         .iter()
         .flat_map(|family| &family.source_paths)
-        .any(|path| !root.join(path).is_file())
+        .any(|path| !is_external_source_path(path) && !root.join(path).is_file())
     {
         return Err(AcceptanceError::InvalidPath);
     }
@@ -97,7 +97,7 @@ fn validate_acceptance(
         .families
         .iter()
         .flat_map(|family| &family.owning_crates)
-        .any(|package| !package_names.contains(package))
+        .any(|package| !is_external_package(package) && !package_names.contains(package))
     {
         return Err(AcceptanceError::InvalidPackage);
     }

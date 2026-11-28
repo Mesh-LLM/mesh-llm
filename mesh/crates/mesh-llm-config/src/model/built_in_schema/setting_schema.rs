@@ -44,7 +44,7 @@ fn request_tier_owners_setting() -> ConfigSettingSchema {
 
 /// Sizes each model's admission budget when the model loads.
 fn local_kv_reserve_setting() -> ConfigSettingSchema {
-    basic_setting(
+    experimental_setting(
         "request_tiers.local_kv_reserve_percent",
         ConfigValueSchema::Integer,
     )

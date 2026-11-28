@@ -278,33 +278,6 @@ fn load_config_through_production_wrapper_rejects_invalid_no_runtime_download_en
     assert!(format!("{err:#}").contains("MESH_LLM_NO_RUNTIME_DOWNLOAD"));
 }
 
-fn documented_matrix_key_paths() -> BTreeSet<String> {
-    let matrix = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../skippy/docs/CONFIGURATION.md"
-    ));
-    matrix
-        .lines()
-        .filter(|line| line.starts_with('|'))
-        .filter_map(|line| {
-            let columns: Vec<_> = line.split('|').map(str::trim).collect();
-            columns.get(3).copied()
-        })
-        .filter(|cell| cell.contains('`'))
-        .flat_map(|cell| {
-            cell.split("<br>")
-                .filter_map(|part| {
-                    let trimmed = part.trim();
-                    trimmed
-                        .strip_prefix('`')
-                        .and_then(|value| value.strip_suffix('`'))
-                })
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 fn test_model(name: &str) -> ModelConfigEntry {
     ModelConfigEntry {
         model: name.into(),
@@ -1717,16 +1690,10 @@ fn integrated_full_surface_fixture_parses_validates_and_tracks_docs() {
         "omitted per-model request defaults should stay absent"
     );
 
-    let matrix = include_str!(concat!(
+    let reference = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../skippy/docs/CONFIGURATION.md"
+        "/../../website/src/docs/pages/config-reference.md"
     ));
-    let matrix_keys = documented_matrix_key_paths();
-    assert!(
-        matrix_keys.len() >= 100,
-        "expected a substantial canonical key-path set, found {}",
-        matrix_keys.len()
-    );
     for key in [
         "model_fit.ctx_size",
         "model_fit.prefix_cache.max_entries",
@@ -1738,13 +1705,14 @@ fn integrated_full_surface_fixture_parses_validates_and_tracks_docs() {
         "multimodal.mmproj",
         "advanced.server.alias",
     ] {
-        assert!(matrix.contains(key), "missing matrix doc entry {key}");
+        assert!(
+            reference.contains(key),
+            "missing config reference entry {key}"
+        );
     }
 
-    let docs_readme = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/README.md"));
     let usage = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/USAGE.md"));
     let cli = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/CLI.md"));
-    assert!(docs_readme.contains("[skippy/CONFIGURATION.md](../../skippy/docs/CONFIGURATION.md)"));
     assert!(usage.contains("request payload values still win"));
     assert!(cli.contains("Request defaults only fill absent or null request fields"));
     assert!(cli.contains("Staged-only controls stay staged-only."));

@@ -153,7 +153,7 @@ pub(super) fn is_redacted_marker(token: &str) -> bool {
             | "--target"
             | "--model-id"
             | "--timeout"
-            | "--mesh-llm-ref"
+            | "--skippy-ref"
             | "--status"
             | "--logs"
             | "--cancel"

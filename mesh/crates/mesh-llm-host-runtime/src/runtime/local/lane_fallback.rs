@@ -226,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs Skippy #189 (a native failure stays typed once its log lines are attached); the pinned v0.80.1 lacks it"]
     fn a_failure_carrying_its_native_log_lines_still_retries_with_one_lane() {
         // The shape `with_last_native_error` gives an open failure when native
         // logging captured the cause.

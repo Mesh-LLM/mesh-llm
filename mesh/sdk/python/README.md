@@ -67,9 +67,9 @@ UniFFI output is preserved apart from trailing whitespace normalization.
 After regenerating bindings, update the matching file hash in `sdk-inputs.json`;
 for `mesh_ffi.py`, use the SHA-256 of
 `src/meshllm/_generated/mesh_ffi.py` for the
-`files["src/meshllm/_generated/mesh_ffi.py"]` entry. Verify the updated source
-manifest from the repository root with
-`cargo xtool automation smoke-observation sdk-source --kind root`.
+`files["src/meshllm/_generated/mesh_ffi.py"]` entry. The
+`cargo xtool` command that verified this manifest was removed with
+`tools/xtask`; nothing replaces it yet.
 The component tests above use mock handles; the binding tests require the real
 sibling bridge and test checksum refusal and native version readback without
 constructing a node or starting services. Neither test suite qualifies model

@@ -1212,7 +1212,6 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 &ctx.config.gpu,
             ),
             local_source_required: extra_model.local_source_required,
-            allow_uncertified_split: ctx.options.allow_uncertified_split,
             split_topology_lock: ctx.options.split_topology_lock.clone(),
             placement: super::placement_policy_for(ctx.options),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),

@@ -1,5 +1,0 @@
-{
-  "code": 0,
-  "stderr": "",
-  "stdout": "usage: runner-image-identity.py seed-key [-h] --recipe-hash RECIPE_HASH\n\noptions:\n  -h, --help            show this help message and exit\n  --recipe-hash RECIPE_HASH\n"
-}

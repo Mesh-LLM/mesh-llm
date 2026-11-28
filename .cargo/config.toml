@@ -1,8 +1,11 @@
+# Local Skippy override written by scripts/skippy-source.sh; absent by default.
+include = [{ path = "skippy-local.toml", optional = true }]
+
+[net]
+git-fetch-with-cli = true
+
 [build]
 rustc-wrapper = "sccache"
-
-[alias]
-xtool = "run --locked -p xtask --"
 
 [target.aarch64-apple-darwin]
 linker = "scripts/cargo-linker"

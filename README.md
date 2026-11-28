@@ -13,25 +13,25 @@ OpenAI-compatible API at `http://localhost:9337/v1`. Start one node, add more
 nodes later, and let the mesh decide whether a model runs locally, routes to a
 peer, or uses Skippy stage splits for models that are too large for one box.
 
-## Mesh and standalone Skippy
+## Mesh and Skippy
 
-[Skippy](skippy/README.md) owns model management, native inference, split
-execution and OpenAI serving. [Mesh](mesh/README.md) adds peer discovery,
-transport, routing, plugins and the console around the same Skippy serving
-implementation.
+[Skippy](https://github.com/Mesh-LLM/skippy/blob/main/README.md) owns model management, native inference, split
+execution and OpenAI serving. It lives in its own repository,
+[Mesh-LLM/skippy](https://github.com/Mesh-LLM/skippy). [Mesh](mesh/README.md)
+adds peer discovery, transport, routing, plugins and the console around the
+same Skippy serving implementation.
 
-The source lives in those two product trees. They share one root Cargo workspace
-and lockfile. Product crates, authored docs, scripts and evaluations live with
-their owner; Mesh also owns the website and SDKs. Root `docs/` is generated
-website output.
+This repository holds Mesh only: the host, console, website and SDKs. It uses
+the Skippy crates as Git dependencies pinned in the root `Cargo.toml`, and loads
+Skippy's native runtime at run time instead of linking it.
 
-Bare `just` (or `just build`) builds the standalone Skippy product (patched
-llama.cpp runtime and `skippy` CLI) first, then the MeshLLM host and console.
-Use `just skippy` to build Skippy alone, `just mesh` to rebuild only MeshLLM,
-or `just skippy-cli-build` for only the Skippy CLI. Skippy's separately packaged
-native runtime can be supplied with `--runtime-bundle`. See
-[Skippy configuration](skippy/docs/CONFIGURATION.md)
-and [split serving](skippy/docs/SKIPPY_SPLITS.md).
+Bare `just` (or `just build`) builds everything needed to run a model: it
+downloads the native runtime the pinned Skippy release published for this
+machine (or builds it from source when there is none), then builds the MeshLLM
+host and console. Another runtime can be
+supplied with `--runtime-bundle`. See
+[Skippy configuration](https://github.com/Mesh-LLM/skippy/blob/main/docs/CONFIGURATION.md)
+and [split serving](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md).
 
 ## Quick start
 
@@ -113,7 +113,7 @@ mesh-llm serve --auto --headless
 | Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](mesh/docs/MESHES.md) |
 | Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](mesh/docs/MESHES.md) |
 | Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](mesh/docs/MESHES.md) |
-| Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) |
+| Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md) |
 | Run DeepSeek V4 and other ds4 models with DwarfStar | `mesh-llm plugins install Mesh-LLM/ds4-plugin` | [Setup and configuration](mesh/docs/plugins/dwarfstar.md) |
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
 | Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/plugins/virtual-models.md](mesh/docs/plugins/virtual-models.md) |
@@ -196,21 +196,23 @@ installed virtual-model plugin can override `mesh` the same way.
 
 ## Supported model families
 
-Mesh LLM's Skippy runtime tracks llama.cpp family parity with reviewed GGUF
-representatives. The current reviewed support set covers 72 P0/P1 family rows,
-with 89 certified rows in the full parity inventory, including Qwen, Llama,
-Gemma, Mistral, DeepSeek, GLM, MiniMax, Phi, Granite, Hunyuan, EXAONE, Cohere,
-Falcon, RWKV, and many others.
+MeshLLM runs models on [Skippy](https://github.com/Mesh-LLM/skippy), its
+inference engine. Skippy tracks llama.cpp family parity with reviewed GGUF
+representatives. The reviewed support set covers 72 P0/P1 family rows, with 89
+certified rows in the full parity inventory, including Qwen, Llama, Gemma,
+Mistral, DeepSeek, GLM, MiniMax, Phi, Granite, Hunyuan, EXAONE, Cohere, Falcon,
+RWKV, and many others.
 
 Split multimodal serving is certified for Qwen2-VL, Qwen3-VL,
 Qwen3-VL-MoE, HunyuanOCR/Hunyuan-VL, and DeepSeek-OCR using real GGUF plus
 projector fixtures. DeepSeek3 and EXAONE-MoE use package-backed stages because
 the full GGUFs are too large for the cheap local baseline.
 
-See [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) for the full
-artifact, split, wire dtype, cache policy, and exception matrix. See
-[docs/skippy/LLAMA_PARITY.md](skippy/docs/LLAMA_PARITY.md) for the remaining
-llama.cpp parity queue.
+These counts were current when Skippy moved to its own repository. For the
+up-to-date list, see Skippy's [FAMILY_STATUS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_STATUS.md): the
+full artifact, split, wire dtype, cache policy, and exception matrix. See
+[LLAMA_PARITY.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LLAMA_PARITY.md) for the remaining llama.cpp parity
+queue.
 
 ## Install and build notes
 
@@ -238,25 +240,24 @@ Source builds require `just`, `cmake`, Rust, `sccache`, the platform fast linker
 these defaults from the checked-in configuration, including plain `cargo
 build`. See [CONTRIBUTING.md](CONTRIBUTING.md) for installation commands and
 linker fallback behavior. To exercise the release boundary locally, build the
-neutral host and one runtime:
+neutral host and point it at a Skippy runtime bundle built or downloaded from
+the Skippy repository:
 
 ```bash
 just release-host-build
-just release-runtime-build metal # or cpu, cuda, rocm, vulkan
-MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR=/path/to/skippy/native-runtimes \
 MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(mktemp -d)" \
   ./target/release/mesh-llm runtime list
 ```
 
-CUDA runtimes need `nvcc`, ROCm runtimes need ROCm/HIP, and Vulkan runtimes need
-Vulkan development files plus `glslc`. See
-[docs/design/NATIVE_RUNTIMES.md](skippy/docs/design/NATIVE_RUNTIMES.md) for the
+Runtimes are built in the Skippy repository. See
+[docs/design/NATIVE_RUNTIMES.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/design/NATIVE_RUNTIMES.md) for the
 manifest, discovery, and compatibility contract.
 
 The shipped `mesh-llm` executable uses embedded release attestation for
 provenance and admission hardening only. It does not apply to SDK, XCFramework,
 or other native artifacts, and it is not a runtime integrity proof. Verify a
-stamped packaged executable with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+stamped packaged executable with `cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
 A packaged release binary reports `valid`, an unstamped local or dev build
 reports `missing`, and a binary that changed after packaging reports `invalid`.
 Bare `inspect --binary ...` is only enough to classify an unstamped binary as
@@ -365,8 +366,8 @@ mesh-llm --llama-flavor cuda serve \
 | Doc | Use it for |
 |---|---|
 | [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
-| [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
-| [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
+| [docs/SKIPPY_SPLITS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
+| [docs/LAYER_PACKAGE_REPOS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
 | [docs/AGENTS.md](mesh/docs/AGENTS.md) | Goose, Claude Code, OpenCode, Pi, curl, and blackboard |
 | [docs/EXO_COMPARISON.md](mesh/docs/EXO_COMPARISON.md) | Balanced comparison with Exo |
 | [docs/CLI.md](mesh/docs/CLI.md) | Command reference and JSON automation |
@@ -374,8 +375,7 @@ mesh-llm --llama-flavor cuda serve \
 | [docs/design/TESTING.md](mesh/docs/design/TESTING.md) | Testing playbook, mixed-version QA, remote deploy checks |
 | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
 | [docs/plugins/dwarfstar.md](mesh/docs/plugins/dwarfstar.md) | DwarfStar (ds4) alternative engine setup on Apple Silicon |
-| [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) | Certified Skippy model-family status |
-| [docs/specs/layer-package-repos.md](skippy/docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
+| [docs/skippy/FAMILY_STATUS.md](https://github.com/Mesh-LLM/skippy/blob/main/docs/FAMILY_STATUS.md) | Certified Skippy model-family status |
 | [docs/specs/mesh-setup-installer.md](mesh/docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
 
 ## CI infrastructure
@@ -390,9 +390,7 @@ mesh-llm --llama-flavor cuda serve \
 
 Trusted `main` Linux jobs may use [Depot's managed GitHub Actions
 runners](https://depot.dev/docs/github-actions/overview) through the checked-in
-runner policy. Pull requests remain on GitHub-hosted runners until the cache
-isolation and protected-workflow gates in [`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md)
-are proven. Hardware-qualified GPU tests remain on dedicated runners.
+runner policy. Pull requests remain on GitHub-hosted runners. Hardware-qualified GPU tests remain on dedicated runners.
 
 ## Community
 

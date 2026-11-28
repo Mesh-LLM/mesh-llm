@@ -25,7 +25,7 @@ machine is running unmodified official code with trusted hardware or OS state.
 The release-signing trust root is separate from owner trust, and the embedded
 release attestation applies only to the shipped `mesh-llm` executable, not SDK,
 XCFramework, or other native artifacts. Verify stamped packaged binaries with
-`cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`. `missing`
+`cargo run -p mesh-llm-release-attestation -- inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`. `missing`
 is normal for unstamped local and dev builds, `valid` means the packaged binary
 matches a trusted release signer, and `invalid` means the bytes changed after
 packaging. Bare `inspect --binary ...` is only sufficient for unstamped

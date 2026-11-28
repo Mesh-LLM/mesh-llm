@@ -488,8 +488,6 @@ fn client_excluded_arg(id: &str) -> bool {
             | "gguf"
             | "memberships_config"
             | "mmproj"
-            | "checkpoint_quantization"
-            | "checkpoint_imatrix"
             | "local_model_only"
             | "native_serving_plugin"
             | "native_serving_plugin_config"
@@ -499,7 +497,6 @@ fn client_excluded_arg(id: &str) -> bool {
             | "draft_max"
             | "no_draft"
             | "split"
-            | "allow_uncertified_split"
             | "split_topology_lock"
             | "auto_balance"
             | "ctx_size"
@@ -785,12 +782,6 @@ mod tests {
         assert!(find_child(serve, "--model").global == Some(false));
         assert!(serve.children.iter().all(|child| child.name != "--plugin"));
         assert!(client.children.iter().all(|child| child.name != "--model"));
-        assert!(
-            client
-                .children
-                .iter()
-                .all(|child| child.name != "--checkpoint-quantization")
-        );
         assert!(client.children.iter().all(|child| child.name != "--client"));
         assert!(client.children.iter().all(|child| child.name != "--plugin"));
         assert!(find_child(client, "--auto").path == "mesh-llm client --auto");

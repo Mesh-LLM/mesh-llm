@@ -1,6 +1,6 @@
 # MeshLLM Agent Notes
 
-These instructions apply under `mesh/` in addition to the root `AGENTS.md`. Paths and `just` commands below are relative to the workspace root. Mesh depends on Skippy; do not move Skippy-native behavior into Mesh crates.
+These instructions apply under `mesh/` in addition to the root `AGENTS.md`. Paths and `just` commands below are relative to the workspace root. MeshLLM depends on Skippy, which lives in its own repository; do not move Skippy-native behavior into Mesh crates.
 
 ## Key docs
 
@@ -27,7 +27,7 @@ maintained examples synchronized with the native FFI surface.
 
 ## Public Website
 
-The maintained website source lives in `mesh/website/`. Eleventy writes generated static-hosting output into root `docs/`; authored documentation lives under `mesh/docs/` and `skippy/docs/`. Do not hand-edit generated website files.
+The maintained website source lives in `mesh/website/`. Eleventy writes generated static-hosting output into root `docs/`; authored documentation lives under `mesh/docs/`. Do not hand-edit generated website files.
 
 ```bash
 just website-build # build website and crate API docs into root docs/
@@ -40,14 +40,14 @@ The build runs Tailwind, Eleventy and Pagefind. It copies website source assets 
 
 ## Building and packaging
 
-- `just mesh` builds only the backend-neutral MeshLLM host and console. It consumes Skippy's separately packaged runtime and does not compile a backend into the host.
-- Bare `just` builds Skippy first, then MeshLLM. `just release-build` does the same for release products. `just release-host-build` builds only the release host.
-- `just bundle` creates a portable product tarball. `just release-bundle vX.Y.Z <output>` packages the release host and one selected runtime under `native-runtimes/`.
+- `just build` (or bare `just`) downloads the runtime for this machine published by the Skippy release pinned in `Cargo.toml`, into `target/debug/native-runtimes` (building it from source only when that release has no package for the machine and backend, another Skippy source is selected with `scripts/skippy-source.sh`, or `MESH_LLM_RUNTIME_FROM_SOURCE=1` is set), then the backend-neutral MeshLLM host and console. `just mesh` builds the host and console alone. No backend is compiled into the host: it loads the runtime beside it, and downloads one from the pinned Skippy release when none is installed.
+- `just release-build` (the same as `just release-host-build`) builds the release host.
+- `just bundle` creates a portable product tarball, selecting the pinned Skippy release's default runtime unless `MESH_LLM_NATIVE_RUNTIME_DIR` supplies one. `just release-bundle vX.Y.Z <output>` packages the release host with the runtime supplied in `MESH_LLM_NATIVE_RUNTIME_DIR` under `native-runtimes/`, and writes `host-imports.json` beside the host.
 - `just ui-dev` starts Vite; `just ui-clean` clears stale UI installs; `just stop`, `just test`, and `just auto` operate on the local MeshLLM runtime.
 
 A release binary left in `target/release/mesh-llm` may predate the latest debug build. Its presence does not prove it contains current code; rerun `just release-build` when in doubt. For serious testing and deployment, use a composed release product.
 
-The host dependency policy is enforced by `cargo xtool native verify-host-dependencies`. Release, installer, SDK, native-package, and image lanes must not bypass it or copy backend libraries beside the host. For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
+The host dependency policy is enforced by `scripts/check-host-imports.sh`: the host must not link CUDA, ROCm, Vulkan, Metal, ggml or llama, and on Linux must stay within `scripts/linux-glibc-floor.txt`. The release packaging scripts and `release.yml` run it; do not bypass it or copy backend libraries beside the host. It has run for real only on macOS so far (see `RELEASE.md`). For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
 
 ### npm "Exit handler never called" error
 
@@ -404,9 +404,10 @@ See `RELEASE.md` for the full process.
 Prepare the canonical version update through a PR when `main` requires
 pull requests and checks. After it merges, run `just release v0.X.Y` from
 clean, current `main` to dispatch the **Release** workflow. The workflow
-reapplies the version update, builds and verifies the full artifact matrix,
-prepares the generated Swift and SDK console resources, and publishes the
-immutable GitHub release. It is dispatch-only; manually pushing a tag does not
+reapplies the version update, builds, signs and checks one host archive per platform and the Swift, Kotlin
+and Node SDK artifacts, and publishes the immutable GitHub release. It
+currently refuses a real release in its first job while the checks listed in
+`RELEASE.md` are missing. It is dispatch-only; manually pushing a tag does not
 start a release. Follow `RELEASE.md` for candidate, final, and canary behavior.
 
 ### Installer checksum sidecars

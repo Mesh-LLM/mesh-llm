@@ -222,229 +222,16 @@ platform_error_message() {
     esac
 }
 
-tegra_model_text() {
-    if [[ -n "${MESH_LLM_TEST_TEGRA_MODEL:-}" ]]; then
-        printf '%s\n' "$MESH_LLM_TEST_TEGRA_MODEL"
-        return 0
-    fi
-
-    local path
-    for path in \
-        /proc/device-tree/model \
-        /proc/device-tree/compatible \
-        /sys/firmware/devicetree/base/model \
-        /sys/firmware/devicetree/base/compatible; do
-        [[ -r "$path" ]] || continue
-        tr '\0' '\n' <"$path" 2>/dev/null || true
-        printf '\n'
-    done
-}
-
-probe_tegra_nvidia() {
-    local model
-    model="$(tegra_model_text | tr '[:lower:]' '[:upper:]')"
-    case "$model" in
-        *JETSON*|*TEGRA*|*ORIN*|*NVGPU*|*THOR*) return 0 ;;
-    esac
-
-    [[ -e /dev/nvhost-gpu ]] || [[ -e /dev/nvhost-ctrl-gpu ]]
-}
-
-probe_nvidia() {
-    command -v nvidia-smi >/dev/null 2>&1 ||
-        command -v nvcc >/dev/null 2>&1 ||
-        [[ -e /dev/nvidiactl ]] ||
-        [[ -d /proc/driver/nvidia/gpus ]] ||
-        probe_tegra_nvidia
-}
-
-probe_rocm() {
-    command -v rocm-smi >/dev/null 2>&1 ||
-        command -v rocminfo >/dev/null 2>&1 ||
-        command -v hipcc >/dev/null 2>&1 ||
-        [[ -x /opt/rocm/bin/hipcc ]]
-}
-
-probe_vulkan() {
-    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary >/dev/null 2>&1; then
-        return 0
-    fi
-    if command -v glslc >/dev/null 2>&1; then
-        if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan 2>/dev/null; then
-            return 0
-        fi
-        if [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
-            return 0
-        fi
-        if [[ -n "${VULKAN_SDK:-}" ]]; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-supported_flavors() {
-    case "$(platform_support_status)" in
-        supported)
-            case "$(platform_id)" in
-                Darwin/arm64) printf 'metal\n' ;;
-                Linux/aarch64) printf 'cuda cpu\n' ;;
-                Linux/x86_64) printf 'cuda rocm vulkan cpu\n' ;;
-                *) platform_error_message >&2; return 1 ;;
-            esac
-            ;;
-        *)
-            platform_error_message >&2
-            return 1
-            ;;
-    esac
-}
-
-recommended_flavor() {
-    case "$(platform_support_status)" in
-        supported)
-            case "$(platform_id)" in
-                Darwin/arm64) printf 'metal\n' ;;
-                Linux/aarch64)
-                    if probe_nvidia; then
-                        printf 'cuda\n'
-                    else
-                        printf 'cpu\n'
-                    fi
-                    ;;
-                Linux/x86_64)
-                    if probe_nvidia; then
-                        printf 'cuda\n'
-                    elif probe_rocm; then
-                        printf 'rocm\n'
-                    elif probe_vulkan; then
-                        printf 'vulkan\n'
-                    else
-                        printf 'cpu\n'
-                    fi
-                    ;;
-                *) platform_error_message >&2; return 1 ;;
-            esac
-            ;;
-        *)
-            platform_error_message >&2
-            return 1
-            ;;
-    esac
-}
-
-cuda_library_major() {
-    local library="$1"
-    local probe_root="${MESH_LLM_TEST_CUDA_PROBE_ROOT:-}"
-    local major=""
-    local lib
-
-    major="$(ldconfig -p 2>/dev/null | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | sort -rn | head -n 1 || true)"
-    if [[ -n "$major" ]]; then
-        printf '%s\n' "$major"
-        return 0
-    fi
-
-    for lib in \
-        "$probe_root"/usr/local/cuda*/lib64/"$library".so.* \
-        "$probe_root"/usr/local/cuda*/targets/*/lib/"$library".so.*; do
-        if [[ -f "$lib" ]]; then
-            major="$(basename "$lib" | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | head -n 1 || true)"
-            if [[ -n "$major" ]]; then
-                printf '%s\n' "$major"
-                return 0
-            fi
-        fi
-    done
-
-    printf '\n'
-}
-
-detect_cuda_major() {
-    local ver=""
-    if [[ "${MESH_LLM_TEST_CUDA_MAJOR+x}" == x ]]; then
-        # Platform fixtures must not depend on the CUDA installation of the host
-        # running the test.
-        ver="$MESH_LLM_TEST_CUDA_MAJOR"
-    else
-        local driver_max=""
-        local cudart_major
-        local cublas_major
-        local cublas_lt_major
-
-        # nvidia-smi reports the maximum CUDA major supported by the driver.
-        # Prefer a complete toolkit when one is installed, but keep the driver
-        # value as the fallback because Linux CUDA runtime packages now carry
-        # their redistributable toolkit libraries.
-        if command -v nvidia-smi >/dev/null 2>&1; then
-            driver_max="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
-            if [[ -n "$driver_max" ]] && (( driver_max > 13 )); then
-                driver_max=13
-            fi
-        fi
-
-        cudart_major="$(cuda_library_major libcudart)"
-        cublas_major="$(cuda_library_major libcublas)"
-        cublas_lt_major="$(cuda_library_major libcublasLt)"
-        if [[ -n "$cudart_major" && "$cudart_major" == "$cublas_major" && "$cudart_major" == "$cublas_lt_major" ]]; then
-            ver="$cudart_major"
-            if [[ -n "$ver" ]] && (( ver > 13 )); then
-                ver=13
-            fi
-            if [[ -n "$driver_max" ]] && (( ver > driver_max )); then
-                ver=""
-            fi
-        fi
-        if [[ -z "$ver" ]]; then
-            ver="$driver_max"
-        fi
-    fi
-    case "$ver" in
-        12|13) printf '%s\n' "$ver" ;;
-        *) printf '\n' ;;
-    esac
-}
-
+# Every release has one host archive per platform. The GPU runtime, when a
+# machine has a GPU, is downloaded by `mesh-llm setup`, so the archive does not
+# depend on what hardware is present.
 asset_name() {
-    local flavor="$1"
     case "$(platform_support_status)" in
         supported)
             case "$(platform_id)" in
                 Darwin/arm64) printf 'mesh-llm-aarch64-apple-darwin.tar.gz\n' ;;
-                Linux/aarch64)
-                    case "$flavor" in
-                        cpu) printf 'mesh-llm-aarch64-unknown-linux-gnu.tar.gz\n' ;;
-                        cuda)
-                            local cuda_major
-                            cuda_major="$(detect_cuda_major)"
-                            if [[ -z "$cuda_major" ]]; then
-                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
-                                echo "       install a CUDA toolkit, or re-run with --flavor cpu to use a non-CUDA build." >&2
-                                return 1
-                            fi
-                            printf 'mesh-llm-aarch64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            ;;
-                        *) echo "error: unsupported aarch64 flavor '$flavor'" >&2; return 1 ;;
-                    esac
-                    ;;
-                Linux/x86_64)
-                    case "$flavor" in
-                        cpu) printf 'mesh-llm-x86_64-unknown-linux-gnu.tar.gz\n' ;;
-                        cuda)
-                            local cuda_major
-                            cuda_major="$(detect_cuda_major)"
-                            if [[ -z "$cuda_major" ]]; then
-                                echo "error: detected an NVIDIA GPU but could not determine a supported CUDA major version (expected 12 or 13)." >&2
-                                echo "       install a CUDA toolkit, or re-run with --flavor cpu (or --flavor vulkan) to use a non-CUDA build." >&2
-                                return 1
-                            fi
-                            printf 'mesh-llm-x86_64-unknown-linux-gnu-cuda-%s.tar.gz\n' "$cuda_major"
-                            ;;
-                        rocm) printf 'mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz\n' ;;
-                        vulkan) printf 'mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz\n' ;;
-                        *) echo "error: unsupported Linux flavor '$flavor'" >&2; return 1 ;;
-                    esac
-                    ;;
+                Linux/aarch64) printf 'mesh-llm-aarch64-unknown-linux-gnu.tar.gz\n' ;;
+                Linux/x86_64) printf 'mesh-llm-x86_64-unknown-linux-gnu.tar.gz\n' ;;
                 *) platform_error_message >&2; return 1 ;;
             esac
             ;;
@@ -833,7 +620,7 @@ main() {
     need_cmd mktemp
 
     local asset
-    asset="$(asset_name "$(recommended_flavor)")"
+    asset="$(asset_name)"
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"

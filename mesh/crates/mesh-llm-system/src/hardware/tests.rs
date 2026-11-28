@@ -1061,6 +1061,7 @@ fn test_macos_reads_system_ram() {
 // skippy probe override cannot be consumed by an unrelated query test.
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[ignore = "needs a packaged Skippy runtime; run with `just test-with-runtime <runtime-dir>`"]
 #[serial(real_collector)]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_runtime::test_support::require_native_runtime();
@@ -1085,6 +1086,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[ignore = "needs a packaged Skippy runtime; run with `just test-with-runtime <runtime-dir>`"]
 #[serial(real_collector)]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_runtime::test_support::require_native_runtime();

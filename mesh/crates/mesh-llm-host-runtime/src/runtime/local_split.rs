@@ -191,11 +191,6 @@ pub(super) async fn start_runtime_split_model(
         }
     };
     let preindexed_compact_meta = split_runtime_compact_meta(&preindexed_package).await?;
-    let split_certification = skippy::require_split_certification(
-        &preindexed_package,
-        &preindexed_compact_meta.architecture,
-        spec.allow_uncertified_split,
-    )?;
     let coordinator_start = elect_split_start_coordinator(
         &spec,
         model_ref,
@@ -292,7 +287,6 @@ pub(super) async fn start_runtime_split_model(
         projector_path: projector_path.clone(),
         ctx_size,
         compact_meta: &compact_meta,
-        split_certification,
         capacity_budget_bytes: spec.capacity_budget_bytes,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
@@ -321,7 +315,6 @@ pub(super) async fn start_runtime_split_model(
         runtime_profile: spec.runtime_profile.to_string(),
         package: package.clone(),
         compact_meta: compact_meta.clone(),
-        split_certification,
         active,
         projector_path,
         ctx_size,
