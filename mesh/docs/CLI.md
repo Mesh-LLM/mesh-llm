@@ -861,11 +861,16 @@ alias for scripts that used the older singular spelling.
 
 Subcommands:
 
-- `plugins install <REFERENCE>`: install from a catalog name, GitHub
-  `owner/repository`, or GitHub URL.
+- `plugins install <REFERENCE>...`: install one or more plugins from catalog
+  names, GitHub `owner/repository` references, or GitHub URLs. References are
+  installed in the order given; the command stops at the first failure and
+  keeps the installs of other plugins that already succeeded. Two references
+  to the same plugin share one install directory and metadata record, so the
+  later reference replaces the earlier version. To install plugins together,
+  list them in one command: `mesh-llm plugins install <NAME> <NAME>`.
 - `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:
   install a local `.tar.gz` or `.zip` release archive. `--name` is required;
-  `--version` defaults to `dev`. These flags conflict with `<REFERENCE>`.
+  `--version` defaults to `dev`. These flags conflict with `<REFERENCE>...`.
 - `plugins update <NAME>`: install the latest compatible release for an
   installed plugin.
 - `plugins enable <NAME>`: mark an installed plugin runnable by mesh-llm.
