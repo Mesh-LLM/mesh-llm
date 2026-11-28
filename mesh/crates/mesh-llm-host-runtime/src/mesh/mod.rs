@@ -98,6 +98,7 @@ mod operational_logging;
 mod owner_control;
 mod owner_control_response;
 mod owner_lifecycle_cache;
+pub(crate) mod peer_evidence;
 mod peer_state;
 mod plugin_config;
 pub(crate) mod plugin_keys;

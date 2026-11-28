@@ -66,8 +66,7 @@ pub(super) async fn shutdown_run_auto_services(
 ) {
     node.shutdown_control_listener().await;
     plugin_manager.shutdown().await;
-    // Release plugin runner references before an embedded restart.
-    drop(node.take_plugin_manager().await);
+    // close_endpoint releases the stopped plugin manager after work transports close.
     api_proxy_handle.abort();
     let _ = api_proxy_handle.await;
     if let Some(handle) = console_server_handle {

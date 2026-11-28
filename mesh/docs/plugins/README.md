@@ -1405,6 +1405,41 @@ Every change is published once, as JSON, on the local channel
 `until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
 history of changes, and no shared lists.
 
+## Peer Evidence
+
+A plugin can make a node route inference only to providers whose evidence it
+accepts, such as a payment bond. It declares
+`mesh_llm_plugin::peer_evidence::peer_evidence_verifier(namespace, handler)` in
+its manifest (`PluginManifest.peer_evidence_verifier`), and the host asks that
+handler about each provider's evidence over the operation transport. A node
+runs at most one verifier; it must start eagerly from an OS-authenticated
+process, and a restart must declare the same namespace and handler.
+
+The plugin publishes this node's own evidence with the `PublishPeerEvidence`
+host request: `{"evidence": ...}` puts a JSON value of at most 1,024 encoded
+bytes into the node's signed record under the declared namespace, and
+`{"evidence": null}` stops publishing it. A request sent before the node is
+ready fails and is not queued, so a plugin sends it again until it succeeds.
+Withdrawing does not revoke: a peer that has not yet received the record
+without the evidence may rely on it until its verdict expires.
+
+While a verifier is loaded, the host takes third-party peer descriptions only
+from origin-signed records, and relays, lists and routes inference only to
+providers whose evidence the verifier currently accepts; pure clients need no
+verdict. This applies to the node's own mesh: additional mesh memberships do
+not apply the verifier. Verification runs in the background and routing reads
+cached verdicts.
+If the verifier never initializes, the node runs without one, so no provider
+is checked; once it has initialized, the node keeps enforcing its declaration,
+even while the plugin restarts.
+
+The host advertises the `peer_evidence.v1` host capability in its
+`InitializeRequest`. The request and result types, deadlines and failure
+handling are in the
+[plugin contract](../../crates/mesh-llm-plugin/README.md#peer-evidence-verification),
+and the host's enforcement in the
+[host runtime README](../../crates/mesh-llm-host-runtime/README.md#provider-evidence).
+
 ## Status Contributions
 
 A plugin can add a snapshot of its own to the node's `GET /api/status`, so

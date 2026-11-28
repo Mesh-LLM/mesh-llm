@@ -531,6 +531,12 @@ async fn build_publish_listing(
     name: Option<String>,
     region: Option<String>,
 ) -> MeshListing {
+    // Providers without accepted evidence count as members but are not
+    // advertised.
+    let node_count = non_client_peer_count(peers) + 1;
+    let mut listed = peers.to_vec();
+    node.filter_current_peer_evidence(&mut listed).await;
+    let peers = listed.as_slice();
     let serving = collect_actually_serving_models(node, peers).await;
     let served_set: std::collections::HashSet<&str> = serving.iter().map(String::as_str).collect();
     let wanted = collect_wanted_models(node, &served_set).await;
@@ -541,7 +547,6 @@ async fn build_publish_listing(
         .map(|peer| peer.vram_bytes)
         .sum::<u64>()
         + node.vram_bytes();
-    let node_count = non_client_peer_count(peers) + 1;
     // A thin client tunnels HTTP to the invite endpoint, which answers only
     // when this node itself serves a model; a client or an idle worker
     // replies 503 (#2765).

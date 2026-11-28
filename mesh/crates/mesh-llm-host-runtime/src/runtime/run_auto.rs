@@ -856,7 +856,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
         options,
     )))
     .await;
-    node.start_accepting();
     node.set_display_name(node_display_name(options, &node))
         .await;
 
@@ -883,6 +882,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
         .await?;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
+    node.start_accepting();
     Ok((node, channels, plugin_manager))
 }
 

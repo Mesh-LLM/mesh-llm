@@ -161,8 +161,12 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
     // plugin declares is never routed to (`routing_table`, `routable_peers`),
     // so its provider is listed as unavailable here: `/v1/models` drops it,
     // while the catalog keeps the advertisement and its `requires` so a
-    // consumer can see what the node is missing.
+    // consumer can see what the node is missing. Likewise a provider whose
+    // signed evidence a verifier has not accepted is listed as unavailable.
     let supported_channels = node.supported_model_channels(&peers).await;
+    let mut eligible = peers.clone();
+    node.filter_current_peer_evidence(&mut eligible).await;
+    let eligible: BTreeSet<_> = eligible.iter().map(|peer| peer.id).collect();
     for (peer, live) in peers.into_iter().zip(liveness) {
         let mut names: BTreeSet<_> = peer.serving_models.iter().cloned().collect();
         names.extend(peer.hosted_models.iter().cloned());
@@ -185,6 +189,7 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
         for name in names {
             let available = live
                 && !paused
+                && eligible.contains(&peer.id)
                 && mesh::routes_http_model(&peer, &name)
                 && !mesh::model_requires_unsupported_channel(&peer, &name, &supported_channels);
             insert_observations(

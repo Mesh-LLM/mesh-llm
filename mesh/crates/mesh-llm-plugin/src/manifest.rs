@@ -39,6 +39,7 @@ pub enum ManifestEntry {
     MeshEventSubscription(proto::MeshEventSubscriptionManifest),
     WebUi(proto::PluginWebUiManifest),
     OpenAiExchangeHook(proto::OpenAiExchangeHookManifest),
+    PeerEvidenceVerifier(proto::PeerEvidenceVerifierManifest),
     PluginStatus(proto::PluginStatusManifest),
     InferenceObservation(proto::InferenceObservationManifest),
 }
@@ -89,6 +90,9 @@ impl PluginManifestBuilder {
             ManifestEntry::WebUi(web_ui) => self.manifest.web_ui = Some(web_ui),
             ManifestEntry::OpenAiExchangeHook(hook) => {
                 self.manifest.openai_exchange_hook = Some(Box::new(hook))
+            }
+            ManifestEntry::PeerEvidenceVerifier(verifier) => {
+                self.manifest.peer_evidence_verifier = Some(verifier)
             }
             ManifestEntry::PluginStatus(status) => self.manifest.plugin_status = Some(status),
             ManifestEntry::InferenceObservation(observation) => {

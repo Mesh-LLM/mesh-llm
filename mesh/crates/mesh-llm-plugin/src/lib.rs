@@ -14,6 +14,7 @@ mod manifest;
 pub mod models;
 pub mod openai_exchange;
 pub mod operation_binding;
+pub mod peer_evidence;
 pub mod plugin_status;
 pub mod request_transform;
 mod runtime;

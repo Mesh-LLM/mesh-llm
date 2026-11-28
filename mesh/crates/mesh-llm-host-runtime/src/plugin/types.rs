@@ -24,6 +24,8 @@ pub enum PluginMeshEvent {
     },
     IdentityService {
         plugin_id: String,
+        /// The plugin connection that sent the request.
+        generation: u64,
         request: proto::RpcRequest,
         response_tx: oneshot::Sender<Result<proto::RpcResponse, proto::ErrorResponse>>,
     },

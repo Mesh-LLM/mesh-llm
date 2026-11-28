@@ -8,6 +8,12 @@ binary.
 This crate is being split so reusable CLI, TUI, SDK, and embeddable runtime
 surfaces can be published and consumed independently.
 
+## Provider evidence
+
+A plugin becomes a peer evidence verifier by declaring a namespace and handler in its manifest; see the [plugin contract](../mesh-llm-plugin/README.md#peer-evidence-verification). Mesh registers the verifier of a plugin running when it starts, so it refuses a verifier that starts lazily, and runs at most one verifier. It accepts the declaration only from an OS-authenticated plugin process, and a restart that declares a different verifier fails. A verifier that never initializes leaves the node running without one, like any other plugin that fails to start; once its first connection has initialized, the node keeps its declaration even if that connection drops before the node starts.
+
+While a verifier is loaded, a host accepts third-party peer descriptions only from origin-signed records, and relays, lists in mesh discovery and routes inference only to providers whose signed evidence the verifier currently accepts, so an unverified provider reaches only its direct peers. Pure clients need no verdict. A provider that published no evidence under the verifier's namespace is ineligible without a verifier call. Verification runs in the background when peers change, a verifier restarts or a verdict expires; gossip and routing only read the cached verdicts, and a newly accepted provider is relayed at once. A verifier shutdown makes its providers ineligible until it is verified again. The checks cover a buyer's choice of seller: split placement and stage transport keep their usual membership checks and do not consult evidence, so the peers a node places split stages on need no verdict, and additional mesh memberships do not apply verifiers.
+
 ## Embedded lifecycle regression tests
 
 From the workspace root, run the real SDK startup-cancellation and join-stop

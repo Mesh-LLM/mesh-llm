@@ -2,6 +2,8 @@
 
 Wire protocol ownership for Mesh LLM control-plane traffic.
 
+Signed node records optionally carry bounded, namespaced opaque peer evidence at protobuf field 27. The existing origin signature covers the evidence and supply claims together. Relays retain the original signed bytes, including unknown fields.
+
 This crate owns the dependency-light protocol surface that is shared by the
 host runtime and embedded clients:
 

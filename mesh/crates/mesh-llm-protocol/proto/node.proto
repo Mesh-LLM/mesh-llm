@@ -94,6 +94,8 @@ message NodeRecord {
   // Mirrors PeerAnnouncement.refuses_peer_model_downloads. Absent means the
   // node accepts peer model downloads.
   optional bool refuses_peer_model_downloads = 26;
+  // Namespaced opaque references, authenticated by the origin's record signature.
+  map<string, bytes> peer_evidence = 27;
 }
 
 // Decode-only projection of the old LightningOffer wire message. Prices,

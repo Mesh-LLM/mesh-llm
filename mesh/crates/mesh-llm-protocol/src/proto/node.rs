@@ -140,6 +140,12 @@ pub struct NodeRecord {
     /// node accepts peer model downloads.
     #[prost(bool, optional, tag = "26")]
     pub refuses_peer_model_downloads: ::core::option::Option<bool>,
+    /// Namespaced opaque references, authenticated by the origin's record signature.
+    #[prost(btree_map = "string, bytes", tag = "27")]
+    pub peer_evidence: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::vec::Vec<u8>,
+    >,
 }
 /// Decode-only projection of the old LightningOffer wire message. Prices,
 /// invoice settings and payment protocol details are intentionally not read.

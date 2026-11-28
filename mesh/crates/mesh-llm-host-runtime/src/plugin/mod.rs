@@ -14,6 +14,7 @@ mod identity_registry;
 mod identity_transport;
 pub(crate) mod inference_routing;
 mod model_assets;
+pub(crate) mod peer_evidence;
 #[cfg(test)]
 pub(crate) mod selected_attempt_test_support;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
@@ -140,6 +141,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    peer_evidence: peer_evidence::EvidenceRegistry,
     operation_bindings: operation_bindings::BindingRegistry,
     capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
@@ -239,8 +241,18 @@ impl PluginManager {
             &in_process,
         )
         .await?;
+        let peer_evidence = match peer_evidence::EvidenceRegistry::from_plugins(&plugins) {
+            Ok(registry) => registry,
+            Err(error) => {
+                for plugin in plugins.values() {
+                    plugin.shutdown().await;
+                }
+                return Err(error);
+            }
+        };
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                peer_evidence,
                 operation_bindings,
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
@@ -474,6 +486,7 @@ impl PluginManager {
                 operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
+                peer_evidence: Default::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
                 exchange_health: Arc::default(),
@@ -504,6 +517,7 @@ impl PluginManager {
                 operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
+                peer_evidence: Default::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
                 exchange_health: Arc::default(),
@@ -735,6 +749,7 @@ impl PluginManager {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
             plugin.shutdown().await;
+            self.inner.peer_evidence.clear_plugin(plugin.name());
         }
         self.inner.endpoint_health.lock().await.clear();
     }

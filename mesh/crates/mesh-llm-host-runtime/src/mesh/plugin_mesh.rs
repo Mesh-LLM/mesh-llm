@@ -375,15 +375,21 @@ impl Node {
             }
             crate::plugin::PluginMeshEvent::IdentityService {
                 plugin_id,
+                generation,
                 request,
                 response_tx,
             } => {
                 let node = self.clone();
                 tokio::spawn(async move {
-                    let response = crate::plugin::identity_services::handle_request(
-                        &node, &plugin_id, request,
-                    )
-                    .await;
+                    let response = if crate::plugin::peer_evidence::is_method(&request.method) {
+                        crate::plugin::peer_evidence::handle_request(
+                            &node, &plugin_id, generation, request,
+                        )
+                        .await
+                    } else {
+                        crate::plugin::identity_services::handle_request(&node, &plugin_id, request)
+                            .await
+                    };
                     let _ = response_tx.send(response);
                 });
                 Ok(())
@@ -461,6 +467,13 @@ impl Node {
             } => {
                 self.runtime_data_collector()
                     .mark_plugin_status_unavailable(&plugin_id, generation);
+                // A restart discards the verdicts; only the publication
+                // belongs to the connection that closed.
+                if let Some(manager) = self.plugin_manager().await {
+                    manager
+                        .peer_evidence()
+                        .withdraw_generation(&plugin_id, generation);
+                }
                 Ok(())
             }
             crate::plugin::PluginMeshEvent::InferenceObservationGrant {
@@ -481,6 +494,9 @@ impl Node {
                 Ok(())
             }
             crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
+                if let Some(manager) = self.plugin_manager().await {
+                    manager.peer_evidence().clear_plugin(&plugin_id);
+                }
                 // A disabled or removed plugin no longer runs here, so this
                 // node stops vouching for its key and showing its status.
                 self.plugin_keys.remove_own(&plugin_id);
@@ -497,10 +513,13 @@ impl Node {
                 // Before the manager is installed, installing it sends the
                 // snapshot to every plugin.
                 let sent = match self.plugin_manager().await {
-                    Some(plugin_manager) => self
-                        .send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
-                        .await
-                        .is_ok(),
+                    Some(plugin_manager) => {
+                        // A restarted verifier re-verifies providers from scratch.
+                        plugin_manager.peer_evidence().invalidate(&plugin_id);
+                        self.send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
+                            .await
+                            .is_ok()
+                    }
                     None => true,
                 };
                 let _ = delivered.send(sent);

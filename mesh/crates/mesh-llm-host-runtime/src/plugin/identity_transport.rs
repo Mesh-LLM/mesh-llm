@@ -17,6 +17,7 @@ const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
 
 pub(super) async fn forward_identity_service(
     plugin_name: &str,
+    generation: u64,
     request: super::proto::RpcRequest,
     mesh_tx: mpsc::Sender<PluginMeshEvent>,
 ) -> super::proto::envelope::Payload {
@@ -25,6 +26,7 @@ pub(super) async fn forward_identity_service(
         mesh_tx
             .send(PluginMeshEvent::IdentityService {
                 plugin_id: plugin_name.to_owned(),
+                generation,
                 request,
                 response_tx,
             })
@@ -56,6 +58,7 @@ mod identity_transport_tests {
         let broker = tokio::spawn(async move {
             let Some(PluginMeshEvent::IdentityService {
                 plugin_id,
+                generation,
                 request,
                 response_tx,
             }) = mesh_rx.recv().await
@@ -63,6 +66,7 @@ mod identity_transport_tests {
                 panic!("expected identity service event");
             };
             assert_eq!(plugin_id, "authenticated-observer");
+            assert_eq!(generation, 3);
             assert_eq!(request.method, "ReadIdentityBundle");
             response_tx
                 .send(Ok(super::super::proto::RpcResponse {
@@ -72,6 +76,7 @@ mod identity_transport_tests {
         });
         let payload = forward_identity_service(
             "authenticated-observer",
+            3,
             super::super::proto::RpcRequest {
                 invocation_id: None,
                 method: "ReadIdentityBundle".into(),

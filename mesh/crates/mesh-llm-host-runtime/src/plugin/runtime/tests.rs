@@ -234,6 +234,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
         next_request_id: AtomicU64::new(1),
         next_generation: AtomicU64::new(1),
         in_process: None,
+        peer_evidence_verifier: Default::default(),
     };
     (plugin, runtime_data)
 }

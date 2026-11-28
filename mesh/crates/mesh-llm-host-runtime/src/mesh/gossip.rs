@@ -313,6 +313,7 @@ impl Node {
             self.apply_announced_peer(addr.id, addr, ann, context)
                 .await?;
         }
+        self.request_peer_evidence_refresh().await;
         Ok(())
     }
 

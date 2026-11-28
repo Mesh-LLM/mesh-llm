@@ -496,6 +496,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect()
         };
+        self.filter_current_peer_evidence(&mut peer_data).await;
         retain_private_scoped(&mut peer_data);
         self.filter_model_requirements(&mut peer_data).await;
         let mut served = std::collections::HashSet::new();
@@ -680,6 +681,7 @@ impl Node {
                 .cloned()
                 .collect()
         };
+        self.filter_current_peer_evidence(&mut peer_data).await;
         self.filter_model_requirements(&mut peer_data).await;
         let mut hosts = Vec::new();
 
@@ -732,11 +734,13 @@ impl Node {
             .collect()
     }
 
-    /// Admitted peers minus the ones the operator stopped routing to. Every
-    /// path that picks a peer to send a request to reads this, not `peers()`.
+    /// Admitted peers with accepted peer evidence, minus the ones the operator
+    /// stopped routing to. Every path that picks a peer to send a request to
+    /// reads this, not `peers()`.
     pub(crate) async fn routable_peers(&self) -> Vec<PeerInfo> {
         let now_ms = crate::network::peer_blocks::now_ms();
         let mut peers = self.peers().await;
+        self.filter_current_peer_evidence(&mut peers).await;
         peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
         retain_private_scoped(&mut peers);
         self.filter_model_requirements(&mut peers).await;

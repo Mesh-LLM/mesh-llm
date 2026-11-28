@@ -694,8 +694,13 @@ fn forward_plugin_request(
                 .as_ref()
                 .map(|runtime| runtime.generation);
             let payload = if peer.authenticated && current_generation == Some(peer.generation) {
-                super::identity_transport::forward_identity_service(&plugin_name, request, mesh_tx)
-                    .await
+                super::identity_transport::forward_identity_service(
+                    &plugin_name,
+                    peer.generation,
+                    request,
+                    mesh_tx,
+                )
+                .await
             } else {
                 super::proto::envelope::Payload::ErrorResponse(plugin_mesh_stream_error(
                     "identity services require an OS-authenticated launched plugin process",
