@@ -169,7 +169,12 @@ by the running host instead of copying values between hosts.
 The durable ledger shown by the Logs page is distinct from the rotating
 `[logging.audit]` file sink and the CLI `--audit-log-path`, `--audit-log-format`,
 and `--audit-log-level` flags. File-sink controls do not turn ledger capture on
-or off, and ledger retention/maintenance does not edit audit files.
+or off, and ledger retention/maintenance does not edit audit files. One-shot
+`mesh-llm auth` commands write their admin records to the same file sink.
+Writers coordinate rotation through a sibling `.<log-file-name>.lock` file;
+leave that file in place while any writer is running. If an auth change is
+saved but its audit write fails, the command reports the saved change and exits
+with an error.
 
 Use the console's operations deliberately:
 

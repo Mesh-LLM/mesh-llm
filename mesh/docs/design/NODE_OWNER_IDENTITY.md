@@ -522,6 +522,7 @@ mesh-llm auth rotate-owner
 mesh-llm auth trust add <owner_id>
 mesh-llm auth trust list
 mesh-llm auth trust remove <owner_id>
+mesh-llm auth trust policy <off|prefer-owned|require-owned|allowlist>
 ```
 
 Notes:

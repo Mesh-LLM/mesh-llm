@@ -406,6 +406,42 @@ pub(super) fn init_audit_logging(
     Ok(())
 }
 
+/// Install the audit sink for a one-shot command.
+///
+/// `serve` installs it during startup, from `--audit-log-path` or
+/// `[logging.audit]`. One-shot `auth` commands record admin actions with
+/// `emit_audit`, which drops them while no sink is installed, so they install
+/// the same sink first. The settings resolve as they do for the early `serve`
+/// topologies, so a config that fails to load leaves only the command-line
+/// options.
+pub fn initialize_audit_logging_for_cli(
+    config_path: Option<&Path>,
+    audit_log_path: Option<PathBuf>,
+    audit_log_format: AuditLogFormat,
+    audit_log_level: AuditLevel,
+) -> Result<()> {
+    let mut options = super::RuntimeOptions {
+        config: config_path.map(Path::to_path_buf),
+        audit_log_path,
+        audit_log_format,
+        audit_log_level,
+        ..super::RuntimeOptions::default()
+    };
+    super::run_auto::initialize_early_topology_audit_logging_with(
+        &mut options,
+        || crate::plugin::load_config(config_path),
+        |options| {
+            init_audit_logging(
+                options.audit_log_path.clone(),
+                options.audit_log_format,
+                options.audit_log_level,
+                options.audit_max_file_size,
+                options.audit_max_files,
+            )
+        },
+    )
+}
+
 pub(super) fn runtime_tracing_subscriber()
 -> Result<impl tracing::Subscriber + Send + Sync + 'static> {
     Ok(tracing_subscriber::fmt()

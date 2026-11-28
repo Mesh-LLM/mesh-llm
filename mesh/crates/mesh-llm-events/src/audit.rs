@@ -15,6 +15,11 @@ use uuid::Uuid;
 
 mod sanitization;
 
+#[cfg(windows)]
+mod windows_acl;
+#[cfg(all(test, windows))]
+mod windows_tests;
+
 use sanitization::redact_secrets;
 pub use sanitization::{SanitizedAuditDetailJson, SanitizedAuditScalar};
 
@@ -294,14 +299,11 @@ impl Default for FileAuditSinkConfig {
 /// File-based audit sink with rotation
 pub struct FileAuditSink {
     config: FileAuditSinkConfig,
-    state: std::sync::Mutex<AuditFileState>,
+    lock_path: PathBuf,
+    // Keep the handle only for stable identity comparison; writes always reopen.
+    private_file: std::sync::Mutex<same_file::Handle>,
     #[cfg(test)]
     fail_next_open: std::sync::atomic::AtomicBool,
-}
-
-struct AuditFileState {
-    file: Option<std::fs::File>,
-    size: u64,
 }
 
 impl FileAuditSink {
@@ -323,19 +325,29 @@ impl FileAuditSink {
         for index in 1..config.max_files {
             reject_symlink(&rotated_path(&config.path, index))?;
         }
-        let file = open_private_append_file(&config.path)?;
-
-        let current_size = file.metadata()?.len();
-
+        let name = config.path.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "audit path has no file name")
+        })?;
+        let mut lock_name = std::ffi::OsString::from(".");
+        lock_name.push(name);
+        lock_name.push(".lock");
+        let lock_path = config.path.with_file_name(lock_name);
+        let lock = open_private_append_file(&lock_path)?;
+        lock.lock()?;
+        let private_file = same_file::Handle::from_file(open_private_append_file(&config.path)?)?;
         Ok(Self {
             config,
-            state: std::sync::Mutex::new(AuditFileState {
-                file: Some(file),
-                size: current_size,
-            }),
+            lock_path,
+            private_file: std::sync::Mutex::new(private_file),
             #[cfg(test)]
             fail_next_open: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    fn lock_file(&self) -> io::Result<std::fs::File> {
+        let lock = reopen_private_append_file(&self.lock_path)?;
+        lock.lock()?;
+        Ok(lock)
     }
 
     fn open_active_file(&self) -> io::Result<std::fs::File> {
@@ -349,34 +361,37 @@ impl FileAuditSink {
                 "simulated audit file reopen failure",
             ));
         }
-        open_private_append_file(&self.config.path)
+        open_guarded_append_file(&self.config.path, true)
     }
 
-    fn ensure_active_file(&self, state: &mut AuditFileState) -> io::Result<()> {
-        if state.file.is_none() {
-            let file = self.open_active_file()?;
-            state.size = file.metadata()?.len();
-            state.file = Some(file);
+    fn harden_replacement(
+        &self,
+        file: &std::fs::File,
+        private_file: &mut same_file::Handle,
+    ) -> io::Result<()> {
+        let current = same_file::Handle::from_file(file.try_clone()?)?;
+        if current != *private_file {
+            apply_private_file_permissions(&self.config.path, file)?;
+            *private_file = current;
         }
         Ok(())
     }
 
-    fn rotate_if_needed(&self, state: &mut AuditFileState) -> io::Result<()> {
-        self.ensure_active_file(state)?;
-        if state.size < self.config.max_file_size {
-            return Ok(());
+    fn rotate_if_needed(&self, private_file: &mut same_file::Handle) -> io::Result<std::fs::File> {
+        let file = open_guarded_append_file(&self.config.path, true)?;
+        self.harden_replacement(&file, private_file)?;
+        if file.metadata()?.len() < self.config.max_file_size {
+            return Ok(file);
         }
 
-        // Drop the descriptor before renaming its path. If reopening the active
-        // file fails, retaining it would send later events to the rotated file.
-        state.file = None;
+        drop(file);
         for index in 1..self.config.max_files {
             reject_symlink(&rotated_path(&self.config.path, index))?;
         }
         if self.config.max_files > 1 {
             let oldest = rotated_path(&self.config.path, self.config.max_files - 1);
             if oldest.try_exists()? {
-                std::fs::remove_file(&oldest)?;
+                discard_rotated_file(&oldest)?;
             }
             for index in (1..self.config.max_files - 1).rev() {
                 let from = rotated_path(&self.config.path, index);
@@ -386,11 +401,12 @@ impl FileAuditSink {
             }
             std::fs::rename(&self.config.path, rotated_path(&self.config.path, 1))?;
         } else {
-            std::fs::remove_file(&self.config.path)?;
+            discard_rotated_file(&self.config.path)?;
         }
-        self.ensure_active_file(state)?;
+        let file = self.open_active_file()?;
+        self.harden_replacement(&file, private_file)?;
         debug!("Rotated audit log file");
-        Ok(())
+        Ok(file)
     }
 }
 
@@ -400,34 +416,22 @@ impl AuditSink for FileAuditSink {
             .to_json_line()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let mut state = self
-            .state
+        let _lock = self.lock_file()?;
+        let mut private_file = self
+            .private_file
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.rotate_if_needed(&mut state)?;
-        let file = state
-            .file
-            .as_mut()
-            .expect("active audit file must be open after rotation");
+        let mut file = self.rotate_if_needed(&mut private_file)?;
         writeln!(file, "{}", line)?;
         file.flush()?;
-        state.size += line.len() as u64 + 1;
 
         Ok(())
     }
 
     fn flush(&self) -> AuditSinkFuture<'_> {
         Box::pin(async {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.ensure_active_file(&mut state)?;
-            state
-                .file
-                .as_mut()
-                .expect("active audit file must be open after recovery")
-                .flush()
+            let _lock = self.lock_file()?;
+            Ok(())
         })
     }
 
@@ -444,6 +448,36 @@ fn rotated_path(path: &std::path::Path, index: usize) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(format!(".{index}"));
     PathBuf::from(value)
+}
+
+#[cfg(windows)]
+fn discard_rotated_file(path: &std::path::Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular audit file for rotation",
+        ));
+    }
+    // Other sinks can still hold this generation's identity handle. Give it a
+    // unique name before requesting removal so classic Windows deletion
+    // leaves the active and numbered names immediately reusable.
+    let retired = path.with_file_name(format!(".mesh-audit-{}.tmp", Uuid::new_v4()));
+    std::fs::rename(path, &retired)?;
+    std::fs::remove_file(&retired).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to remove retired audit file {}: {error}",
+                retired.display()
+            ),
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn discard_rotated_file(path: &std::path::Path) -> io::Result<()> {
+    std::fs::remove_file(path)
 }
 
 fn reject_symlink(path: &std::path::Path) -> io::Result<()> {
@@ -521,14 +555,60 @@ fn apply_private_directory_permissions(path: &std::path::Path) -> io::Result<()>
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     }
     #[cfg(windows)]
-    apply_windows_owner_only_acl(path, true)?;
+    windows_acl::apply_owner_only_acl(path, true)?;
     Ok(())
 }
 
 fn open_private_append_file(path: &std::path::Path) -> io::Result<std::fs::File> {
+    let file = open_guarded_append_file(path, true)?;
+    apply_private_file_permissions(path, &file)?;
+    Ok(file)
+}
+
+fn apply_private_file_permissions(_path: &std::path::Path, file: &std::fs::File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ_WRITE: u32 = 0x0000_0003;
+        // Keep this exact path from being replaced while the path-based ACL
+        // utility runs; ordinary write/identity handles still share deletion.
+        let guard = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(_path)?;
+        if is_link_or_reparse_point(&guard.metadata()?)
+            || same_file::Handle::from_file(guard.try_clone()?)?
+                != same_file::Handle::from_file(file.try_clone()?)?
+        {
+            return Err(io::Error::other(
+                "audit path changed before applying private permissions",
+            ));
+        }
+        windows_acl::apply_owner_only_acl(_path, false)?;
+    }
+    Ok(())
+}
+
+fn reopen_private_append_file(path: &std::path::Path) -> io::Result<std::fs::File> {
+    match open_guarded_append_file(path, false) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => open_private_append_file(path),
+        result => result,
+    }
+}
+
+fn open_guarded_append_file(path: &std::path::Path, create: bool) -> io::Result<std::fs::File> {
     reject_symlink(path)?;
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
+    // Read access also permits locking the sibling file on Windows, where an
+    // append-only handle cannot be locked.
+    options.create(create).read(true).append(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -549,13 +629,6 @@ fn open_private_append_file(path: &std::path::Path) -> io::Result<std::fs::File>
             "audit file must not be a link or reparse point",
         ));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(windows)]
-    apply_windows_owner_only_acl(path, false)?;
     Ok(file)
 }
 
@@ -569,6 +642,101 @@ mod tests {
             format!("event-{index}"),
             AuditOutcome::Success,
         )
+    }
+
+    #[test]
+    fn independent_sinks_rotate_the_current_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.log");
+        let config = FileAuditSinkConfig {
+            path: path.clone(),
+            max_file_size: 1,
+            max_files: 2,
+            ..FileAuditSinkConfig::default()
+        };
+        let serving = FileAuditSink::new(config.clone()).unwrap();
+        let auth = FileAuditSink::new(config).unwrap();
+
+        auth.emit_audit(&event(1)).unwrap();
+        auth.emit_audit(&event(2)).unwrap();
+        serving.emit_audit(&event(3)).unwrap();
+        auth.emit_audit(&event(4)).unwrap();
+
+        let active = std::fs::read_to_string(&path).unwrap();
+        let previous = std::fs::read_to_string(rotated_path(&path, 1)).unwrap();
+        assert!(active.contains("event-4"), "{active}");
+        assert!(previous.contains("event-3"), "{previous}");
+    }
+
+    #[test]
+    fn separate_processes_share_audit_rotation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.log");
+        let serving = FileAuditSink::new(FileAuditSinkConfig {
+            path: path.clone(),
+            max_file_size: 1,
+            max_files: 32,
+            ..FileAuditSinkConfig::default()
+        })
+        .unwrap();
+        let children: Vec<_> = (1..=2)
+            .map(|writer| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "audit::tests::audit_writer_process", "--ignored"])
+                    .env("MESH_LLM_TEST_AUDIT_PATH", &path)
+                    .env("MESH_LLM_TEST_AUDIT_WRITER", writer.to_string())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for child in children {
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        serving.emit_audit(&event(99)).unwrap();
+
+        let mut actions = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("audit.log")
+            {
+                for line in std::fs::read_to_string(path).unwrap().lines() {
+                    let record: AuditEvent = serde_json::from_str(line).unwrap();
+                    assert!(actions.insert(record.action));
+                }
+            }
+        }
+        let expected: std::collections::BTreeSet<_> = (10..30)
+            .chain(std::iter::once(99))
+            .map(|index| format!("event-{index}"))
+            .collect();
+        assert_eq!(actions, expected);
+    }
+
+    #[test]
+    #[ignore = "invoked with controlled inputs by separate_processes_share_audit_rotation"]
+    fn audit_writer_process() {
+        let path = std::env::var_os("MESH_LLM_TEST_AUDIT_PATH").unwrap().into();
+        let writer: usize = std::env::var("MESH_LLM_TEST_AUDIT_WRITER")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let sink = FileAuditSink::new(FileAuditSinkConfig {
+            path,
+            max_file_size: 1,
+            max_files: 32,
+            ..FileAuditSinkConfig::default()
+        })
+        .unwrap();
+        for index in writer * 10..writer * 10 + 10 {
+            sink.emit_audit(&event(index)).unwrap();
+        }
     }
 
     #[test]
@@ -629,14 +797,45 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
         assert!(sink.emit_audit(&event(2)).is_err());
-        assert!(sink.state.lock().unwrap().file.is_none());
-
         sink.emit_audit(&event(3)).unwrap();
 
         let active = std::fs::read_to_string(&path).unwrap();
         let rotated = std::fs::read_to_string(rotated_path(&path, 1)).unwrap();
         assert!(active.contains("event-3"));
         assert!(!rotated.contains("event-3"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn externally_replaced_audit_file_is_private_before_writing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.log");
+        let old_path = directory.path().join("external-rotation.log");
+        let sink = FileAuditSink::new(FileAuditSinkConfig {
+            path: path.clone(),
+            ..FileAuditSinkConfig::default()
+        })
+        .unwrap();
+        sink.emit_audit(&event(1)).unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&path, &old_path).unwrap();
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        sink.emit_audit(&event(2)).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(std::fs::read_to_string(&path).unwrap().contains("event-2"));
+        assert!(
+            !std::fs::read_to_string(old_path)
+                .unwrap()
+                .contains("event-2")
+        );
     }
 
     #[cfg(unix)]
@@ -658,6 +857,14 @@ mod tests {
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(private.join(".audit.log.lock"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
 
@@ -683,29 +890,17 @@ mod tests {
             })
             .is_err()
         );
-    }
-}
 
-#[cfg(windows)]
-fn apply_windows_owner_only_acl(path: &std::path::Path, directory: bool) -> io::Result<()> {
-    let user = std::env::var("USERNAME")
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "USERNAME is unavailable"))?;
-    let grant = if directory {
-        format!("{user}:(OI)(CI)F")
-    } else {
-        format!("{user}:F")
-    };
-    let status = std::process::Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r", &grant])
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "failed to apply owner-only audit ACL",
-        ))
+        let locked_path = private.join("locked.log");
+        symlink(&target, private.join(".locked.log.lock")).unwrap();
+        assert!(
+            FileAuditSink::new(FileAuditSinkConfig {
+                path: locked_path,
+                ..FileAuditSinkConfig::default()
+            })
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "do not overwrite");
     }
 }
 
