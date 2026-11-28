@@ -338,6 +338,17 @@ mesh-llm discover --auto
 ```
 
 `discover --auto` prints the best invite token, which is useful for scripts.
+It skips publishers at their client limit, trying the next ranked mesh if needed,
+and exits nonzero if all matching publishers are full. Browsing still lists them.
+When some Nostr relays stay silent, `discover` prints an `N of M Nostr
+relay(s) answered` line. It exits nonzero when no relay answers, or when
+nothing matched and no relay reached EOSE below the requested event limit,
+so scripts can tell an unreachable or incomplete search from an empty one.
+Listings received before interruption or truncation remain usable, but cannot
+prove an unlisted mesh is absent. `serve --auto` refuses to start a new mesh
+unless a relay completed a query below the requested event limit. Partial
+results can still supply join candidates. `client --auto` reports discovery
+outages but starts its local API and continues discovery instead of exiting.
 When using `--mesh-discovery-mode mdns`, discovery is LAN-scoped: mDNS TXT
 records advertise bounded capacity/model summaries and a token fingerprint.
 When the management API is reachable from LAN peers, for example with

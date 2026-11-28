@@ -157,11 +157,27 @@ pub(super) async fn discover_nostr_join_candidates(
     });
 
     let relays = nostr_relays(&options.nostr_relay);
-    let meshes = discover_nostr_meshes(&relays).await?;
+    let (meshes, health) = match discover_nostr_meshes(&relays).await {
+        Ok(result) => result,
+        // The outage was reported; clients can start their API and rediscover later.
+        Err(_) if options.client => (Vec::new(), nostr::RelayHealth::default()),
+        Err(error) => return Err(error),
+    };
     log_nostr_auto_candidates(&meshes, target_name.as_ref());
+    let decision = smart_auto_blocking(meshes, my_vram_gb, target_name).await?;
+    if !options.client
+        && matches!(decision, nostr::AutoDecision::StartNew { .. })
+        && !health.any_query_completed()
+    {
+        let error = anyhow::anyhow!(
+            "Nostr auto-discovery is incomplete: no relay completed an untruncated query; refusing to start a new mesh"
+        );
+        record_nostr_discovery_failure(&error);
+        return Err(error);
+    }
     handle_auto_decision(
         options,
-        smart_auto_blocking(meshes.clone(), my_vram_gb, target_name).await?,
+        decision,
         auto_join_candidates,
         my_vram_gb,
         has_startup_models,
@@ -169,19 +185,28 @@ pub(super) async fn discover_nostr_join_candidates(
     .await
 }
 
-pub(super) async fn discover_nostr_meshes(relays: &[String]) -> Result<Vec<nostr::DiscoveredMesh>> {
+pub(super) async fn discover_nostr_meshes(
+    relays: &[String],
+) -> Result<(Vec<nostr::DiscoveredMesh>, nostr::RelayHealth)> {
     let filter = nostr::MeshFilter::default();
-    match nostr::discover(relays, &filter, None).await {
-        Ok(meshes) => Ok(meshes),
-        Err(err) => {
-            record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
-            let _ = emit_event(OutputEvent::DiscoveryFailed {
-                message: "Nostr auto-discovery failed".to_string(),
-                detail: Some(err.to_string()),
-            });
-            Err(err)
-        }
-    }
+    nostr::discover_with_health(relays, &filter, None)
+        .await
+        .and_then(|(meshes, health)| {
+            anyhow::ensure!(
+                health.any_relay_answered(),
+                "Nostr auto-discovery is unavailable: no relay answered"
+            );
+            Ok((meshes, health))
+        })
+        .inspect_err(record_nostr_discovery_failure)
+}
+
+fn record_nostr_discovery_failure(error: &anyhow::Error) {
+    record_discovery_operational_event(DiscoveryOperationalEvent::DiscoveryFailed);
+    let _ = emit_event(OutputEvent::DiscoveryFailed {
+        message: "Nostr auto-discovery failed".to_string(),
+        detail: Some(error.to_string()),
+    });
 }
 
 pub(super) fn log_nostr_auto_candidates(
@@ -723,6 +748,10 @@ pub(super) fn run_auto_model_identity(
         .unwrap_or_else(|| model_name.clone());
     (model_name, model_source)
 }
+
+#[cfg(test)]
+#[path = "auto_join/discovery_tests.rs"]
+mod discovery_tests;
 
 #[cfg(test)]
 mod tests {

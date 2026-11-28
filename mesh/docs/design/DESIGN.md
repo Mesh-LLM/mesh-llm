@@ -534,10 +534,18 @@ model-output verification. The operator-facing behavior is specified in
 
 Opt-in mesh advertisement via Nostr relays (NIP-89, kind 31990):
 - `--publish`: republish listing every 60s (TTL 120s)
-- `--auto`: discover meshes, score them, health-probe, join best
-- Publish watchdog: if publisher dies, another node takes over
+- `--auto`: discover meshes, score them, join best. Serving may join partial results but cannot start a new mesh without a query completing below the requested event limit. Clients report outages and start their API while discovery continues
+- Publish watchdog: if publisher dies, another node takes over — only when a relay reached EOSE below the requested event limit without the listing, on both the first check and the recheck after backoff, for the same mesh ID. Silent, interrupted, or limit-truncated queries mean "cannot tell", not "listing gone"
 - `score_mesh()`: region match (+200), capacity, node count, VRAM, sticky preference (+500)
 - `smart_auto()`: picks best mesh or recommends starting new one with models for your VRAM
+
+The completion check detects interrupted queries and the requested 100-event
+limit. It does not yet read NIP-11 relay limits: a relay silently clamping the
+request below 100 may still look complete. Absence inference is therefore not
+proof against a relay returning a smaller window. If that window omits a live
+listing on both watchdog checks, the watchdog can start an additional publisher
+for a mesh that is still live. Listings with the same mesh ID still appear as
+one mesh in grouped discovery results, but redundant publishing remains possible.
 
 ### Mesh transport ownership
 
