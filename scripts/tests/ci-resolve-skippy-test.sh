@@ -5,6 +5,15 @@ set -euo pipefail
 resolve="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci-resolve-skippy.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# Resolve refs in a fixture so CI's temporary Git manifest cannot invalidate
+# the registry-pin precondition of the resolver.
+mkdir -p "$work/mesh/scripts"
+cp "$resolve" "$(dirname "$resolve")/skippy-pin.sh" "$work/mesh/scripts/"
+cp "$(dirname "$resolve")/../Cargo.toml" "$work/mesh/Cargo.toml"
+if grep -q '^skippy-ffi = .*git =' "$work/mesh/Cargo.toml"; then
+    git -C "$(dirname "$resolve")" show HEAD:Cargo.toml >"$work/mesh/Cargo.toml"
+fi
+resolve="$work/mesh/scripts/ci-resolve-skippy.sh"
 repo="$work/skippy"
 git init -q -b main "$repo"
 g() { git -C "$repo" -c user.name=test -c user.email=test@example.invalid "$@"; }

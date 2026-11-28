@@ -3,7 +3,16 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-read -r url rev version <<<"$("$root/scripts/skippy-pin.sh")"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/scripts"
+cp "$root/scripts/skippy-pin.sh" "$work/scripts/"
+cp "$root/Cargo.toml" "$work/Cargo.toml"
+if grep -q '^skippy-ffi = .*git =' "$work/Cargo.toml"; then
+    # CI overrides change the working manifest, not the committed release pin.
+    git -C "$root" show HEAD:Cargo.toml >"$work/Cargo.toml"
+fi
+read -r url rev version <<<"$("$work/scripts/skippy-pin.sh")"
 [[ "$url" == "https://github.com/Mesh-LLM/skippy" ]]
 [[ "$rev" =~ ^[0-9a-f]{40}$ ]]
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -13,6 +22,6 @@ count="$(awk -v version="$version" '
         count++
     }
     END { print count }
-' "$root/Cargo.toml")"
+' "$work/Cargo.toml")"
 [[ "$count" == 25 ]]
 echo "skippy pin: ok ($count crates at $version)"

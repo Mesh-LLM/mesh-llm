@@ -28,7 +28,55 @@ env:
   MODEL_SHA256: c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a
 
 jobs:
+  skippy:
+    name: Select Skippy revision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      repository: ${{ steps.skippy.outputs.repository }}
+      sha: ${{ steps.skippy.outputs.sha }}
+      override: ${{ steps.skippy.outputs.override }}
+      artifact: ${{ steps.inputs.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Resolve the Skippy commit once for every Rust job
+        id: skippy
+        env:
+          INPUT_REF: ${{ inputs.skippy_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ref="${INPUT_REF:-$(scripts/ci-skippy-ref.sh)}"
+          scripts/ci-resolve-skippy.sh "$ref" | tee -a "$GITHUB_OUTPUT"
+          if [[ -n "$ref" ]]; then
+            echo 'override=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'override=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+        if: steps.skippy.outputs.override == 'true'
+      - name: Resolve the temporary manifest and lockfile once
+        if: steps.skippy.outputs.override == 'true'
+        env:
+          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+          RUSTC_WRAPPER: ""
+        run: |
+          scripts/ci-pin-skippy.sh "$SKIPPY_SHA"
+          cargo metadata --format-version 1 > /dev/null
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        id: inputs
+        if: steps.skippy.outputs.override == 'true'
+        with:
+          name: skippy-inputs-${{ github.run_attempt }}
+          path: |
+            Cargo.toml
+            Cargo.lock
+          retention-days: 3
+          if-no-files-found: error
+
   lint:
+    needs: skippy
     name: Lint
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -37,9 +85,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - run: just lint
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.skippy.outputs.override == 'true'
+        with:
+          artifact-ids: ${{ needs.skippy.outputs.artifact }}
+          merge-multiple: true
+      - name: Record the selected Skippy revision
+        shell: bash
+        env:
+          SKIPPY_SHA: ${{ needs.skippy.outputs.sha }}
+          SKIPPY_REPOSITORY: ${{ needs.skippy.outputs.repository }}
+        run: echo "Skippy source = $SKIPPY_REPOSITORY@$SKIPPY_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+      - run: just lint --locked
 
   test:
+    needs: skippy
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -52,6 +112,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.skippy.outputs.override == 'true'
+        with:
+          artifact-ids: ${{ needs.skippy.outputs.artifact }}
+          merge-multiple: true
+      - name: Record the selected Skippy revision
+        shell: bash
+        env:
+          SKIPPY_SHA: ${{ needs.skippy.outputs.sha }}
+          SKIPPY_REPOSITORY: ${{ needs.skippy.outputs.repository }}
+        run: echo "Skippy source = $SKIPPY_REPOSITORY@$SKIPPY_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
       - run: just test-rust --locked --no-fail-fast
 
   ui:
@@ -72,6 +143,7 @@ jobs:
       - run: just test-ui
 
   website:
+    needs: skippy
     name: Public website
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -80,26 +152,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.skippy.outputs.override == 'true'
+        with:
+          artifact-ids: ${{ needs.skippy.outputs.artifact }}
+          merge-multiple: true
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0
       - run: scripts/ci-website.sh
 
-  # Real inference through MeshLLM on Skippy's CPU runtime.
-  #
-  # By default this uses the Skippy crates.io release pinned in Cargo.toml. To test a
-  # MeshLLM pull request against a Skippy branch or pull request, add a line
-  # to the pull request description:
-  #
-  #     Skippy-Ref: pull/123
-  #
-  # This job then builds the runtime and MeshLLM from that Skippy source. Lint
-  # and the Rust tests still use the pinned crates. With no such line the
-  # runtime is the one the pinned Skippy release published. Either way the
-  # runtime comes from the same commit this job compiles MeshLLM against. A branch or pull
-  # request is resolved once per run: after a new Skippy push, re-run this
-  # workflow, or name a full commit SHA.
+  # Override builds use the same frozen Cargo inputs as lint and tests.
+  # Only smoke builds a native CPU runtime; ordinary runs download the release.
   smoke:
+    needs: skippy
     name: Inference smoke (CPU)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -108,44 +174,38 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-
-      - name: Resolve the Skippy commit
-        id: skippy
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.skippy.outputs.override == 'true'
+        with:
+          artifact-ids: ${{ needs.skippy.outputs.artifact }}
+          merge-multiple: true
+      - name: Record the selected Skippy revision
+        shell: bash
         env:
-          INPUT_REF: ${{ inputs.skippy_ref }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          ref="$INPUT_REF"
-          if [[ -z "$ref" ]]; then
-            ref="$(sed -n 's/^Skippy-Ref:[[:space:]]*\([^[:space:]]*\).*/\1/p' <<<"$PR_BODY" | head -1)"
-          fi
-          scripts/ci-resolve-skippy.sh "$ref" | tee -a "$GITHUB_OUTPUT"
-          echo "override=${ref:+true}" >> "$GITHUB_OUTPUT"
+          SKIPPY_SHA: ${{ needs.skippy.outputs.sha }}
+          SKIPPY_REPOSITORY: ${{ needs.skippy.outputs.repository }}
+        run: echo "Skippy source = $SKIPPY_REPOSITORY@$SKIPPY_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The pinned Skippy release publishes the runtime; a named ref has
       # none, so it is built here from that ref's source. Dispatching this
       # workflow on main with a Skippy ref means you trust that code.
       - name: Download the CPU runtime of the pinned Skippy release
-        if: steps.skippy.outputs.override != 'true'
+        if: needs.skippy.outputs.override != 'true'
         run: scripts/fetch-skippy-runtime.sh skippy-runtime cpu
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        if: steps.skippy.outputs.override == 'true'
+        if: needs.skippy.outputs.override == 'true'
         with:
-          repository: ${{ steps.skippy.outputs.repository }}
-          ref: ${{ steps.skippy.outputs.sha }}
+          repository: ${{ needs.skippy.outputs.repository }}
+          ref: ${{ needs.skippy.outputs.sha }}
           path: .deps/skippy
           persist-credentials: false
 
       - name: Build the CPU runtime from the named Skippy source
-        if: steps.skippy.outputs.override == 'true'
+        if: needs.skippy.outputs.override == 'true'
         env:
-          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
+          SKIPPY_SHA: ${{ needs.skippy.outputs.sha }}
         run: scripts/ci-skippy-runtime.sh .deps/skippy "$SKIPPY_SHA" skippy-runtime
-
-      - name: Build MeshLLM against the named Skippy source
-        if: steps.skippy.outputs.override == 'true'
-        run: scripts/skippy-source.sh .deps/skippy
 
       - name: Restore the test model
         id: model
@@ -178,14 +238,14 @@ jobs:
         run: scripts/ci-two-node-client-serving-smoke.sh target/debug/mesh-llm target/debug smoke-model.gguf
 
       - name: Run the tests that need a runtime
-        run: just test-with-runtime skippy-runtime
+        run: just test-with-runtime skippy-runtime --locked
 
       - name: Record what was tested
         if: always()
         env:
-          SKIPPY_REPOSITORY: ${{ steps.skippy.outputs.repository }}
-          SKIPPY_SHA: ${{ steps.skippy.outputs.sha }}
-          OVERRIDE: ${{ steps.skippy.outputs.override }}
+          SKIPPY_REPOSITORY: ${{ needs.skippy.outputs.repository }}
+          SKIPPY_SHA: ${{ needs.skippy.outputs.sha }}
+          OVERRIDE: ${{ needs.skippy.outputs.override }}
         run: |
           {
             echo "Skippy source: $SKIPPY_REPOSITORY@$SKIPPY_SHA"
@@ -198,6 +258,10 @@ jobs:
   # Exercise the MeshLLM host/runtime boundary with Skippy's published CPU
   # package on the other desktop platforms. Skippy qualifies its own backend.
   cpu_smoke_platforms:
+    needs: skippy
+    # An arbitrary source ref has no published CPU packages for these platforms.
+    # These install-boundary checks remain mandatory in fresh pinned CI.
+    if: needs.skippy.outputs.override == 'false'
     name: CPU host smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -236,21 +300,31 @@ jobs:
         run: ${{ matrix.python }} scripts/ci-cpu-host-smoke.py ${{ matrix.binary }} smoke-model.gguf
 
   # The merge rule for main requires these five check names, which the old
-  # per-platform workflows used to report. Each one passes only when every
-  # job above passed. If the rule is changed to name the jobs above, delete
-  # this job.
+  # per-platform workflows used to report. Keep the test-only override guard
+  # required as well as successful tests if those required names ever change.
   required:
+    permissions:
+      contents: read
+      pull-requests: read
     name: PR / ${{ matrix.lane }}
     if: ${{ always() && github.event_name == 'pull_request' }}
-    needs: [lint, test, ui, website, smoke, cpu_smoke_platforms]
+    needs: [skippy, lint, test, ui, website, smoke, cpu_smoke_platforms]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     strategy:
       matrix:
         lane: [Quality, Linux, macOS, Windows, Website]
     steps:
-      - env:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Require successful pinned CI and no current override
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OVERRIDE: ${{ needs.skippy.outputs.override }}
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "lint, test, ui, website, smoke, CPU host smokes: $RESULTS"
-          [[ "$RESULTS" == "success success success success success success" ]]
+          PR_BODY="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')"
+          export PR_BODY
+          scripts/ci-skippy-ref.sh --merge-ready
