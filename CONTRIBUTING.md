@@ -46,6 +46,16 @@ inference runtime is built and released by
 `rustup component add llvm-tools-preview`, or install LLVM with `winget install
 LLVM.LLVM`.
 
+**Windows ARM64**: `scripts\build-windows.ps1 -TargetArch arm64` builds the host
+for `aarch64-pc-windows-msvc`, cross-compiling from an x64 machine or natively
+on Windows on ARM, which is also the default architecture there. It needs
+`rustup target add aarch64-pc-windows-msvc` and two Visual Studio components:
+the ARM64 MSVC tools (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) and the
+C++ Clang compiler (`Microsoft.VisualStudio.Component.VC.Llvm.Clang`), which
+builds the `ring` crate for ARM64. The host lands in
+`target\aarch64-pc-windows-msvc\debug`. It runs a Skippy CPU runtime for
+Windows ARM64, which Skippy does not publish yet.
+
 ## Build from source
 
 Build the Skippy runtime, then the MeshLLM host and console:
