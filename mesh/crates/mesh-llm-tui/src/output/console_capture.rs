@@ -27,6 +27,12 @@ pub(in crate::output) use unix::ConsoleCapture;
 pub(in crate::output) use fallback::ConsoleCapture;
 
 #[cfg(unix)]
+pub(in crate::output) use unix::capture_installed;
+
+#[cfg(not(unix))]
+pub(in crate::output) use fallback::capture_installed;
+
+#[cfg(unix)]
 mod unix {
     use mesh_llm_events::OutputEvent;
     use rustix::event::{PollFd, PollFlags, poll};
@@ -185,6 +191,16 @@ mod unix {
         active_captures.load(Ordering::Acquire) > 0
     }
 
+    /// Is a dashboard currently owning the screen with fd 1/2 captured?
+    ///
+    /// The attachment probe in `logging_projection::privacy` reads fd 2,
+    /// which is the capture pipe while a capture is installed — capture
+    /// active means the operator is watching the dashboard on the
+    /// controlling terminal, i.e. the session is interactive.
+    pub(in crate::output) fn capture_installed() -> bool {
+        dashboard_capture_active(&ACTIVE_CAPTURES)
+    }
+
     fn deliver(text: String, passthrough: &mut File) {
         deliver_with(
             text,
@@ -310,6 +326,13 @@ mod fallback {
         pub(in crate::output) fn restore(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    /// No descriptor capture exists here, so the attachment probe in
+    /// `logging_projection::privacy` falls back to the raw stderr check
+    /// alone (which on these platforms stays the console).
+    pub(in crate::output) fn capture_installed() -> bool {
+        false
     }
 }
 

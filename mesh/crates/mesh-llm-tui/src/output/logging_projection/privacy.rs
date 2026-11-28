@@ -30,18 +30,19 @@ pub(super) fn sanitize_map(mut fields: Map<String, Value>) -> Map<String, Value>
 }
 
 pub(super) fn sanitize_text(input: &str) -> String {
-    sanitize_text_with_home(input, operator_home().as_deref())
-}
-
-fn sanitize_text_with_home(input: &str, home: Option<&str>) -> String {
-    let input = mask_operator_home(input, home);
-    let normalized = redact_sensitive_fragments(&redact_url_query_values(&input));
-    if normalized.chars().count() <= MAX_PRESENTATION_CHARS {
-        normalized
+    let redact_paths = !interactive_output();
+    let masked = if redact_paths {
+        mask_operator_home(input, operator_home().as_deref())
+    } else {
+        input.to_owned()
+    };
+    let sanitized = redact_sensitive_fragments(&redact_url_query_values(&masked), redact_paths);
+    if sanitized.chars().count() <= MAX_PRESENTATION_CHARS {
+        sanitized
     } else {
         format!(
             "{}... [TRUNCATED]",
-            normalized
+            sanitized
                 .chars()
                 .take(MAX_PRESENTATION_CHARS)
                 .collect::<String>()
@@ -49,11 +50,74 @@ fn sanitize_text_with_home(input: &str, home: Option<&str>) -> String {
     }
 }
 
+/// Is the process's diagnostics stream attached to a terminal?
+///
+/// Interactive sessions get actionable errors: the operator's own
+/// command output already prints local paths verbatim (cache
+/// locations, config paths, keystores), so redacting paths only in
+/// event text turns guidance — a `--config` path the operator just
+/// typed — into `[REDACTED_PATH]`. Unattended contexts keep the
+/// redaction: when stderr is redirected rather than attached, the
+/// reader is no longer the operator at the keyboard but launchd's
+/// `stderr.log`, the systemd journal, container logs, or CI capture
+/// — collected, archived, and attached to bug reports, where the
+/// operator's home-directory layout should not land.
+///
+/// The interactive dashboard is the attached case with fd 2 itself
+/// redirected: while it owns the screen, `console_capture` points
+/// stderr at its capture pipe, so the raw probe alone would read
+/// "unattended" for the operator watching the Events panel. An
+/// installed capture means a dashboard is live on the controlling
+/// terminal, which counts as attached.
+fn interactive_output() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = TEST_ATTACHMENT_OVERRIDE.with(std::cell::Cell::get) {
+        return forced;
+    }
+    std::io::IsTerminal::is_terminal(&std::io::stderr())
+        || super::super::console_capture::capture_installed()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only attachment override: `Some(attached)` while a test
+    /// forces the probe, `None` when unforced (the real stderr probe
+    /// runs). Thread-local by design — tests run on parallel threads,
+    /// and a shared flag would let one test's teardown un-force
+    /// another test's override mid-flight.
+    static TEST_ATTACHMENT_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::output) mod test_support {
+    /// Force the attachment probe for the duration of a test body.
+    /// Restores the real probe on drop.
+    pub(in crate::output) struct AttachmentOverride;
+
+    impl AttachmentOverride {
+        pub(in crate::output) fn set(attached: bool) -> Self {
+            super::TEST_ATTACHMENT_OVERRIDE.with(|cell| cell.set(Some(attached)));
+            Self
+        }
+    }
+
+    impl Drop for AttachmentOverride {
+        fn drop(&mut self) {
+            super::TEST_ATTACHMENT_OVERRIDE.with(|cell| cell.set(None));
+        }
+    }
+}
+
 /// Keep the useful error category and surrounding diagnostic text while
-/// replacing only the sensitive value or local path. Fatal output used to
-/// collapse an entire message to `[REDACTED]`, which made ordinary startup
-/// failures impossible to diagnose.
-fn redact_sensitive_fragments(input: &str) -> String {
+/// replacing only credential-shaped values on an attached terminal, and
+/// additionally redacting absolute paths when the diagnostics stream is
+/// redirected (see [`interactive_output`]). Durable artifacts keep the
+/// host logging policy's unconditional path redaction; this terminal
+/// layer applies its own for unattended readers — every absolute-path
+/// word becomes `[REDACTED_PATH]`, not the host policy's `~` home
+/// masking that preserves the path tail.
+fn redact_sensitive_fragments(input: &str, redact_paths: bool) -> String {
     let mut redact_next = false;
     let mut sensitive_key_pending = false;
     let mut previous = String::new();
@@ -80,7 +144,7 @@ fn redact_sensitive_fragments(input: &str) -> String {
             if matches!(normalized.as_str(), "bearer" | "basic") {
                 redact_next = true;
                 output.push(word.to_owned());
-            } else if is_private_absolute_path(trimmed) {
+            } else if redact_paths && is_private_absolute_path(trimmed) {
                 output.push(redact_word(word, "[REDACTED_PATH]"));
             } else if is_credential_value(trimmed) {
                 output.push(redact_word(word, "[REDACTED]"));
@@ -359,51 +423,59 @@ fn is_credential_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{operator_home, safe_native_params, sanitize_text, sanitize_text_with_home};
+    use super::test_support::AttachmentOverride;
+    use super::{safe_native_params, sanitize_text};
     use serde_json::json;
 
     #[test]
-    fn redacts_a_home_directory_that_contains_a_space() {
+    fn preserves_local_paths_including_homes_with_spaces_when_attached() {
+        let _attached = AttachmentOverride::set(true);
+        // Paths render on the operator's own terminal, where command output
+        // already prints them verbatim; redacting them only in event text
+        // made failure guidance unactionable (see the T-002 regression pins
+        // below).
         let home = r"C:\Users\Jane Doe";
         for input in [
             format!(r"path={home}\models\model.gguf"),
             format!(r"failed to open {home}\cache\index.json"),
         ] {
-            let sanitized = sanitize_text_with_home(&input, Some(home));
-            assert!(
-                !sanitized.contains("Jane") && !sanitized.contains("Doe"),
-                "sanitized output leaked part of the home directory: {sanitized:?}"
-            );
-            assert!(sanitized.contains("[REDACTED_PATH]"), "{sanitized:?}");
+            assert_eq!(sanitize_text(&input), input);
         }
     }
 
-    #[cfg(windows)]
     #[test]
-    fn redacts_the_home_directory_in_any_case_on_windows() {
-        let sanitized = sanitize_text_with_home(
-            r"path=c:\users\jane\models\model.gguf",
-            Some(r"C:\Users\Jane"),
+    fn keeps_paths_after_benign_keys_while_redacting_after_sensitive_keys() {
+        // Attached-mode assertion: pin the probe so a build account whose
+        // home literally is /home or /home/operator cannot flip the
+        // expected mode under the harness's captured stderr.
+        let _attached = AttachmentOverride::set(true);
+        let sanitized = sanitize_text("path=/home/operator/model.gguf token=supersecret");
+
+        assert!(
+            sanitized.contains("path=/home/operator/model.gguf"),
+            "{sanitized:?}"
         );
-        assert!(!sanitized.contains("jane"), "{sanitized:?}");
+        assert!(sanitized.contains("token=[REDACTED]"), "{sanitized:?}");
+        assert!(!sanitized.contains("supersecret"), "{sanitized:?}");
     }
 
     #[test]
-    fn redacts_the_operator_home_inside_a_word() {
-        // A home path at the start of a word is caught as an absolute path;
-        // after `key=` or `key:` only the home check sees it. On Windows that
-        // check has to read USERPROFILE, since HOME is usually unset there.
-        let home = operator_home().expect("HOME or USERPROFILE should be set");
-        let separator = std::path::MAIN_SEPARATOR;
-        for input in [
-            format!("path={home}{separator}models{separator}model.gguf"),
-            format!("cache dir:{home}{separator}cache"),
-        ] {
-            let sanitized = sanitize_text(&input);
-            assert!(
-                !sanitized.contains(&home),
-                "sanitized output leaked the home directory: {sanitized:?}"
-            );
+    fn preserves_the_operators_own_paths_in_cli_guidance_and_errors_when_attached() {
+        let _attached = AttachmentOverride::set(true);
+        // T-002 regression pins from the 2026-11-17 behavioral campaign:
+        // every one of these message shapes came back from the terminal
+        // projection with `[REDACTED_PATH]` where the operator's own
+        // argument or path belonged.
+        let cases = [
+            "top-level serving flags now map to `mesh-llm serve`. Please use: mesh-llm serve --model /models/qwen.gguf --console 3131",
+            "Invalid config /home/operator/.mesh-llm/config.toml failed to parse config TOML",
+            "reading owner-control credential from /home/operator/.mesh-llm/owner-control-token-v2",
+            "mesh-llm update only works for release-bundle installs. Current executable: /usr/local/bin/mesh-llm",
+            "Eager startup model '/models/qwen.gguf' failed to resolve after daemon surfaces became ready",
+        ];
+
+        for input in cases {
+            assert_eq!(sanitize_text(input), input);
         }
     }
 
@@ -492,7 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn redacts_unix_windows_unc_and_device_paths() {
+    fn preserves_unix_windows_unc_and_device_paths_when_attached() {
+        let _attached = AttachmentOverride::set(true);
         let cases = [
             "/Users/operator/.mesh-llm/config.toml",
             r"C:\Users\operator\.mesh-llm\config.toml",
@@ -501,15 +574,48 @@ mod tests {
         ];
 
         for path in cases {
-            assert_eq!(
-                sanitize_text(&format!("startup failed at {path}")),
-                "startup failed at [REDACTED_PATH]"
-            );
+            let input = format!("startup failed at {path}");
+            assert_eq!(sanitize_text(&input), input);
         }
     }
 
     #[test]
-    fn keeps_a_slash_separator_but_redacts_paths_next_to_it() {
+    fn keeps_slash_separators_and_adjacent_paths_when_attached() {
+        let _attached = AttachmentOverride::set(true);
+        assert_eq!(
+            sanitize_text("no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"),
+            "no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"
+        );
+        assert_eq!(
+            sanitize_text("copied / to /srv/private/model.gguf"),
+            "copied / to /srv/private/model.gguf"
+        );
+        assert_eq!(
+            sanitize_text("startup failed at (/home/operator/x)"),
+            "startup failed at (/home/operator/x)"
+        );
+    }
+
+    /// The same warning, unattended (stderr redirected — service
+    /// journal, container log, CI capture): the diagnostic category
+    /// survives, the operator's paths do not.
+    #[test]
+    fn forced_attached_mode_preserves_paths() {
+        // Before any override the probe consults the real stderr (a
+        // captured pipe under the test harness): either value is
+        // possible, so only assert the override once set.
+        let _guard = AttachmentOverride::set(true);
+        let attached_input = "startup failed at (/home/operator/x)";
+        assert_eq!(sanitize_text(attached_input), attached_input);
+        drop(_guard);
+    }
+
+    #[test]
+    fn unattended_output_keeps_the_category_and_redacts_the_paths() {
+        // Pin the mode: unforced, the test would ride on the harness's
+        // captured stderr, and `--nocapture` at a terminal flips the
+        // probe to attached.
+        let _unattended = AttachmentOverride::set(false);
         assert_eq!(
             sanitize_text("no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"),
             "no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"
@@ -522,11 +628,16 @@ mod tests {
             sanitize_text("startup failed at (/home/operator/x)"),
             "startup failed at ([REDACTED_PATH])"
         );
+        // Credentials stay redacted in both modes.
+        assert_eq!(
+            sanitize_text("authorization Bearer secret-token"),
+            "authorization Bearer [REDACTED]"
+        );
     }
 
     #[test]
-    fn redacts_the_operator_logging_privacy_corpus() {
-        let mut cases = vec![
+    fn redacts_the_operator_logging_privacy_credential_corpus() {
+        let cases = [
             (
                 "provider endpoint https://provider.example/v1?access_token=secret-access&model=qwen"
                     .to_string(),
@@ -544,22 +655,7 @@ mod tests {
                 "credential sk-supersecret-key".to_string(),
                 "sk-supersecret-key".to_string(),
             ),
-            (
-                r#"native error at C:\Users\operator\.mesh-llm\config.toml"#.to_string(),
-                r#"C:\Users\operator"#.to_string(),
-            ),
-            (
-                r#"native error at \\server\private\model.gguf"#.to_string(),
-                r#"\\server\private"#.to_string(),
-            ),
-            (
-                r#"native error at \\?\C:\private\model.gguf"#.to_string(),
-                r#"\\?\C:\private"#.to_string(),
-            ),
         ];
-        if let Some(home) = operator_home() {
-            cases.push((format!("native error at {home}/.mesh-llm/token"), home));
-        }
 
         for (input, secret) in cases {
             let sanitized = sanitize_text(&input);
@@ -571,22 +667,16 @@ mod tests {
     }
 
     #[test]
-    fn preserves_fatal_context_while_selectively_redacting_credentials_and_paths() {
-        let mut cases = vec![
-            r"startup failed opening C:\Users\operator\config.toml".to_owned(),
-            r"startup failed opening \\server\private\config.toml".to_owned(),
-            "startup failed: authorization Bearer secret-token".to_owned(),
-        ];
-        if let Some(home) = operator_home() {
-            cases.push(format!(
-                "startup failed opening {home}/.mesh-llm/config.toml"
-            ));
-        }
-        for input in cases {
-            let sanitized = sanitize_text(&input);
-            assert_ne!(sanitized, "[REDACTED]");
-            assert!(sanitized.contains("startup failed"));
-        }
+    fn preserves_fatal_context_and_local_paths_while_redacting_credentials_when_attached() {
+        let _attached = AttachmentOverride::set(true);
+        let sanitized = sanitize_text("startup failed opening /home/operator/config.toml");
+        assert_eq!(
+            sanitized,
+            "startup failed opening /home/operator/config.toml"
+        );
+
+        let sanitized = sanitize_text("startup failed: authorization Bearer secret-token");
+        assert_eq!(sanitized, "startup failed: authorization Bearer [REDACTED]");
     }
 
     #[test]
